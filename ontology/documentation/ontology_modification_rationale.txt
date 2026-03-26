@@ -1,0 +1,771 @@
+================================================================================
+HEBREW MANUSCRIPTS ONTOLOGY - MODIFICATION RATIONALE
+From Prof. Gila Prebor's Original Design to the Current Implementation
+================================================================================
+
+Author: Alexander Goldberg
+Date: December 2025
+
+This document provides a comprehensive scholarly analysis of how the Hebrew 
+Manuscripts Ontology has been developed from Prof. Gila Prebor's original 
+design, explaining the theoretical and practical motivations for each 
+modification based on expert feedback from Prof. Moshe Lavi and 
+Dr. Eliezer Baumgarten.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+I.    EXECUTIVE SUMMARY
+II.   GILA PREBOR'S ORIGINAL DESIGN
+III.  EXPERT FEEDBACK ANALYSIS
+      A. Prof. Moshe Lavi's Comments
+      B. Dr. Eliezer Baumgarten's Comments
+      C. Prof. Gila Prebor's Self-Reflection
+IV.   OUR MODIFICATIONS AND SOLUTIONS
+      A. Dual Paradigm Framework
+      B. Nested Codicological Structure
+      C. Epistemological Framework
+      D. Additional Extensions
+V.    TEST CASE VALIDATION
+VI.   THEORETICAL IMPLICATIONS
+VII.  CONCLUSION
+
+================================================================================
+I. EXECUTIVE SUMMARY
+================================================================================
+
+The Hebrew Manuscripts Ontology has been developed from Prof. Gila Prebor's 
+original design based on LRMoo/CIDOC-CRM. Our modifications address three 
+fundamental challenges identified by the expert reviewers:
+
+1. PHILOSOPHICAL TENSION between bibliographic-practical cataloging and new 
+   philological approaches that reject the notion of a unified "Work."
+
+2. STRUCTURAL RIGIDITY in the original BU/CU/PU hierarchy that could not 
+   represent complex nested manuscripts (MTM, Sammelbands).
+
+3. EPISTEMOLOGICAL AMBIGUITY in distinguishing observable facts from scholarly 
+   interpretations, particularly important for AI-derived attributions.
+
+These challenges required substantial additions while preserving the original 
+LRMoo/CIDOC-CRM foundation, resulting in a hybrid ontology that supports 
+multiple scholarly paradigms simultaneously.
+
+================================================================================
+II. GILA PREBOR'S ORIGINAL DESIGN
+================================================================================
+
+Prof. Gila Prebor's original ontology was built on established international 
+standards and reflected a bibliographic-practical orientation:
+
+FOUNDATIONAL FRAMEWORK
+----------------------
+
+1. LRMoo (Library Reference Model - object-oriented)
+   The IFLA standard for bibliographic data, providing the Work-Expression-
+   Manifestation-Item (WEMI) framework. This framework assumes:
+   
+   - Works are abstract intellectual creations with stable identity
+   - Expressions are specific realizations of Works
+   - Manifestations are physical embodiments
+   - Items are individual copies
+
+2. CIDOC-CRM (Conceptual Reference Model)
+   The ISO standard for cultural heritage, providing:
+   
+   - Event-based modeling (activities, creations, transfers)
+   - Temporal and spatial entities
+   - Actor (person/group) modeling
+
+3. Three-Level Unit Structure
+   Prebor introduced three complementary unit types:
+   
+   - Bibliographic Unit (BU): The catalog record level
+   - Codicological Unit (CU): Physical production units (shared quires/material)
+   - Paleographical Unit (PU): Scribal hand units
+
+STRENGTHS OF ORIGINAL DESIGN
+----------------------------
+
+1. Standards Compliance: Built on internationally recognized ontologies, 
+   ensuring interoperability with library systems and Wikidata.
+
+2. Event-Based Modeling: Properly represented manuscript history through 
+   events (copying, acquisition, conservation).
+
+3. Hebrew-Specific Extensions: Included colophon modeling, script type 
+   classifications, and Hebrew language support.
+
+4. Flexible Identification: Supported multiple identifiers (NLI, Sfardata, 
+   VIAF, Wikidata).
+
+LIMITATIONS IDENTIFIED BY REVIEWERS
+-----------------------------------
+
+1. "Clean Case" Assumption: The model worked excellently for straightforward 
+   manuscripts (single text, one scribe, clear structure) but struggled with
+   complex real-world cases.
+
+2. Fixed Hierarchy: The BU→CU→PU relationship was not recursive, preventing
+   adequate representation of manuscripts with sub-sections within sections.
+
+3. Binary Certainty: No mechanism for expressing degrees of confidence in 
+   attributions or distinguishing expert opinions from AI-derived data.
+
+4. Monolithic Paradigm: Assumed bibliographic Work-based cataloging was the 
+   only valid approach, not accounting for philological perspectives that
+   reject this model.
+
+================================================================================
+III. EXPERT FEEDBACK ANALYSIS
+================================================================================
+
+------------------------------------------------------------------------------
+III.A. Prof. Moshe Lavi's Comments
+------------------------------------------------------------------------------
+
+Prof. Lavi, a specialist in rabbinic literature and digital humanities, 
+provided critical feedback that shaped the epistemological direction of 
+the ontology:
+
+COMMENT 1: CU vs. Content Unit Confusion
+"הבלבול בין יחידה קודיקולוגית ליחידת תוכן - שרץ לאורך כל המסמך"
+
+ANALYSIS: Prof. Lavi identified confusion between codicological units (physical
+production units) and content units (textual divisions). The original design
+conflated these in some contexts.
+
+OUR SOLUTION: We introduced clearer separation through:
+- hm:Bibliographic_Unit for catalog-level description
+- hm:Codicological_Unit strictly for physical units
+- hm:Paleographical_Unit for scribal hands
+- Content described through lrmoo:F2_Expression
+
+COMMENT 2: Fact vs. Interpretation (הכרעת חוקר)
+"הצורך באבחנה בין נתונים שהם חד משמעיים לבין נתונים שהם תולדת הכרעת חוקר"
+
+ANALYSIS: This was Prof. Lavi's most fundamental concern. Manuscript catalogs
+contain data of radically different epistemological status:
+- Direct observations: "The manuscript has 289 folios"
+- Scholarly interpretations: "The manuscript was copied in Italy"
+- AI derivations: "MIDRASH system identifies script as Italian, 75% confidence"
+
+OUR SOLUTION: We introduced a comprehensive Epistemological Framework:
+- hm:EpistemologicalStatus class with instances:
+  - hm:DirectObservation (unambiguous facts)
+  - hm:ScholarlyInterpretation (expert decisions)
+  - hm:ComputationalDerivation (AI/algorithm outputs)
+  - hm:CatalogInherited (unverified catalog data)
+  - hm:TraditionalAttribution (long-standing attributions)
+
+- hm:EvidenceChain class to document reasoning paths
+- hm:EvidenceStep hierarchy (DirectObservationStep, InterpretationStep, 
+  ComputationalStep) to trace conclusions to their foundations
+- hm:DataCategory to classify data types (measurements, attributions, 
+  relationships)
+- hm:InterpretationMethod to specify analytical methods used
+
+COMMENT 3: Granularity Support
+"האנתולוגיה צריכה לספק תשתית למיפוי של כתב היד ברמת העמודה / השורה"
+
+ANALYSIS: Automated tools can provide descriptions at much finer granularity
+than traditional catalogs - down to word and character level.
+
+OUR SOLUTION: We introduced full granularity support:
+- hm:TextLocation class hierarchy:
+  - hm:FolioLocation (page level)
+  - hm:LineLocation (line level)
+  - hm:WordLocation (word level)
+  - hm:CharacterLocation (character level)
+  - hm:TextSpan (ranges between locations)
+- IIIF integration through hm:coordinates_iiif and hm:iiif_region
+- Precise location properties (folio_number, line_number, etc.)
+
+COMMENT 4: Canonical Hierarchies
+"יש להצביע על לפחות 4 הירארכיות קאנוניות: המקרא, המשנה, משנה תורה, שולחן ערוך"
+
+ANALYSIS: Jewish literature is organized according to well-defined reference
+systems that manuscripts must be mapped against.
+
+OUR SOLUTION: We introduced canonical hierarchy support:
+- hm:CanonicalReference class with subclasses:
+  - hm:BiblicalReference (Book/Chapter/Verse)
+  - hm:MishnaicReference (Tractate/Chapter/Mishnah)
+  - hm:TalmudicReference (Tractate/Folio/Side)
+  - hm:HalachicReference (for Mishneh Torah/Shulchan Aruch)
+- hm:CanonicalHierarchyType with instances for each major hierarchy
+- hm:covers_canonical_range to link expressions to coverage
+- hm:is_commentary_on_canonical for commentary relationships
+
+------------------------------------------------------------------------------
+III.B. Dr. Eliezer Baumgarten's Comments
+------------------------------------------------------------------------------
+
+Dr. Baumgarten, working directly with manuscript digitization and the MIDRASH
+project, provided practical feedback grounded in real cataloging challenges:
+
+COMMENT 1: Certainty/Confidence Mechanism
+"לא מצאתי דרך פורמלית לתעד דרגת ביטחון או ייחוס משוער"
+
+ANALYSIS: Catalogs need to distinguish "certain" from "probable" from 
+"possible" identifications. This is especially critical when AI systems 
+provide attributions alongside human experts.
+
+OUR SOLUTION: We introduced certainty mechanisms:
+- hm:CertaintyLevel class with instances:
+  - hm:Certain, hm:Probable, hm:Possible, hm:Uncertain
+- hm:has_certainty property applicable to any assertion
+- hm:certainty_percentage for numeric confidence (0-100)
+- hm:certainty_note for textual explanation
+- hm:AttributionSource class with instances:
+  - hm:ExpertAttribution, hm:AIAttribution, hm:CatalogAttribution, etc.
+- hm:attribution_source and hm:attributed_by properties
+
+COMMENT 2: Partial Identification ("Maybe" Relationships)
+"כרגע נראה שאם חיבור לא מזוהה בוודאות, פשוט נמנעים מקישורו ל־Work ספציפי"
+
+ANALYSIS: The original design forced binary identification - either a text 
+IS a specific Work or it isn't. Real manuscripts often contain texts that 
+"might be" or "resemble" known works.
+
+OUR SOLUTION: We introduced variant relationships:
+- hm:is_variant_of for general variant relationship
+- hm:possibly_realises for uncertain Work identification
+- hm:is_abridgment_of for shortened versions
+- hm:is_adaptation_of for adaptations
+- hm:parallels (symmetric) for texts with shared content but unclear relation
+
+COMMENT 3: Textual Overlap
+"יחס חדש מסוג has_textual_overlap_with יכול לפתור את זה"
+
+ANALYSIS: When multiple scribes copy overlapping portions of the same text
+(as in Huntington 115), this overlap must be explicitly modeled.
+
+OUR SOLUTION: We added:
+- hm:has_textual_overlap_with (symmetric property)
+- hm:duplicates_part_of for partial duplication relationships
+
+COMMENT 4: Multi-Volume/Anthology Structure
+"ההיררכיה PU–CU–BU לא עובדת כאשר יש כתבי יד שבהם CU אחת כוללת כמה יחידות משנה"
+
+ANALYSIS: The fixed hierarchy cannot represent:
+- Multi-volume sets where volumes are separate manuscripts
+- Anthology manuscripts with deliberate internal organization
+- Nested sections within sections
+
+OUR SOLUTION: We addressed this comprehensively:
+- hm:MultiVolumeSet class and hm:is_volume_of property
+- hm:AnthologyStructure and hm:AnthologyPosition
+- Recursive hm:has_sub_unit (transitive) property
+- hm:CodicologicalHierarchy to manage complex structures
+- hm:CompositeCodicologicalUnit and hm:AtomicCodicologicalUnit
+
+COMMENT 5: Nested CU Structure
+"אולי לאפשר קינון של CU בתוך CU"
+
+ANALYSIS: This was Dr. Baumgarten's most significant structural suggestion.
+Complex manuscripts like Oppenheimer 128 have codicological units that 
+themselves contain sub-units with distinct characteristics.
+
+OUR SOLUTION: We introduced full recursive composition:
+- hm:has_sub_unit as owl:TransitiveProperty, enabling:
+  CU_Main → CU_Part_A → CU_Section_1 (arbitrary depth)
+- hm:is_sub_unit_of as inverse property
+- hm:nesting_level to track depth
+- hm:is_atomic_unit boolean to identify leaf nodes
+- hm:CodicologicalHierarchy to manage the overall structure
+- hm:hierarchy_type to classify complexity (Simple, Nested, Complex, 
+  Fragmentary)
+
+COMMENT 6: Scribal Interventions
+"אני לא בטוח שיש תיעוד מספיק של שינויי ידיים, עיטורים, תיקונים והוספות שוליים"
+
+OUR SOLUTION: We added:
+- hm:ScribalIntervention class with subclasses:
+  - hm:TextCorrection
+  - hm:MarginalAddition
+  - hm:HandChange
+- hm:has_scribal_intervention property
+- hm:intervention_location, hm:intervention_by properties
+- hm:intervention_description datatype property
+
+COMMENT 7: Lost Manuscripts
+"סוגיה אחרונה היא כ״י שאבדו או שאנו מכירים רק דרך עותק אחר"
+
+OUR SOLUTION: We added:
+- hm:LostManuscript class
+- hm:HypotheticalExemplar subclass
+- hm:is_copy_of_lost and hm:known_through properties
+
+------------------------------------------------------------------------------
+III.C. Prof. Gila Prebor's Self-Reflection
+------------------------------------------------------------------------------
+
+In her response to the other experts' feedback, Prof. Prebor articulated the 
+fundamental philosophical tension:
+
+THE DILEMMA
+"יש כאן מתח בין שתי גישות: הגישה שלי היא ביבליוגרפית-מעשית... הגישה של משה 
+ואליעזר (פילולוגיה חדשה) היא תיאורטית-תהליכית"
+
+ANALYSIS: Prof. Prebor identified a fundamental incompatibility:
+
+BIBLIOGRAPHIC-PRACTICAL APPROACH (Prebor's original orientation):
+- Assumes "Work" exists as identifiable abstract entity
+- Works have Expressions (versions) that can be cataloged
+- Suitable for Wikidata integration and library systems
+- Goal: Organize information for retrieval
+
+NEW PHILOLOGICAL APPROACH (Lavi/Baumgarten orientation):
+- Rejects unified "Work" concept as anachronistic
+- Each manuscript is a unique cultural event
+- Textual fluidity is the norm, not deviation
+- Goal: Represent transmission dynamics
+
+THE QUESTION
+"האם אפשרית גישה היברידית שמוסיפה Text Tradition כרמת ביניים?"
+"או שהמתח עמוק מדי וצריך שתי אונטולוגיות נפרדות?"
+
+OUR ANSWER: We proved a hybrid approach IS possible through the 
+Dual Paradigm Framework:
+
+- hm:ManuscriptView abstract class for paradigmatic perspectives
+- hm:CatalogingView for bibliographic approach (uses Work/Expression)
+- hm:PhilologicalView for new philology (uses TextTradition/Witness)
+- hm:ParadigmBridge to explicitly link Work and TextTradition when both 
+  apply to the same content
+- Manuscripts can have both views simultaneously
+- hm:is_primary_paradigm to indicate preferred approach per manuscript
+- hm:paradigm_justification for scholarly documentation
+
+This design allows:
+1. Catalogers to use familiar Work-based description
+2. Philologists to use tradition-based analysis
+3. Explicit documentation of when/why paradigms align or differ
+4. No forced choice between incompatible worldviews
+
+================================================================================
+IV. OUR MODIFICATIONS AND SOLUTIONS
+================================================================================
+
+------------------------------------------------------------------------------
+IV.A. Dual Paradigm Framework
+------------------------------------------------------------------------------
+
+PROBLEM STATEMENT:
+Prof. Prebor identified an apparently irreconcilable philosophical tension 
+between two approaches to manuscript description:
+
+1. Bibliographic Approach (suitable for Wikidata/cataloging):
+   - Texts are "copies" of abstract Works
+   - Work identity is stable across manuscripts
+   - Variations are "deviations" from original
+
+2. Philological Approach (suitable for research):
+   - Each manuscript is a unique cultural event
+   - There is no "original" - only streams of transmission
+   - All witnesses are equally primary sources
+
+DESIGN SOLUTION:
+Rather than forcing a choice, the ontology supports both paradigms 
+simultaneously through a "view" architecture:
+
+hm:ManuscriptView (abstract)
+├── hm:CatalogingView
+│   ├── cataloging_work → lrmoo:F1_Work
+│   └── cataloging_expression → lrmoo:F2_Expression
+│
+└── hm:PhilologicalView
+    ├── philological_tradition → hm:TextTradition
+    └── philological_witness → hm:TransmissionWitness
+
+hm:ParadigmBridge
+├── has_linked_work → lrmoo:F1_Work
+├── has_linked_tradition → hm:TextTradition
+└── paradigm_justification (text explaining relationship)
+
+WHY THIS WORKS:
+1. Neither paradigm is privileged - users choose based on purpose
+2. hm:is_primary_paradigm indicates which view is dominant for a manuscript
+3. ParadigmBridge explicitly documents when Work and Tradition align
+4. Paradigms can coexist without contradiction
+5. Each paradigm uses its own classes (Work vs. TextTradition)
+
+PRACTICAL EXAMPLE:
+The Buber Tanchuma case illustrates the need:
+- Bibliographic view: This manuscript is an Expression of "Tanchuma Midrash"
+- Philological view: This manuscript witnesses the "Buber Tradition" which
+  developed independently and is not a "copy" of a unified original
+
+With dual paradigm support:
+:MS_Buber_Tanchuma 
+    hm:has_cataloging_perspective :CatView1 ;
+    hm:has_philological_perspective :PhilView1 .
+
+:CatView1 a hm:CatalogingView ;
+    hm:cataloging_work :Work_Midrash_Tanchuma ;
+    hm:is_primary_paradigm false .
+
+:PhilView1 a hm:PhilologicalView ;
+    hm:philological_tradition :Tradition_Tanchuma_Buber ;
+    hm:is_primary_paradigm true ;
+    hm:paradigm_note "Buber version represents distinct tradition stream" .
+
+------------------------------------------------------------------------------
+IV.B. Nested Codicological Structure
+------------------------------------------------------------------------------
+
+PROBLEM STATEMENT:
+The original BU→CU→PU hierarchy was flat. Dr. Baumgarten identified cases 
+where this fails:
+
+Oppenheimer 128: A CU that contains multiple sub-CUs with distinct origins
+Parma 3122: An anthology with nested organizational structure
+Vatican 44: Multi-volume set with complex internal structure
+
+The hierarchy could not represent: CU → sub-CU → sub-sub-CU
+
+DESIGN SOLUTION:
+Rather than creating parallel hierarchies for different depths, we made 
+the hierarchy recursive through a transitive property:
+
+hm:has_sub_unit rdf:type owl:ObjectProperty , owl:TransitiveProperty ;
+    rdfs:domain hm:Codicological_Unit ;
+    rdfs:range hm:Codicological_Unit .
+
+This means:
+- Any CU can contain sub-CUs
+- Those sub-CUs can contain their own sub-CUs
+- The relationship is transitive: if A has_sub_unit B and B has_sub_unit C,
+  then A has_sub_unit C is inferred
+- No limit on nesting depth
+
+SUPPORTING CLASSES:
+
+hm:CodicologicalHierarchy
+- Describes the overall structure of a manuscript
+- Links to hierarchy_root (top-level CU)
+- Has hierarchy_type (Simple, Nested, Complex, Fragmentary)
+- Tracks max_nesting_depth
+
+hm:CompositeCodicologicalUnit (subClassOf hm:Codicological_Unit)
+- Parent units that contain sub-units
+
+hm:AtomicCodicologicalUnit (subClassOf hm:Codicological_Unit)
+- Leaf-level units with no sub-divisions
+
+DATATYPE PROPERTIES FOR NAVIGATION:
+- hm:nesting_level (integer, 0 = root)
+- hm:is_atomic_unit (boolean)
+- hm:unit_sequence (ordering among siblings)
+
+PRACTICAL EXAMPLE:
+Representing a complex Sammelband:
+
+:MS_Complex_Sammelband a lrmoo:F4_Manifestation_Singleton ;
+    hm:has_hierarchy :Hierarchy_Complex .
+
+:Hierarchy_Complex a hm:CodicologicalHierarchy ;
+    hm:hierarchy_type hm:ComplexHierarchy ;
+    hm:hierarchy_root :CU_Binding_Unit ;
+    hm:max_nesting_depth 3 ;
+    hm:hierarchy_description "19th century binding of 3 medieval MSS" .
+
+:CU_Binding_Unit a hm:CompositeCodicologicalUnit ;
+    hm:nesting_level 0 ;
+    hm:has_sub_unit :CU_Medieval_MS_1, :CU_Medieval_MS_2, :CU_Medieval_MS_3 .
+
+:CU_Medieval_MS_1 a hm:CompositeCodicologicalUnit ;
+    hm:nesting_level 1 ;
+    hm:unit_sequence 1 ;
+    hm:has_sub_unit :CU_Quires_1_3, :CU_Quires_4_6 .
+
+:CU_Quires_1_3 a hm:AtomicCodicologicalUnit ;
+    hm:nesting_level 2 ;
+    hm:is_atomic_unit true ;
+    hm:has_folio_range "1r-24v" .
+
+------------------------------------------------------------------------------
+IV.C. Epistemological Framework
+------------------------------------------------------------------------------
+
+PROBLEM STATEMENT:
+Prof. Lavi's fundamental concern: "הצורך באבחנה בין נתונים שהם חד משמעיים 
+לבין נתונים שהם תולדת הכרעת חוקר"
+
+Manuscript data falls into distinct epistemological categories:
+
+TYPE 1: DIRECT OBSERVATIONS (Facts)
+- "The manuscript has 289 folios" (count them)
+- "The colophon says 'Written by Yosef ben David'" (transcription)
+- "The dimensions are 320 x 235 mm" (measurement)
+- These are verifiable, unambiguous, objective
+
+TYPE 2: SCHOLARLY INTERPRETATIONS
+- "The manuscript was copied in Italy" (based on script analysis)
+- "The date is approximately 14th century" (paleographic dating)
+- "This text is Maimonides' Mishneh Torah" (identification)
+- These require expert judgment and may be contested
+
+TYPE 3: COMPUTATIONAL DERIVATIONS
+- "MIDRASH system identifies Ashkenazi script with 78% confidence"
+- "HTR transcription of folio 15r"
+- "Automatic watermark matching suggests Venice 1420-1440"
+- These are algorithm outputs requiring distinct validation
+
+TYPE 4: INHERITED CATALOG DATA
+- Data from existing catalogs without independent verification
+- May perpetuate errors or outdated scholarship
+
+DESIGN SOLUTION:
+
+Core Classification:
+hm:EpistemologicalStatus class with instances:
+- hm:DirectObservation
+- hm:ScholarlyInterpretation
+- hm:ComputationalDerivation
+- hm:CatalogInherited
+- hm:TraditionalAttribution
+
+Applied via: hm:has_epistemological_status (domain: owl:Thing)
+
+Quick Filter:
+hm:is_factual (boolean) - true for direct observations
+
+Evidence Documentation:
+hm:EvidenceChain - documents reasoning from data to conclusion
+hm:EvidenceStep hierarchy:
+- DirectObservationStep (raw data)
+- InterpretationStep (expert analysis)
+- ComputationalStep (algorithm output)
+
+Each step can have:
+- evidence_source (what document/data)
+- evidence_agent (who/what provided it)
+- interpretation_method (paleographic, codicological, AI-based, etc.)
+- evidence_strength (0-1 numeric)
+- consensus_level (unanimous, majority, disputed, controversial)
+- derives_from (link to prior step)
+- competing_interpretation (alternative analyses)
+
+Data Classification:
+hm:DataCategory class with instances:
+- hm:PhysicalMeasurement (definitely factual)
+- hm:ColophonContent (factual transcription, interpretation of meaning separate)
+- hm:MaterialObservation (factual)
+- hm:DateAttribution (usually interpretive)
+- hm:AuthorshipAttribution (interpretive)
+- hm:ScribeIdentification (interpretive)
+- hm:PlaceAttribution (interpretive)
+- hm:WorkIdentification (interpretive)
+- hm:TextualRelationship (interpretive)
+
+Method Tracking:
+hm:InterpretationMethod with instances:
+- hm:PaleographicAnalysis
+- hm:CodicologicalAnalysis
+- hm:LinguisticAnalysis
+- hm:HistoricalContextAnalysis
+- hm:ComparativeTextualAnalysis
+- hm:AIBasedAnalysis
+- hm:RadiocarbonDating
+- hm:WatermarkAnalysis
+
+PRACTICAL EXAMPLE:
+Documenting a dating attribution:
+
+:Dating_Vatican_44 a owl:Thing ;
+    hm:has_epistemological_status hm:ScholarlyInterpretation ;
+    hm:is_factual false ;
+    hm:data_category hm:DateAttribution ;
+    hm:has_certainty hm:Probable ;
+    hm:has_evidence_chain :Chain_Dating_Vat44 .
+
+:Chain_Dating_Vat44 a hm:EvidenceChain ;
+    hm:supports_assertion :Dating_Vatican_44 ;
+    hm:evidence_step :Step1_Script_Obs, :Step2_Paleographic, :Step3_Date_Conclusion .
+
+:Step1_Script_Obs a hm:DirectObservationStep ;
+    hm:reasoning_text "Square Italian script observed throughout" ;
+    hm:evidence_strength 1.0 ;
+    hm:evidence_agent :Cataloger_2025 .
+
+:Step2_Paleographic a hm:InterpretationStep ;
+    hm:interpretation_method hm:PaleographicAnalysis ;
+    hm:derives_from :Step1_Script_Obs ;
+    hm:reasoning_text "Script characteristics match 14th-15th century Italian styles" ;
+    hm:evidence_strength 0.85 ;
+    hm:consensus_level "majority" ;
+    hm:methodology_reference "Beit-Arie, Specimens of Medieval Hebrew Scripts" .
+
+:Step3_Date_Conclusion a hm:InterpretationStep ;
+    hm:derives_from :Step2_Paleographic ;
+    hm:reasoning_text "Date range: 1350-1450 CE" ;
+    hm:evidence_agent :Prof_Expert ;
+    hm:consensus_level "majority" .
+
+------------------------------------------------------------------------------
+IV.D. Additional Extensions
+------------------------------------------------------------------------------
+
+Beyond the three major frameworks, we added numerous extensions to 
+Prof. Prebor's original design:
+
+PHYSICAL DESCRIPTION:
+- hm:Binding class with BindingType vocabulary
+- hm:Decoration class with DecorationType vocabulary
+- hm:Marginalia class for marginal annotations
+- hm:Watermark class for paper dating
+- Extended physical measurement properties
+
+TEXTUAL RELATIONSHIPS:
+- hm:is_translation_of for translation relationships
+- hm:has_commentary_on for commentary relationships
+- hm:has_vocalization and hm:has_cantillation for biblical texts
+
+TEXT TRADITION LAYER:
+- hm:TextTradition for philological transmission streams
+- hm:TransmissionWitness for manuscripts as witnesses
+- hm:TextualVariant for variant readings
+- hm:StemmaPosition for stemmatic analysis
+
+FOREIGN UNIT MARKING (addressing Jerusalem 8210):
+- hm:UnitStatusType with instances:
+  - hm:CoreUnit_status
+  - hm:LaterAddition_status
+  - hm:BinderAddition_status
+  - hm:UnrelatedFragment_status
+  - hm:ProtectiveLeaf_status
+- hm:is_foreign_addition boolean for quick filtering
+
+================================================================================
+V. TEST CASE VALIDATION
+================================================================================
+
+The ontology was validated against specific test cases proposed by the experts:
+
+1. VATICAN 44 (Multi-Volume)
+   - NEED: Multi-volume set representation
+   - SOLUTION: hm:MultiVolumeSet, hm:is_volume_of, hm:volume_number
+   - STATUS: ✓ Fully addressed
+
+2. HUNTINGTON 115 (Overlapping Scribes)
+   - NEED: Two scribal units with textual overlap
+   - SOLUTION: hm:has_textual_overlap_with (symmetric property)
+   - STATUS: ✓ Fully addressed
+
+3. OPPENHEIMER 128 (Rigid Hierarchy)
+   - NEED: CU containing sub-CUs
+   - SOLUTION: hm:has_sub_unit (transitive), CodicologicalHierarchy
+   - STATUS: ✓ Fully addressed
+
+4. PARMA 3122 (Anthology Structure)
+   - NEED: Deliberate anthology arrangement
+   - SOLUTION: hm:AnthologyStructure, hm:AnthologyPosition, hm:anthology_order
+   - STATUS: ✓ Fully addressed
+
+5. LONDON SIFREI TOVIAH (Marginalia)
+   - NEED: Marginalia-to-main-text relationships
+   - SOLUTION: hm:Marginalia, hm:has_marginalia, hm:TextLocation
+   - STATUS: ✓ Fully addressed
+
+6. JERUSALEM 8210 (Foreign Units)
+   - NEED: Mark non-core manuscript components
+   - SOLUTION: hm:UnitStatusType, hm:has_unit_status, hm:is_foreign_addition
+   - STATUS: ✓ Fully addressed
+
+7. LONDON 9599 (Lost Manuscripts)
+   - NEED: Represent lost exemplars known through copies
+   - SOLUTION: hm:LostManuscript, hm:HypotheticalExemplar, hm:is_copy_of_lost
+   - STATUS: ✓ Fully addressed
+
+================================================================================
+VI. THEORETICAL IMPLICATIONS
+================================================================================
+
+The development of this ontology has broader implications for digital humanities
+and manuscript studies:
+
+1. PARADIGM COEXISTENCE
+   The Dual Paradigm Framework demonstrates that incompatible theoretical 
+   approaches can coexist in a single ontology through explicit "view" 
+   modeling. This has applications beyond manuscripts - any domain where
+   multiple scholarly paradigms compete.
+
+2. EPISTEMOLOGICAL TRANSPARENCY
+   The Epistemological Framework provides a model for distinguishing facts
+   from interpretations that is increasingly important as AI systems generate
+   data that appears authoritative but requires distinct validation.
+
+3. RECURSIVE HIERARCHIES
+   The nested CU solution using transitive properties shows how flat 
+   hierarchies can be made recursive without restructuring the entire model.
+
+4. STANDARDS PRESERVATION
+   Despite substantial additions, the ontology preserves its LRMoo/CIDOC-CRM
+   foundation, maintaining compatibility with library standards and Wikidata.
+
+================================================================================
+VII. CONCLUSION
+================================================================================
+
+The Hebrew Manuscripts Ontology was developed from Prof. Gila Prebor's original 
+LRMoo/CIDOC-CRM-based design to comprehensively address all expert feedback. 
+The key modifications address:
+
+1. PHILOSOPHICAL TENSION: Resolved through the Dual Paradigm Framework,
+   allowing bibliographic and philological approaches to coexist.
+
+2. STRUCTURAL RIGIDITY: Resolved through recursive hm:has_sub_unit property
+   and CodicologicalHierarchy management classes.
+
+3. EPISTEMOLOGICAL AMBIGUITY: Resolved through comprehensive classification
+   of data status, evidence chains, and interpretation methods.
+
+The v1.5 update (February 2026) adds comprehensive administrative and access
+metadata coverage, ensuring complete representation of all semantically
+meaningful MARC fields from NLI records. This was motivated by the need to
+preserve institutional, rights, and access information that is critical for
+practical manuscript research and digital humanities workflows.
+
+v1.5 ADDITIONS:
+- 4 new classes: PhysicalHolding, DigitalAccess, UsageRestriction, 
+  RightsDetermination
+- 6 new object properties: has_physical_holding, has_digital_access,
+  has_usage_restriction, has_rights_determination, has_related_material,
+  held_at
+- 16 new datatype properties for holdings, access, rights, copyright,
+  acquisition, and collection metadata
+
+These additions address MARC fields that were previously considered purely
+administrative but carry significant semantic value for researchers:
+- Field 544 (related materials) enables discovery of related copies/fragments
+- Field 597 (copyright notices) preserves institutional attribution
+- Field 939 (usage restrictions) documents access policies
+- Field 952 (rights determination) captures domain/contract status
+- AVA fields capture physical holding details at multiple institutions
+- AVE fields capture digital access points including IIIF endpoints
+- Field 541 (acquisition source) preserves donor/provenance information
+- Field 966 (collection name) enables collection-level queries
+
+The final ontology contains:
+- 98+ classes
+- 126+ object properties
+- 93+ datatype properties
+- 119+ controlled vocabulary instances
+
+It successfully supports:
+- Standard library cataloging (Wikidata-compatible)
+- Advanced philological research
+- AI-derived data with proper provenance
+- Complex manuscript structures of arbitrary depth
+- All canonical Jewish text reference systems
+- Full granularity from manuscript to character level
+- Complete administrative and access metadata from NLI MARC records
+
+The ontology demonstrates that with careful design, theoretical tensions can
+be resolved through explicit representation rather than forced choice.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

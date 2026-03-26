@@ -1,0 +1,13 @@
+{
+  "ner_f1s": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "ner_mean": 0.0,
+  "ner_std": 0.0,
+  "methodology": "strict_entity_matching",
+  "note": "Same methodology as strict_f1_verification.py"
+}

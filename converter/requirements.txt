@@ -1,0 +1,6 @@
+pymarc>=5.0.0
+rdflib>=7.0.0
+pyshacl>=0.25.0
+PyQt6>=6.5.0
+
+

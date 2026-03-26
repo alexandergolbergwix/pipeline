@@ -1,0 +1,296 @@
+# ============================================================
+# SPARQL Competency Queries for Hebrew Manuscripts Ontology
+# 
+# These queries validate that the ontology can answer 
+# the defined competency questions.
+# ============================================================
+
+PREFIX hm: <http://www.ontology.org.il/HebrewManuscripts/2025-12-06#>
+PREFIX lrmoo: <http://iflastandards.info/ns/lrm/lrmoo/>
+PREFIX cidoc: <http://www.cidoc-crm.org/cidoc-crm/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+# ============================================================
+# CQ1.1: Which manuscripts contain works by a specific author?
+# Example: Find manuscripts containing works by Joseph Gikatilla
+# ============================================================
+
+# Query CQ1.1
+SELECT DISTINCT ?manuscript ?msLabel ?work ?workLabel
+WHERE {
+  ?creation a <http://iflastandards.info/ns/lrmoo/F27_Work_Creation> ;
+            cidoc:P14_carried_out_by ?author ;
+            <http://iflastandards.info/ns/lrmoo/R16_created> ?work .
+  ?author rdfs:label ?authorLabel .
+  FILTER(CONTAINS(LCASE(STR(?authorLabel)), "gikatilla"))
+  
+  ?expression lrmoo:R3_is_realised_in ?work .
+  ?manuscript lrmoo:R4_embodies ?expression ;
+              rdfs:label ?msLabel .
+  ?work rdfs:label ?workLabel .
+}
+
+# ============================================================
+# CQ1.2: What works are contained in a specific manuscript?
+# Example: Find all works in Vatican Ms. ebr. 44
+# ============================================================
+
+# Query CQ1.2
+SELECT DISTINCT ?work ?workLabel ?folioRange
+WHERE {
+  ?manuscript rdfs:label ?msLabel .
+  FILTER(CONTAINS(LCASE(STR(?msLabel)), "vatican"))
+  FILTER(CONTAINS(LCASE(STR(?msLabel)), "44"))
+  
+  ?manuscript lrmoo:R4_embodies ?expression .
+  ?expression lrmoo:R3_is_realised_in ?work ;
+              rdfs:label ?exprLabel .
+  ?work rdfs:label ?workLabel .
+  OPTIONAL { ?expression hm:has_folio_range ?folioRange }
+}
+ORDER BY ?folioRange
+
+# ============================================================
+# CQ2.1: What manuscripts are written on parchment?
+# ============================================================
+
+# Query CQ2.1
+SELECT ?manuscript ?label
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              hm:has_material hm:Parchment ;
+              rdfs:label ?label .
+}
+
+# ============================================================
+# CQ2.4: Which manuscripts are written in Sephardic script?
+# ============================================================
+
+# Query CQ2.4
+SELECT ?manuscript ?label
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              hm:has_script_type hm:SepharadicScript ;
+              rdfs:label ?label .
+}
+
+# ============================================================
+# CQ3.1: When was a manuscript produced?
+# Example: Get production date for Barberini 82
+# ============================================================
+
+# Query CQ3.1
+SELECT ?manuscript ?msLabel ?earliestDate ?latestDate
+WHERE {
+  ?manuscript rdfs:label ?msLabel .
+  FILTER(CONTAINS(LCASE(STR(?msLabel)), "barberini"))
+  
+  ?production <http://iflastandards.info/ns/lrmoo/R27_materialized> ?manuscript ;
+              cidoc:P4_has_time-span ?timespan .
+  ?timespan hm:earliest_possible_date ?earliestDate .
+  OPTIONAL { ?timespan hm:latest_possible_date ?latestDate }
+}
+
+# ============================================================
+# CQ3.2: Which manuscripts were produced in a specific place?
+# Example: Manuscripts copied in Candia
+# ============================================================
+
+# Query CQ3.2
+SELECT DISTINCT ?manuscript ?msLabel ?place ?placeLabel
+WHERE {
+  ?production a <http://iflastandards.info/ns/lrmoo/F32_Item_Production_Event> ;
+              cidoc:P7_took_place_at ?place ;
+              <http://iflastandards.info/ns/lrmoo/R27_materialized> ?manuscript .
+  ?manuscript rdfs:label ?msLabel .
+  ?place rdfs:label ?placeLabel .
+  FILTER(CONTAINS(LCASE(STR(?placeLabel)), "candia") || 
+         CONTAINS(LCASE(STR(?placeLabel)), "קנדיאה"))
+}
+
+# ============================================================
+# CQ3.3: Which manuscripts are from a specific century?
+# Example: 14th century manuscripts
+# ============================================================
+
+# Query CQ3.3
+SELECT ?manuscript ?msLabel ?date
+WHERE {
+  ?production <http://iflastandards.info/ns/lrmoo/R27_materialized> ?manuscript ;
+              cidoc:P4_has_time-span ?timespan .
+  ?manuscript rdfs:label ?msLabel .
+  ?timespan hm:earliest_possible_date ?date .
+  FILTER(?date >= 1300 && ?date < 1400)
+}
+ORDER BY ?date
+
+# ============================================================
+# CQ4.1: Who was the scribe of a manuscript?
+# Example: Scribe of Barberini 82
+# ============================================================
+
+# Query CQ4.1
+SELECT ?manuscript ?msLabel ?scribe ?scribeLabel
+WHERE {
+  ?manuscript rdfs:label ?msLabel .
+  FILTER(CONTAINS(LCASE(STR(?msLabel)), "barberini"))
+  
+  ?production <http://iflastandards.info/ns/lrmoo/R27_materialized> ?manuscript ;
+              cidoc:P14_carried_out_by ?scribe .
+  ?scribe a cidoc:E21_Person ;
+          rdfs:label ?scribeLabel .
+}
+
+# ============================================================
+# CQ4.4: What manuscripts have colophons?
+# ============================================================
+
+# Query CQ4.4
+SELECT ?manuscript ?msLabel ?colophonText
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              hm:has_colophon ?colophon ;
+              rdfs:label ?msLabel .
+  ?colophon hm:colophon_text ?colophonText .
+}
+
+# ============================================================
+# CQ4.5: What information is in a colophon?
+# Example: Colophon of Barberini 82
+# ============================================================
+
+# Query CQ4.5
+SELECT ?manuscript ?colophonText ?scribe ?date ?place
+WHERE {
+  ?manuscript rdfs:label ?msLabel ;
+              hm:has_colophon ?colophon .
+  FILTER(CONTAINS(LCASE(STR(?msLabel)), "barberini"))
+  
+  ?colophon hm:colophon_text ?colophonText .
+  OPTIONAL { 
+    ?colophon hm:mentions_scribe ?scribes .
+    ?scribes rdfs:label ?scribe .
+  }
+  OPTIONAL { 
+    ?colophon hm:mentions_date ?dates .
+    ?dates rdfs:label ?date .
+  }
+  OPTIONAL { 
+    ?colophon hm:mentions_place ?places .
+    ?places rdfs:label ?place .
+  }
+}
+
+# ============================================================
+# CQ5.1: What is the ownership history of a manuscript?
+# ============================================================
+
+# Query CQ5.1
+SELECT ?manuscript ?msLabel ?fromOwner ?toOwner ?date
+WHERE {
+  ?transfer a cidoc:E10_Transfer_of_Custody ;
+            cidoc:P16_used_specific_object ?manuscript ;
+            cidoc:P28_custody_surrendered_by ?from ;
+            cidoc:P29_custody_received_by ?to .
+  ?manuscript rdfs:label ?msLabel .
+  ?from rdfs:label ?fromOwner .
+  ?to rdfs:label ?toOwner .
+  OPTIONAL { 
+    ?transfer cidoc:P4_has_time-span ?ts .
+    ?ts rdfs:label ?date .
+  }
+}
+ORDER BY ?manuscript ?date
+
+# ============================================================
+# CQ6.2: What is the folio range of a specific work?
+# ============================================================
+
+# Query CQ6.2
+SELECT ?manuscript ?msLabel ?work ?workLabel ?folioRange
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              lrmoo:R4_embodies ?expression ;
+              rdfs:label ?msLabel .
+  ?expression lrmoo:R3_is_realised_in ?work ;
+              hm:has_folio_range ?folioRange .
+  ?work rdfs:label ?workLabel .
+}
+ORDER BY ?manuscript ?folioRange
+
+# ============================================================
+# CQ7.2: Digital representation of a manuscript
+# ============================================================
+
+# Query CQ7.2
+SELECT ?manuscript ?msLabel ?digitalUrl
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              hm:has_digital_representation_url ?digitalUrl ;
+              rdfs:label ?msLabel .
+}
+
+# ============================================================
+# CQ7.3: NLI identifiers
+# ============================================================
+
+# Query CQ7.3
+SELECT ?manuscript ?msLabel ?nliId
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              hm:external_identifier_nli ?nliId ;
+              rdfs:label ?msLabel .
+}
+
+# ============================================================
+# CQ8.2: Places with Wikidata links
+# ============================================================
+
+# Query CQ8.2
+SELECT ?place ?placeLabel ?wikidataUri
+WHERE {
+  ?place a cidoc:E53_Place ;
+         hm:external_wikidata_uri ?wikidataUri ;
+         rdfs:label ?placeLabel .
+}
+
+# ============================================================
+# Aggregate Statistics Queries
+# ============================================================
+
+# Count manuscripts by script type
+SELECT ?scriptType (COUNT(?manuscript) AS ?count)
+WHERE {
+  ?manuscript a lrmoo:F4_Manifestation_Singleton ;
+              hm:has_script_type ?scriptType .
+}
+GROUP BY ?scriptType
+ORDER BY DESC(?count)
+
+# Count manuscripts by century
+SELECT ?century (COUNT(?manuscript) AS ?count)
+WHERE {
+  ?production <http://iflastandards.info/ns/lrmoo/R27_materialized> ?manuscript ;
+              cidoc:P4_has_time-span ?timespan .
+  ?timespan hm:earliest_possible_date ?date .
+  BIND(FLOOR(?date / 100) * 100 AS ?century)
+}
+GROUP BY ?century
+ORDER BY ?century
+
+# Count works by subject
+SELECT ?subject ?subjectLabel (COUNT(?work) AS ?count)
+WHERE {
+  ?work a lrmoo:F1_Work ;
+        cidoc:P2_has_type ?subject .
+  ?subject a hm:SubjectType ;
+           rdfs:label ?subjectLabel .
+  FILTER(LANG(?subjectLabel) = "en")
+}
+GROUP BY ?subject ?subjectLabel
+ORDER BY DESC(?count)
+
+
+
+

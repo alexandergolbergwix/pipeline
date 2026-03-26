@@ -1,0 +1,28 @@
+# Multi-Entity NER for Hebrew Manuscripts
+# Requirements for training and inference
+
+# Core ML frameworks
+torch==2.9.0
+transformers==4.57.1
+datasets==4.4.1
+
+# NER evaluation
+seqeval==1.2.2
+
+# Data processing
+pandas==2.3.3
+numpy==2.3.4
+
+# Additional utilities
+scikit-learn>=1.3.0
+tokenizers>=0.22.0
+
+# For figures (if generating)
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# For Hugging Face upload
+huggingface-hub>=0.20.0
+
+# Development
+jupyter>=1.0.0

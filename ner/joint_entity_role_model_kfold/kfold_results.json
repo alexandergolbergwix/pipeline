@@ -1,0 +1,47 @@
+{
+  "model": "Joint Entity-Role Model",
+  "base_model": "dicta-il/dictabert",
+  "n_folds": 5,
+  "total_samples": 7614,
+  "lambda_weight": 0.5,
+  "fold_results": [
+    {
+      "fold": 1,
+      "ner_f1": 0.8542510121457491,
+      "class_acc": 1.0,
+      "combined_score": 0.9242570054620896
+    },
+    {
+      "fold": 2,
+      "ner_f1": 0.8625538020086082,
+      "class_acc": 1.0,
+      "combined_score": 0.9287377466263597
+    },
+    {
+      "fold": 3,
+      "ner_f1": 0.8556933483652762,
+      "class_acc": 1.0,
+      "combined_score": 0.9250369443245368
+    },
+    {
+      "fold": 4,
+      "ner_f1": 0.849522740033689,
+      "class_acc": 1.0,
+      "combined_score": 0.9216955788294142
+    },
+    {
+      "fold": 5,
+      "ner_f1": 0.862914862914863,
+      "class_acc": 1.0,
+      "combined_score": 0.9289321088835626
+    }
+  ],
+  "summary": {
+    "mean_ner_f1": 0.8569871530936372,
+    "std_ner_f1": 0.0051186557641351325,
+    "mean_class_acc": 1.0,
+    "std_class_acc": 0.0,
+    "best_fold_ner": 5,
+    "best_ner_f1": 0.862914862914863
+  }
+}

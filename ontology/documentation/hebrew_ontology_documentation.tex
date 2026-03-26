@@ -1,0 +1,2209 @@
+% Hebrew Manuscripts Ontology Documentation - Hebrew RTL LaTeX
+% Based on Prof. Gila Prebor's original design with expert-driven modifications
+% Modified/new elements are colored in green
+% Compile with XeLaTeX
+
+\documentclass[12pt,a4paper]{article}
+
+% IMPORTANT: Load these packages BEFORE polyglossia (which loads bidi)
+\usepackage{xcolor}
+\definecolor{newaddition}{RGB}{0,128,0} % Green for new/modified elements
+
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+% Removed fancyhdr, tocloft, booktabs, enumitem - not in BasicTeX
+\usepackage{longtable}
+\usepackage{array}
+
+\pagestyle{plain}
+
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    unicode=true
+}
+
+% Hebrew RTL support - load AFTER the above packages
+\usepackage{polyglossia}
+\setmainlanguage{hebrew}
+\setotherlanguage{english}
+
+% Fonts - use fonts available in Overleaf/TeX Live
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+
+% Use fonts that work in Overleaf
+\setmainfont{FreeSerif}
+\newfontfamily\hebrewfont[Script=Hebrew]{FreeSerif}
+\newfontfamily\englishfont{FreeSerif}
+\setmonofont{FreeMono}
+\newfontfamily\hebrewfonttt[Script=Hebrew]{FreeMono}
+
+% Commands for modifications
+\newcommand{\en}[1]{\textenglish{\LR{#1}}}
+\newcommand{\new}[1]{\textcolor{newaddition}{#1}}
+\newcommand{\newclass}[1]{\textcolor{newaddition}{\textbf{#1}}}
+\newcommand{\newprop}[1]{\textcolor{newaddition}{#1}}
+
+% Title
+\title{%
+\textbf{\Huge תיעוד אונטולוגיה לכתבי יד עבריים}\\[1em]
+\Large גרסה 1.5 — פברואר 2026\\[0.5em]
+\normalsize מבוסס על העיצוב המקורי של פרופ' גילה פרבור\\
+עם הרחבות בעקבות משוב מומחים ואינטגרציה עם מזל
+}
+
+\author{%
+אלכסנדר גולדברג\\
+\small בשיתוף: פרופ' גילה פרבור, פרופ' משה לביא, ד"ר אליעזר באומגרטן
+}
+
+\date{פברואר 2026}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+%====================================================================
+\section{מבוא}
+%====================================================================
+
+אונטולוגיה זו פותחה לתיאור כתבי יד עבריים, והיא מבוססת על תקנים בינלאומיים מוכרים:
+
+\begin{itemize}
+\item \textbf{CIDOC-CRM} — מודל ייחוס מושגי למוזיאונים \en{(ISO 21127)}
+\item \textbf{FRBRoo/LRMoo} — מודל ספרני מונחה עצמים לתיאור ביבליוגרפי
+\item \textbf{SKOS} — מערכת ארגון ידע פשוטה לאוצרות מילים
+\item הרחבות מותאמות לכתבי יד עבריים
+\end{itemize}
+
+\textbf{הגישה העיקרית היא אירועית} — תיעוד מה קרה לכתב היד לאורך הזמן (יצירה, העברות בעלות, תיעוד), מהיצירה המופשטת \en{(Work)} לביטוי הטקסטואלי \en{(Expression)} למופע הפיזי \en{(Manifestation/Item)}.
+
+\subsection{היררכיית FRBRoo/LRMoo הבסיסית}
+
+\begin{verbatim}
+F1_Work (יצירה מופשטת)
+    ↓ R3_is_realised_in
+F2_Expression (ביטוי טקסטואלי)
+    ↓ R4i_is_embodied_in
+F4_Manifestation_Singleton (עותק פיזי יחידאי)
+    ≡ F5_Item (תואם LRMoo)
+\end{verbatim}
+
+\subsection{מבנה תלת-שכבתי \en{(BU-CU-PU)}}
+
+המבנה הפיזי של כתבי יד מיוצג בשלוש רמות:
+
+\begin{itemize}
+\item \textbf{BU} \en{(Bibliographic Unit)} — יחידה ביבליוגרפית: הכרך הפיזי השלם
+\item \textbf{CU} \en{(Codicological Unit)} — יחידה קודיקולוגית: חיבור מובחן שנוצר בזמן/מקום מסוים
+\item \textbf{PU} \en{(Paleographical Unit)} — יחידה פלאוגרפית: חלק כתוב ביד כותב ספציפי
+\end{itemize}
+
+כל הרמות הן תת-מחלקות של \textenglish{F4\_Manifestation\_Singleton}, מקושרות ביחסי הרכבה \textenglish{R5\_has\_component}.
+
+\subsection{מרחבי שמות \en{(Namespaces)}}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|r|l|}
+\hline
+\textbf{קידומת} & \textbf{URI} \\
+\hline
+hm: & http://www.ontology.org.il/HebrewManuscripts/2025-12-06\# \\
+lrmoo: & http://iflastandards.info/ns/lrm/lrmoo/ \\
+cidoc-crm: & http://www.cidoc-crm.org/cidoc-crm/ \\
+skos: & http://www.w3.org/2004/02/skos/core\# \\
+\new{nli:} & \new{https://www.nli.org.il/en/authorities/} \\
+\hline
+\end{tabular}
+\caption{מרחבי שמות בשימוש}
+\end{table}
+
+\subsection{\new{אינטגרציה עם מאגר הרשויות הלאומי — מזל}}
+
+\new{החל מגרסה 1.4, המערכת משתלבת עם מאגר הרשויות הישראלי מזל \en{(Mazal)} של הספרייה הלאומית.}
+
+\new{מזל הוא קובץ הרשויות הלאומי הישראלי המכיל כ-4.5 מיליון רשומות רשות, המספקות זיהוי ייחודי ואחיד עבור:}
+\begin{itemize}
+\item \new{אישים — שמות אישיים}
+\item \new{מקומות — שמות גיאוגרפיים}
+\item \new{גופים — שמות תאגידים וארגונים}
+\item \new{יצירות — כותרות אחידות}
+\end{itemize}
+
+\new{יתרונות האינטגרציה:}
+\begin{itemize}
+\item \new{זיהוי חד-משמעי של ישויות — במקום URI מקומי, משתמשים ב-NLI ID רשמי}
+\item \new{קישוריות בינלאומית — מזל מקושר ל-VIAF, Wikidata, ORCID}
+\item \new{תמיכה רב-לשונית — עברית, לטינית, ערבית, קירילית}
+\item \new{עקביות קטלוגית — שימוש באותה צורת שם כמו בקטלוגים אחרים}
+\end{itemize}
+
+\new{דוגמה — לפני ואחרי האינטגרציה:}
+
+\begin{verbatim}
+# לפני (URI מקומי):
+hm:Person_רמבם a cidoc-crm:E21_Person ;
+    rdfs:label "רמב\"ם"@he .
+
+# אחרי (URI מזל):
+<https://www.nli.org.il/en/authorities/987007388484005171>
+    a cidoc-crm:E21_Person ;
+    rdfs:label "רמב\"ם"@he ;
+    hm:external_identifier_nli "987007388484005171" .
+\end{verbatim}
+
+\newpage
+
+%====================================================================
+\section{מחלקות \en{(Classes)}}
+%====================================================================
+
+%--------------------------------------------------------------------
+\subsection{מחלקות LRMoo — מודל ביבליוגרפי}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+lrmoo:F1\_Work & 
+יצירה מופשטת — הרעיון האינטלקטואלי של חיבור, ללא תלות בצורה טקסטואלית ספציפית.\\
+\hline
+
+lrmoo:F2\_Expression & 
+ביטוי — מימוש ספציפי של יצירה: גרסה מסוימת עם ניסוח, שפה וצורה ייחודיים.\\
+\hline
+
+lrmoo:F3\_Manifestation & 
+גילום — התגלמות פיזית של ביטוי; תבנית שממנה נעשים עותקים.\\
+\hline
+
+lrmoo:F4\_Manifestation\_Singleton & 
+גילום יחידאי — אובייקט פיזי ייחודי, כלומר כתב היד הבודד.\\
+\hline
+
+lrmoo:F5\_Item & 
+פריט — עותק פיזי ספציפי. \textbf{הערה:} \textenglish{F4\_Manifestation\_Singleton ≡ F5\_Item} — שקילות לתאימות בין \textenglish{FRBRoo} ישן ל-\textenglish{LRMoo} חדש.\\
+\hline
+
+lrmoo:F27\_Work\_Creation & 
+אירוע יצירת יצירה — מתי ובידי מי נוצר החיבור המקורי.\\
+\hline
+
+lrmoo:F28\_Expression\_Creation & 
+אירוע יצירת ביטוי — יצירת גרסה טקסטואלית ספציפית.\\
+\hline
+
+lrmoo:F30\_Manifestation\_Creation & 
+אירוע יצירת גילום.\\
+\hline
+
+lrmoo:F32\_Item\_Production\_Event & 
+אירוע ייצור פריט — העתקת כתב היד.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{מחלקות CIDOC-CRM — מורשת תרבותית}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+cidoc-crm:E1\_CRM\_Entity & 
+ישות CRM — מחלקת בסיס לכל הישויות במודל CIDOC-CRM.\\
+\hline
+
+cidoc-crm:E18\_Physical\_Thing & 
+דבר פיזי — כל חפץ פיזי, כולל כתבי יד ופריטים חומריים.\\
+\hline
+
+cidoc-crm:E39\_Actor & 
+שחקן — מחלקת על לסוכנים (אנשים וקבוצות).\\
+\hline
+
+cidoc-crm:E35\_Title & 
+כותרת — ישות כותרת נפרדת במודל.\\
+\hline
+
+cidoc-crm:E73\_Information\_Object & 
+אובייקט מידע — מסמך/אובייקט מידע המשמש לתיעוד ידע.\\
+\hline
+
+cidoc-crm:E7\_Activity & 
+פעילות — מחלקת בסיס לאירועים ופעולות.\\
+\hline
+
+cidoc-crm:E8\_Acquisition & 
+רכישה — אירוע רכישת בעלות על חפץ.\\
+\hline
+
+cidoc-crm:E10\_Transfer\_of\_Custody & 
+העברת משמורת — העברת אחזקה פיזית של כתב יד.\\
+\hline
+
+cidoc-crm:E12\_Production & 
+הפקה — יצירת חפץ פיזי )כולל העתקת כתב יד(.\\
+\hline
+
+cidoc-crm:E21\_Person & 
+אדם — אדם בודד (מחבר, סופר, בעלים).\\
+\hline
+
+cidoc-crm:E22\_Human-Made\_Object & 
+אובייקט מעשה אדם — חפצים פיזיים שנוצרו בידי אדם.\\
+\hline
+
+cidoc-crm:E33\_Linguistic\_Object & 
+אובייקט לשוני — טקסטים וביטויים לשוניים.\\
+\hline
+
+cidoc-crm:E42\_Identifier & 
+מזהה — סימני מדף, מספרי קטלוג.\\
+\hline
+
+cidoc-crm:E52\_Time-Span & 
+טווח זמן — תקופות ותאריכים.\\
+\hline
+
+cidoc-crm:E53\_Place & 
+מקום — מיקומים גיאוגרפיים.\\
+\hline
+
+cidoc-crm:E55\_Type & 
+סוג — קטגוריות וסיווגים.\\
+\hline
+
+cidoc-crm:E56\_Language & 
+שפה — שפות )עברית, ארמית, ערבית-יהודית(.\\
+\hline
+
+cidoc-crm:E57\_Material & 
+חומר — חומרי כתיבה )קלף, נייר(.\\
+\hline
+
+cidoc-crm:E74\_Group & 
+קבוצה — קבוצות אנשים (מוסדות, משפחות).\\
+\hline
+
+cidoc-crm:E78\_Curated\_Holding & 
+אוסף — אוספים מתוחזקים.\\
+\hline
+
+cidoc-crm:E28\_Conceptual\_Object & 
+אובייקט מושגי — מושגים מופשטים.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{מחלקות כלליות \en{(OWL/RDF)}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+owl:Thing & ישות כללית — טיפוס על לכל ישות RDF/OWL.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{מחלקות ליבה לכתבי יד עבריים}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+hm:Bibliographic\_Unit & 
+\textbf{יחידה ביבליוגרפית} — רמת תיאור הקטלוג; מתאים לסימן מדף אחד.\\
+\hline
+
+hm:Codicological\_Unit & 
+\textbf{יחידה קודיקולוגית} — חלק שיוצר כיחידה פיזית; קוויונים עם מאפייני חומר משותפים.\\
+\hline
+
+hm:Paleographical\_Unit & 
+\textbf{יחידה פליאוגרפית} — קטע עם מאפייני כתב עקביים; עבודת יד אחת.\\
+\hline
+
+hm:Colophon & 
+\textbf{קולופון} — הצהרת הסופר בסוף הטקסט עם מידע על ההעתקה.\\
+\hline
+
+hm:HebrewScriptType & 
+\textbf{סוג כתב עברי} — מחלקת בסיס לסיווגי כתב.\\
+\hline
+
+hm:TypeScriptType & 
+\textbf{סוג כתב אזורי} — אשכנזי, ספרדי, ביזנטי, תימני וכו'.\\
+\hline
+
+hm:ModeScriptType & 
+\textbf{מצב כתב} — מרובע, בינוני, רהוט.\\
+\hline
+
+hm:Binding & 
+\textbf{כריכה} — כריכת כתב היד כאובייקט נפרד.\\
+\hline
+
+hm:Decoration & 
+\textbf{עיטור} — אלמנטים דקורטיביים.\\
+\hline
+
+hm:Marginalia & 
+\textbf{הערות שוליים} — הערות מאוחרות בשולי הדף.\\
+\hline
+
+hm:Watermark & 
+\textbf{סימן מים} — סימני מים בנייר לצורך תיארוך ומיקום.\\
+\hline
+
+hm:DecorationType & 
+\textbf{סוג עיטור} — סוגי קישוט (איור דף מלא, אותיות פותחות, מיקרוגרפיה).\\
+\hline
+
+hm:ConditionType & 
+\textbf{סוג מצב} — מצב פיזי (מצוין, טוב, בינוני, גרוע, קטעי).\\
+\hline
+
+hm:VocalizationType & 
+\textbf{סוג ניקוד} — טברייני, בבלי, ארץ-ישראלי, ללא.\\
+\hline
+
+hm:BindingType & 
+\textbf{סוג כריכה} — מקורית, כריכה מחדש, כריכת שימור.\\
+\hline
+
+\new{hm:DateFormatType} & 
+\new{\textbf{סוג פורמט תאריך} — שנה גרגוריאנית, שנה עברית, תאריך מלא, טקסט חופשי.}\\
+\hline
+
+hm:ParticipationRole & 
+\textbf{תפקיד השתתפות} — תפקיד אנשים (סופר, מחבר, מאייר, מתרגם, בעלים).\\
+\hline
+
+hm:SubjectType & 
+\textbf{נושא} — סיווג נושאי (מקרא, תלמוד, הלכה, קבלה, פילוסופיה).\\
+\hline
+
+hm:Reference\_Event & 
+\textbf{אירוע הפניה} — אירוע קטלוג או הפניה במחקר.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{ ודאות וייחוס}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newclass{hm:CertaintyLevel} & 
+\new{רמת ודאות — דרגת ביטחון בייחוסים (ודאי, סביר, אפשרי, לא ודאי).}\\
+\hline
+
+\newclass{hm:AttributionSource} & 
+\new{מקור ייחוס — מומחה, AI, קטלוג, קולופון, פליאוגרפי.}\\
+\hline
+
+\newclass{hm:MultiVolumeSet} & 
+\new{סט רב-כרכי — קבוצת כרכים השייכים יחד.}\\
+\hline
+
+\newclass{hm:AnthologyStructure} & 
+\new{מבנה אנתולוגיה — כתב יד עם סידור אנתולוגי מכוון.}\\
+\hline
+
+\newclass{hm:ScribalIntervention} & 
+\new{התערבות סופר — תיקונים, הוספות, שינויים.}\\
+\hline
+
+\newclass{hm:LostManuscript} & 
+\new{כתב יד אבוד — כתב יד שאינו קיים אך ידוע מעותקים.}\\
+\hline
+
+\newclass{hm:HypotheticalExemplar} & 
+\new{דוגמה היפותטית — מקור משוחזר על בסיס ניתוח טקסטואלי.}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{ מסורת טקסט וגרנולריות}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newclass{hm:TextTradition} & 
+\new{מסורת טקסט — זרם העברה של טקסט, ללא תלות במושג "יצירה מקורית".}\\
+\hline
+
+\newclass{hm:TransmissionWitness} & 
+\new{עד העברה — כתב יד כעד למסורת טקסטואלית.}\\
+\hline
+
+\newclass{hm:TextualVariant} & 
+\new{וריאנט טקסטואלי — קריאה חלופית ספציפית.}\\
+\hline
+
+\newclass{hm:TextLocation} & 
+\new{מיקום בטקסט — מיקום ספציפי בכתב היד.}\\
+\hline
+
+\newclass{hm:FolioLocation} & 
+\new{מיקום דף — רמת דף.}\\
+\hline
+
+\newclass{hm:LineLocation} & 
+\new{מיקום שורה — רמת שורה.}\\
+\hline
+
+\newclass{hm:WordLocation} & 
+\new{מיקום מילה — רמת מילה.}\\
+\hline
+
+\newclass{hm:CharacterLocation} & 
+\new{מיקום תו — רמת תו לניתוח פליאוגרפי.}\\
+\hline
+
+\newclass{hm:CanonicalReference} & 
+\new{הפניה קנונית — הפניה למבנה טקסט קנוני.}\\
+\hline
+
+\newclass{hm:BiblicalReference} & 
+\new{הפניה מקראית — ספר/פרק/פסוק.}\\
+\hline
+
+\newclass{hm:MishnaicReference} & 
+\new{הפניה משנאית — מסכת/פרק/משנה.}\\
+\hline
+
+\newclass{hm:TalmudicReference} & 
+\new{הפניה תלמודית — מסכת/דף/עמוד.}\\
+\hline
+
+\newclass{hm:HalachicReference} & 
+\new{הפניה הלכתית — למשנה תורה או שולחן ערוך.}\\
+\hline
+
+\newclass{hm:CanonicalHierarchyType} & 
+\new{סוג היררכיה קנונית — סיווג מבני טקסט (מקרא, משנה וכו').}\\
+\hline
+
+\newclass{hm:UnitStatusType} & 
+\new{סטטוס יחידה — האם היחידה חלק מהליבה או תוספת זרה.}\\
+\hline
+
+\newclass{hm:TextSpan} & 
+\new{טווח טקסט — טווח ממיקום א' למיקום ב'.}\\
+\hline
+
+\newclass{hm:IIIFRegion} & 
+\new{אזור IIIF — הפניה לאזור תמונה בתקן IIIF.}\\
+\hline
+
+\newclass{hm:StemmaPosition} & 
+\new{מיקום בסטמה — מיקום כתב יד בעץ סטמטי.}\\
+\hline
+
+\newclass{hm:StemmaHypothesis} & 
+\new{השערת סטמה — השערה מדעית על יחסי טקסט.}\\
+\hline
+
+\newclass{hm:TextCorrection} & 
+\new{תיקון טקסט — תיקון בטקסט על ידי סופר.}\\
+\hline
+
+\newclass{hm:MarginalAddition} & 
+\new{הוספה בשוליים — טקסט שנוסף בשולי הדף.}\\
+\hline
+
+\newclass{hm:HandChange} & 
+\new{חילופי יד — נקודה בה יד אחת מסתיימת ואחרת מתחילה.}\\
+\hline
+
+\newclass{hm:AnthologyPosition} & 
+\new{מיקום באנתולוגיה — סדר ומיקום טקסט באנתולוגיה.}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{פרדיגמה כפולה}}
+%--------------------------------------------------------------------
+
+אלה מחלקות חדשות שנוספו לפתרון המתח הפילוסופי בין הגישה הביבליוגרפית-מעשית לגישה הפילולוגית החדשה:
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newclass{hm:ManuscriptView} & 
+\new{\textbf{תצוגת כתב יד} — מחלקה מופשטת לתצוגות פרדיגמטיות שונות.}\\
+\hline
+
+\newclass{hm:CatalogingView} & 
+\new{\textbf{תצוגת קטלוג} — תצוגה ביבליוגרפית-מעשית לפי מודל Work-Expression.}\\
+\hline
+
+\newclass{hm:PhilologicalView} & 
+\new{\textbf{תצוגה פילולוגית} — תצוגה של פילולוגיה חדשה הרואה כל כתב יד כאירוע תרבותי ייחודי.}\\
+\hline
+
+\newclass{hm:ParadigmBridge} & 
+\new{\textbf{גשר פרדיגמות} — קישור מפורש בין Work ל-TextTradition.}\\
+\hline
+
+\newclass{hm:ViewType} & 
+\new{\textbf{סוג תצוגה} — סיווג סוגי תצוגה.}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{  מבנה CU מקונן}}
+%--------------------------------------------------------------------
+
+מחלקות לתמיכה במבנים קודיקולוגיים מורכבים עם עומק שרירותי:
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newclass{hm:CodicologicalHierarchy} & 
+\new{\textbf{היררכיה קודיקולוגית} — מתאר את המבנה הכולל של יחידות מקוננות.}\\
+\hline
+
+\newclass{hm:CompositeCodicologicalUnit} & 
+\new{\textbf{יחידה קודיקולוגית מורכבת} — יחידה המכילה תת-יחידות.}\\
+\hline
+
+\newclass{hm:AtomicCodicologicalUnit} & 
+\new{\textbf{יחידה קודיקולוגית אטומית} — יחידה עלה ללא חלוקות משנה.}\\
+\hline
+
+\newclass{hm:HierarchyType} & 
+\new{\textbf{סוג היררכיה} — סיווג מורכבות (פשוטה, מקוננת, מורכבת, פרגמנטרית).}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{  מסגרת אפיסטמולוגית}}
+%--------------------------------------------------------------------
+
+מחלקות להבחנה בין עובדות לפרשנויות — מענה להערת פרופ' משה לביא:
+
+\begin{longtable}{|r|p{10cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newclass{hm:EpistemologicalStatus} & 
+\new{\textbf{סטטוס אפיסטמולוגי} — סיווג נתונים לפי אופיים האפיסטמולוגי.}\\
+\hline
+
+\newclass{hm:EvidenceChain} & 
+\new{\textbf{שרשרת ראיות} — שרשרת צעדי ראיות התומכים בטענה.}\\
+\hline
+
+\newclass{hm:EvidenceStep} & 
+\new{\textbf{צעד ראיות} — צעד בודד בשרשרת ראיות.}\\
+\hline
+
+\newclass{hm:DirectObservationStep} & 
+\new{\textbf{צעד תצפית ישירה} — ראיות מתצפית ישירה על כתב היד.}\\
+\hline
+
+\newclass{hm:InterpretationStep} & 
+\new{\textbf{צעד פרשנות} — ראיות הכוללות פרשנות חוקר.}\\
+\hline
+
+\newclass{hm:ComputationalStep} & 
+\new{\textbf{צעד חישובי} — ראיות שנגזרו מניתוח חישובי.}\\
+\hline
+
+\newclass{hm:DataCategory} & 
+\new{\textbf{קטגוריית נתונים} — סיווג נתוני כתב יד לפי מקור.}\\
+\hline
+
+\newclass{hm:InterpretationMethod} & 
+\new{\textbf{שיטת פרשנות} — שיטה מדעית לפרשנות.}\\
+\hline
+\end{longtable}
+
+\newpage
+
+%====================================================================
+\section{תכונות אובייקט \en{(Object Properties)}}
+%====================================================================
+
+%--------------------------------------------------------------------
+\subsection{תכונות LRMoo}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+lrmoo:R3\_is\_realised\_in & מקשר Work ל-Expression שלו.\\
+\hline
+lrmoo:R4i\_is\_embodied\_in & מקשר Expression לגילום \en{(F3/F4 Manifestation)} שבו הוא מגולם.\\
+\hline
+lrmoo:R4\_embodies & מקשר Manifestation ל-Expression שהוא מגלם.\\
+\hline
+lrmoo:R7\_exemplifies & עותק יחידאי מגלם מהדורה כללית.\\
+\hline
+lrmoo:R10\_has\_member & בת-יצירה כוללת יצירות: \en{Work} כולל \en{Work}.\\
+\hline
+lrmoo:R5\_has\_component & מקשר כתבי יד מורכבים לרכיביהם.\\
+\hline
+lrmoo:R5i\_is\_component\_of & יחס הפוך של R5\_has\_component )רכיב הוא חלק מכתב יד מורכב(.\\
+\hline
+lrmoo:R5i\_is\_component\_by & שם חלופי שמופיע בתיעוד המקורי ליחס ההופכי של R5\_has\_component.\\
+\hline
+lrmoo:R69\_has\_physical\_form & צורה פיזית )קישור לגנרליזציה של תבנית/צורה(.\\
+\hline
+lrmoo:R16\_created & מקשר אירוע יצירה ליצירה.\\
+\hline
+lrmoo:R17\_created & מקשר אירוע יצירת ביטוי ל-Expression.\\
+\hline
+lrmoo:R24\_created & מקשר אירוע יצירת גילום ל-Manifestation.\\
+\hline
+lrmoo:R27\_materialized & מקשר אירוע הפקה/העתקה לכתב יד יחידאי.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{תכונות CIDOC-CRM}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+cidoc-crm:P2\_has\_type & שיוך לטיפוס/סוג.\\
+\hline
+cidoc-crm:P102\_has\_title & כותרת.\\
+\hline
+cidoc-crm:P129\_is\_about & נושא.\\
+\hline
+cidoc-crm:P1\_is\_identified\_by & מזהה.\\
+\hline
+cidoc-crm:P4\_has\_time-span & תקופת זמן.\\
+\hline
+cidoc-crm:P7\_took\_place\_at & מקום אירוע.\\
+\hline
+cidoc-crm:P14\_carried\_out\_by & מבצע פעילות.\\
+\hline
+cidoc-crm:P16\_used\_specific\_object & שימוש בחפץ/אובייקט ספציפי באירוע.\\
+\hline
+cidoc-crm:P23\_transferred\_title\_to & בעלים חדש באירוע רכישה.\\
+\hline
+cidoc-crm:P24\_transferred\_title\_from & בעלים קודם באירוע רכישה.\\
+\hline
+cidoc-crm:P28\_custody\_surrendered\_by & מסר משמורת באירוע העברת משמורת.\\
+\hline
+cidoc-crm:P29\_custody\_received\_by & קיבל משמורת באירוע העברת משמורת.\\
+\hline
+cidoc-crm:P70i\_is\_documented\_in & כתב יד מתועד בקטלוג/מסמך.\\
+\hline
+cidoc-crm:P72\_has\_language & שפה.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{תכונות ליבה}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+hm:has\_script\_type & סוג כתב אזורי.\\
+\hline
+hm:has\_Script\_Mode & מצב כתב (מרובע, בינוני, רהוט).\\
+\hline
+hm:has\_colophon & מקשר לקולופון.\\
+\hline
+hm:has\_date\_of\_creation & תאריך יצירה.\\
+\hline
+\new{hm:has\_date\_format} & \new{סוג פורמט התאריך \en{(GregorianYear, HebrewYear, FullDate, UnstructuredDate)}.}\\
+\hline
+hm:has\_material & חומר כתיבה.\\
+\hline
+hm:P44\_has\_condition & מצב פיזי/מצב שימור של כתב היד.\\
+\hline
+hm:has\_binding & מקשר לכריכה.\\
+\hline
+hm:has\_decoration & מקשר לעיטור.\\
+\hline
+hm:has\_marginalia & מקשר להערות שוליים.\\
+\hline
+hm:copied\_from & מקשר כתב יד לאב-טיפוס שלו.\\
+\hline
+hm:is\_translation\_of & יחס תרגום בין יצירות.\\
+\hline
+hm:has\_commentary\_on & יחס פירוש בין יצירות.\\
+\hline
+
+hm:has\_vocalization & סוג ניקוד (טברייני, בבלי, ארץ-ישראלי).\\
+\hline
+
+hm:has\_cantillation & טעמי המקרא.\\
+\hline
+
+hm:mentions\_date & מקשר קולופון לתאריך המוזכר בו.\\
+\hline
+
+hm:mentions\_place & מקשר קולופון למקום המוזכר בו.\\
+\hline
+
+hm:mentions\_scribe & מקשר קולופון לסופר המוזכר בו.\\
+\hline
+
+hm:is\_scribe\_mentioned\_in & יחס הפוך: סופר $\rightarrow$ קולופון שבו הוזכר.\\
+\hline
+
+hm:mentions\_person & שם אדם המוזכר בכתב היד.\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — ודאות וייחוס}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newprop{hm:has\_certainty} & \new{רמת ודאות לכל ייחוס.}\\
+\hline
+\newprop{hm:attribution\_source} & \new{סוג מקור הייחוס.}\\
+\hline
+\newprop{hm:attributed\_by} & \new{מי ביצע את הייחוס.}\\
+\hline
+\newprop{hm:is\_variant\_of} & \new{יחס וריאנט בין יצירות.}\\
+\hline
+\newprop{hm:possibly\_realises} & \new{זיהוי Work לא ודאי.}\\
+\hline
+\newprop{hm:is\_abridgment\_of} & \new{גרסה מקוצרת.}\\
+\hline
+\newprop{hm:parallels} & \new{תוכן מקביל עם יחס לא ברור.}\\
+\hline
+\newprop{hm:has\_textual\_overlap\_with} & \new{חפיפה טקסטואלית (סימטרי).}\\
+\hline
+\newprop{hm:is\_volume\_of} & \new{מקשר כרך לסט שלו.}\\
+\hline
+\newprop{hm:has\_scribal\_intervention} & \new{מקשר להתערבות סופר.}\\
+\hline
+\newprop{hm:is\_copy\_of\_lost} & \new{מקשר לכתב יד אבוד.}\\
+\hline
+
+\newprop{hm:known\_through} & \new{כ"י אבוד ידוע דרך עותק קיים.}\\
+\hline
+
+\newprop{hm:is\_adaptation\_of} & \new{עיבוד של יצירה אחרת.}\\
+\hline
+
+\newprop{hm:duplicates\_part\_of} & \new{מכפיל חלק מביטוי אחר.}\\
+\hline
+
+\newprop{hm:has\_anthology\_position} & \new{מיקום טקסט באנתולוגיה.}\\
+\hline
+
+\newprop{hm:intervention\_location} & \new{מיקום התערבות בטקסט.}\\
+\hline
+
+\newprop{hm:intervention\_by} & \new{מבצע ההתערבות.}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — מסורת טקסט}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newprop{hm:belongs\_to\_tradition} & \new{מקשר ביטוי למסורת טקסט.}\\
+\hline
+\newprop{hm:witnesses} & \new{כתב יד כעד למסורת.}\\
+\hline
+\newprop{hm:has\_variant\_reading} & \new{מקשר לקריאה חלופית.}\\
+\hline
+\newprop{hm:has\_location} & \new{קישור מיקום כללי.}\\
+\hline
+\newprop{hm:span\_start} & \new{תחילת טווח טקסט.}\\
+\hline
+\newprop{hm:span\_end} & \new{סוף טווח טקסט.}\\
+\hline
+\newprop{hm:covers\_canonical\_range} & \new{מקשר ביטוי לכיסוי קנוני.}\\
+\hline
+\newprop{hm:canonical\_hierarchy} & \new{סוג מערכת היררכיה.}\\
+\hline
+\newprop{hm:has\_unit\_status} & \new{סטטוס ליבה/זר.}\\
+\hline
+
+\newprop{hm:variant\_at\_location} & \new{גרסה במיקום ספציפי.}\\
+\hline
+
+\newprop{hm:tradition\_includes} & \new{מסורת כוללת ביטוי (הפוך של \en{belongs\_to\_tradition}).}\\
+\hline
+
+\newprop{hm:stemma\_parent} & \new{אב בסטמה טקסטואלית.}\\
+\hline
+
+\newprop{hm:stemma\_child} & \new{צאצא בסטמה.}\\
+\hline
+
+\newprop{hm:has\_stemma\_position} & \new{מיקום כתב יד בסטמה.}\\
+\hline
+
+\newprop{hm:iiif\_region} & \new{קישור לאזור תמונה IIIF.}\\
+\hline
+
+\newprop{hm:canonical\_start} & \new{תחילת טווח קנוני.}\\
+\hline
+
+\newprop{hm:canonical\_end} & \new{סוף טווח קנוני.}\\
+\hline
+
+\newprop{hm:is\_commentary\_on\_canonical} & \new{פירוש על קטעים קנוניים.}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — פרדיגמה כפולה}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newprop{hm:has\_cataloging\_perspective} & \new{מקשר לתצוגה ביבליוגרפית.}\\
+\hline
+\newprop{hm:has\_philological\_perspective} & \new{מקשר לתצוגה פילולוגית.}\\
+\hline
+\newprop{hm:has\_linked\_work} & \new{גשר פרדיגמות: קישור ל-\en{Work} (צד ביבליוגרפי).}\\
+\hline
+\newprop{hm:has\_linked\_tradition} & \new{גשר פרדיגמות: קישור ל-\en{TextTradition} (צד פילולוגי).}\\
+\hline
+\newprop{hm:view\_type} & \new{סיווג סוג התצוגה.}\\
+\hline
+\newprop{hm:cataloging\_work} & \new{Work בתצוגת קטלוג.}\\
+\hline
+\newprop{hm:philological\_tradition} & \new{מסורת בתצוגה פילולוגית.}\\
+\hline
+\newprop{hm:is\_paradigm\_compatible} & \new{תצוגות תואמות.}\\
+\hline
+
+\newprop{hm:cataloging\_expression} & \new{ביטוי לצרכי קטלוג.}\\
+\hline
+
+\newprop{hm:philological\_witness} & \new{עד פילולוגי כאירוע תרבותי.}\\
+\hline
+
+\newprop{hm:has\_philological\_witness} & \new{מקשר כתב יד ישירות ל-\textenglish{TransmissionWitness} (עדות פילולוגית).}\\
+\hline
+
+\newprop{hm:paradigm\_bridge} & \new{מקשר בין פרדיגמות.}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — מבנה CU מקונן}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newprop{hm:has\_sub\_unit} & \new{קינון יחידות רקורסיבי (טרנזיטיבי).}\\
+\hline
+\newprop{hm:is\_sub\_unit\_of} & \new{יחס ילד-הורה.}\\
+\hline
+\newprop{hm:has\_hierarchy} & \new{מקשר למבנה היררכיה.}\\
+\hline
+\newprop{hm:hierarchy\_root} & \new{יחידה ברמה עליונה.}\\
+\hline
+\newprop{hm:hierarchy\_type} & \new{סיווג מורכבות.}\\
+\hline
+\newprop{hm:precedes\_unit} & \new{סדר רצף פיזי.}\\
+\hline
+
+\newprop{hm:follows\_unit} & \new{יחידה עוקבת (הפוך של \en{precedes\_unit}).}\\
+\hline
+
+\newprop{hm:has\_parent\_unit} & \new{יחידת אב ישירה (לא טרנזיטיבי).}\\
+\hline
+
+\newprop{hm:adjacent\_unit} & \new{יחידות סמוכות באותה רמה (סימטרי).}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — מסגרת אפיסטמולוגית}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newprop{hm:has\_epistemological\_status} & \new{מסווג אופי אפיסטמולוגי.}\\
+\hline
+\newprop{hm:has\_evidence\_chain} & \new{מקשר טענה לראיות.}\\
+\hline
+\newprop{hm:evidence\_step} & \new{צעד בודד בשרשרת.}\\
+\hline
+\newprop{hm:evidence\_source} & \new{מסמך מקור לצעד.}\\
+\hline
+\newprop{hm:evidence\_agent} & \new{מי סיפק ראיות.}\\
+\hline
+\newprop{hm:derives\_from} & \new{שרשרת גזירה.}\\
+\hline
+\newprop{hm:data\_category} & \new{סיווג סוג נתונים.}\\
+\hline
+\newprop{hm:interpretation\_method} & \new{שיטה לפרשנות.}\\
+\hline
+\newprop{hm:competing\_interpretation} & \new{ניתוחים חלופיים.}\\
+\hline
+
+\newprop{hm:supports\_assertion} & \new{שרשרת ראיות תומכת בטענה.}\\
+\hline
+
+\newprop{hm:contradicts\_assertion} & \new{ראיות סותרות טענה.}\\
+\hline
+\end{longtable}
+
+\newpage
+
+%====================================================================
+\section{תכונות נתונים \en{(Datatype Properties)}}
+%====================================================================
+
+%--------------------------------------------------------------------
+\subsection{תכונות CIDOC-CRM}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+cidoc-crm:P190\_has\_symbolic\_content & תוכן טקסטואלי & xsd:string\\
+\hline
+cidoc-crm:P82a\_begin\_of\_the\_begin & תחילת חיים )לאדם( & xsd:integer\\
+\hline
+cidoc-crm:P82b\_end\_of\_the\_end & סוף חיים )לאדם( & xsd:integer\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{תכונות פיזיות}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+hm:has\_height\_mm & גובה במ"מ & xsd:decimal\\
+\hline
+hm:has\_width\_mm & רוחב במ"מ & xsd:decimal\\
+\hline
+hm:has\_number\_of\_folios & מספר דפים & xsd:integer / xsd:int\\
+\hline
+hm:has\_lines\_per\_page & שורות בדף & xsd:integer\\
+\hline
+hm:has\_columns & מספר טורים & xsd:integer\\
+\hline
+hm:has\_quire\_structure & מבנה קוויונים & xsd:string\\
+\hline
+hm:has\_catchwords & מילות קשר & xsd:boolean\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{תכונות טקסטואליות}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+hm:has\_title & כותרת & xsd:string\\
+\hline
+hm:has\_incipit & תחילת הטקסט & xsd:string\\
+\hline
+hm:opening\_text & טקסט פתיחה & xsd:string\\
+\hline
+hm:has\_explicit & סיום הטקסט & xsd:string\\
+\hline
+hm:variation\_note & הערת וריאציה & xsd:string\\
+\hline
+hm:colophon\_text & טקסט הקולופון & xsd:string\\
+\hline
+hm:has\_folio\_range & טווח דפים & xsd:string\\
+\hline
+
+hm:date\_attribution\_source & מקור קביעת התאריך & xsd:string\\
+\hline
+hm:place\_attribution\_source & מקור קביעת המקום & xsd:string\\
+\hline
+
+hm:earliest\_possible\_date & תאריך מוקדם ביותר & xsd:integer\\
+\hline
+
+hm:latest\_possible\_date & תאריך מאוחר ביותר & xsd:integer\\
+\hline
+
+\new{hm:date\_original\_string} & \new{מחרוזת תאריך מקורית — הטקסט כפי שהופיע במקור} & xsd:string\\
+\hline
+
+hm:external\_identifier\_nli & מספר מזהה בספריה הלאומית & xsd:string\\
+\hline
+
+hm:external\_uri\_nli & URI מלא לספריה הלאומית & xsd:anyURI\\
+\hline
+
+hm:wikidata\_id & מזהה ויקידטה & xsd:string\\
+\hline
+
+hm:external\_wikidata\_id & מזהה ויקידטה & xsd:string\\
+\hline
+
+hm:external\_wikidata\_uri & URI מלא לויקידטה & xsd:anyURI\\
+\hline
+
+hm:material\_arrangement & סידור החומר בכתב היד & xsd:string\\
+\hline
+
+hm:mentions\_occasion & אירוע המוזכר בקולופון & xsd:string\\
+\hline
+
+hm:has\_digital\_representation\_url & קישור לייצוג דיגיטלי & xsd:anyURI\\
+\hline
+
+hm:has\_preferred\_citation & אופן ציטוט מועדף & xsd:string\\
+\hline
+
+hm:has\_rights\_statement & הצהרת זכויות & xsd:string\\
+\hline
+
+hm:has\_ruling\_description & תיאור שרטוט & xsd:string\\
+\hline
+
+hm:ownership\_history & היסטוריית בעלות & xsd:string\\
+\hline
+
+hm:sfardata\_id & מזהה Sfardata & xsd:string\\
+\hline
+
+hm:viaf\_id & מזהה VIAF & xsd:string\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות  + — ודאות וייחוס}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+\newprop{hm:certainty\_percentage} & \new{אחוז ביטחון} & \new{xsd:decimal}\\
+\hline
+\newprop{hm:certainty\_note} & \new{הערת ודאות} & \new{xsd:string}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — מיקום וגרנולריות}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+\newprop{hm:folio\_number} & \new{מספר דף (למשל \en{15r})} & \new{xsd:string}\\
+\hline
+\newprop{hm:line\_number} & \new{מספר שורה} & \new{xsd:integer}\\
+\hline
+\newprop{hm:column\_number} & \new{מספר טור} & \new{xsd:integer}\\
+\hline
+\newprop{hm:word\_position} & \new{מיקום מילה} & \new{xsd:integer}\\
+\hline
+\newprop{hm:character\_position} & \new{מיקום תו} & \new{xsd:integer}\\
+\hline
+\newprop{hm:coordinates\_iiif} & \new{קואורדינטות IIIF} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:location\_string} & \new{מחרוזת מיקום קריאה} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:variant\_text} & \new{נוסח הגרסה החלופית} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:standard\_text} & \new{נוסח מקובל להשוואה} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:variant\_significance} & \new{הערכת משמעות הגרסה} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:tradition\_name} & \new{שם מסורת טקסט} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:tradition\_description} & \new{תיאור מסורת} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:is\_foreign\_addition} & \new{האם תוספת זרה (מסנן מהיר)} & \new{xsd:boolean}\\
+\hline
+
+\newprop{hm:addition\_period} & \new{תקופת ההוספה} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:intervention\_description} & \new{תיאור התערבות סופר} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:anthology\_order} & \new{סדר באנתולוגיה} & \new{xsd:integer}\\
+\hline
+
+\newprop{hm:overlap\_folio\_range} & \new{טווח דפים חופפים} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:volume\_number} & \new{מספר כרך} & \new{xsd:integer}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — הפניות קנוניות}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+\newprop{hm:book\_name} & \new{שם ספר} & \new{xsd:string}\\
+\hline
+\newprop{hm:chapter\_number} & \new{מספר פרק} & \new{xsd:integer}\\
+\hline
+\newprop{hm:verse\_number} & \new{מספר פסוק} & \new{xsd:integer}\\
+\hline
+\newprop{hm:tractate\_name} & \new{שם מסכת} & \new{xsd:string}\\
+\hline
+\newprop{hm:mishnah\_number} & \new{מספר משנה} & \new{xsd:integer}\\
+\hline
+\newprop{hm:talmud\_folio} & \new{דף תלמוד} & \new{xsd:string}\\
+\hline
+\newprop{hm:halacha\_section} & \new{קטע הלכתי} & \new{xsd:string}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — פרדיגמה ומבנה}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+\newprop{hm:paradigm\_note} & \new{הערת פרדיגמה} & \new{xsd:string}\\
+\hline
+\newprop{hm:is\_primary\_paradigm} & \new{פרדיגמה דומיננטית} & \new{xsd:boolean}\\
+\hline
+\newprop{hm:paradigm\_justification} & \new{הצדקת קישור} & \new{xsd:string}\\
+\hline
+\newprop{hm:nesting\_level} & \new{רמת קינון} & \new{xsd:integer}\\
+\hline
+\newprop{hm:is\_atomic\_unit} & \new{יחידה אטומית} & \new{xsd:boolean}\\
+\hline
+\newprop{hm:max\_nesting\_depth} & \new{עומק קינון מרבי} & \new{xsd:integer}\\
+\hline
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות   — מסגרת אפיסטמולוגית}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{5cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} \\
+\hline
+\endhead
+
+\newprop{hm:is\_factual} & \new{האם עובדה} & \new{xsd:boolean}\\
+\hline
+\newprop{hm:interpretation\_date} & \new{תאריך פרשנות} & \new{xsd:date}\\
+\hline
+\newprop{hm:evidence\_strength} & \new{עוצמת ראיה (0-1)} & \new{xsd:decimal}\\
+\hline
+\newprop{hm:reasoning\_text} & \new{טקסט הנמקה} & \new{xsd:string}\\
+\hline
+\newprop{hm:methodology\_reference} & \new{הפניה מתודולוגית} & \new{xsd:string}\\
+\hline
+\newprop{hm:consensus\_level} & \new{רמת הסכמה} & \new{xsd:string}\\
+\hline
+
+\newprop{hm:supersedes\_interpretation} & \new{מחליף פרשנות קודמת} & \new{xsd:boolean}\\
+\hline
+
+\newprop{hm:unit\_sequence} & \new{מספר סידורי בין יחידות אחיות} & \new{xsd:integer}\\
+\hline
+
+\newprop{hm:hierarchy\_description} & \new{תיאור מורכבות היררכיה} & \new{xsd:string}\\
+\hline
+\end{longtable}
+
+\newpage
+
+%====================================================================
+\section{אוצר מילים מבוקר \en{(Instances)}}
+%====================================================================
+
+%--------------------------------------------------------------------
+\subsection{סוגי כתב}
+%--------------------------------------------------------------------
+
+\textbf{סוגים אזוריים \en{(TypeScriptType)}:}
+\begin{itemize}
+\item hm:AshkenaziScript — כתב אשכנזי
+\item hm:SepharadicScript — כתב ספרדי
+\item hm:ItalianScript — כתב איטלקי
+\item hm:ByzantineScript — כתב ביזנטי
+\item hm:YemeniteScript — כתב תימני
+\item hm:OrientalScript — כתב מזרחי
+\item hm:PersianScript — כתב פרסי
+\end{itemize}
+
+\textbf{מצבי כתב \en{(ModeScriptType)}:}
+\begin{itemize}
+\item hm:SquareScript — כתב מרובע
+\item hm:SemicursiveScript — כתב בינוני
+\item hm:CursiveScript — כתב רהוט
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{חומרים ומצב}
+%--------------------------------------------------------------------
+
+\textbf{חומרים:}
+\begin{itemize}
+\item hm:Parchment — קלף
+\item hm:Paper — נייר
+\item hm:Papyrus — פפירוס
+\end{itemize}
+
+\textbf{מצב פיזי:}
+\begin{itemize}
+\item hm:Excellent — מצוין
+\item hm:Good — טוב
+\item hm:Fair — בינוני
+\item hm:Poor — גרוע
+\item hm:Fragmentary — פרגמנטרי
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{שפות}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:Hebrew — עברית
+\item hm:Aramaic — ארמית
+\item hm:Arabic — ערבית
+\item hm:JudeoArabic — יהודית-ערבית
+\item hm:Ladino — לאדינו
+\item hm:Yiddish — יידיש
+\item hm:JudeoPersian — יהודית-פרסית
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{סוגי עיטור}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:FullPageIllumination — עיטור דף שלם
+\item hm:InitialLetters — אותיות פותחות מעוטרות
+\item hm:MarginalDecoration — עיטור שוליים
+\item hm:CarpetPage — דף שטיח
+\item hm:Micrography — מיקרוגרפיה
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{סוגי ניקוד}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:TiberianVocalization — ניקוד טברייני
+\item hm:BabylonianVocalization — ניקוד בבלי
+\item hm:PalestinianVocalization — ניקוד ארץ-ישראלי
+\item hm:NoVocalization — ללא ניקוד
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{סוגי כריכה}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:OriginalBinding — כריכה מקורית
+\item hm:Rebinding — כריכה מחדש
+\item hm:ConservationBinding — כריכת שימור
+\item hm:Unbound — ללא כריכה
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סוגי פורמט תאריך}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:GregorianYear — שנה גרגוריאנית (למשל: 1407, 1523)}
+\item \new{hm:HebrewYear — שנה עברית (למשל: תשפ״ד, ה'קס״ז)}
+\item \new{hm:FullDate — תאריך מלא (למשל: 15/03/1407, כ״ג אדר תשפ״ד)}
+\item \new{hm:UnstructuredDate — טקסט חופשי (למשל: "המאה ה-15")}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{תפקידי השתתפות}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:Scribe\_role — סופר, מעתיק כתב יד
+\item hm:Author\_role — מחבר
+\item hm:Illuminator\_role — מאייר
+\item hm:Commentator\_role — פרשן
+\item hm:Translator\_role — מתרגם
+\item hm:Owner\_role — בעלים קודם
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{נושאים}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:Bible\_Subject — מקרא
+\item hm:Talmud\_Subject — תלמוד
+\item hm:Midrash\_Subject — מדרש
+\item hm:Halakha\_Subject — הלכה
+\item hm:Kabbalah\_Subject — קבלה
+\item hm:Philosophy\_Subject — פילוסופיה
+\item hm:Liturgy\_Subject — ליטורגיה
+\item hm:Poetry\_Subject — שירה
+\item hm:Medicine\_Subject — רפואה
+\item hm:Science\_Subject — מדעים
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סוגי התערבות סופר}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:Correction\_type — תיקון}
+\item \new{hm:Erasure\_type — מחיקה}
+\item \new{hm:Interlinear\_addition\_type — הוספה בין השורות}
+\item \new{hm:Marginal\_gloss\_type — ביאור בשוליים}
+\item \new{hm:Later\_hand\_type — יד מאוחרת}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סוגי סטטוס יחידה}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:CoreUnit\_status — יחידת ליבה}
+\item \new{hm:LaterAddition\_status — תוספת מאוחרת}
+\item \new{hm:BinderAddition\_status — תוספת כורך}
+\item \new{hm:UnrelatedFragment\_status — שבר לא קשור}
+\item \new{hm:ProtectiveLeaf\_status — דף מגן}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סוגי משמעות גרסה}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:Orthographic\_variant — גרסה כתיבית (איות)}
+\item \new{hm:Lexical\_variant — גרסה לקסיקלית (בחירת מילים)}
+\item \new{hm:Syntactic\_variant — גרסה תחבירית}
+\item \new{hm:Semantic\_variant — גרסה משמעותית}
+\item \new{hm:Addition\_variant — הוספה}
+\item \new{hm:Omission\_variant — השמטה}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סוגי היררכיה קודיקולוגית}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:SimpleHierarchy — היררכיה פשוטה}
+\item \new{hm:NestedHierarchy — היררכיה מקוננת}
+\item \new{hm:ComplexHierarchy — היררכיה מורכבת \en{(MTM, Sammelband)}}
+\item \new{hm:FragmentaryHierarchy — היררכיה קטעית}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סוגי פרדיגמה}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:BibliographicParadigm — פרדיגמה ביבליוגרפית}
+\item \new{hm:PhilologicalParadigm — פרדיגמה פילולוגית}
+\item \new{hm:HybridParadigm — פרדיגמה היברידית}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{סוגי טקסט}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item hm:MainText — טקסט עיקרי
+\item hm:CommentaryText — פירוש
+\item hm:AdditionalText — טקסט נוסף
+\item hm:MarginalText — טקסט בשוליים
+\item hm:SupercommentaryText — פירוש על פירוש
+\item hm:GlossText — ביאור
+\item hm:ResponsumText — תשובה (שו"ת)
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{רמות ודאות}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:Certain — ודאי}
+\item \new{hm:Probable — סביר}
+\item \new{hm:Possible — אפשרי}
+\item \new{hm:Uncertain — לא ודאי}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{מקורות ייחוס}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:ExpertAttribution — ייחוס מומחה}
+\item \new{hm:AIAttribution — ייחוס AI}
+\item \new{hm:CatalogAttribution — ייחוס קטלוג}
+\item \new{hm:ColophonAttribution — ייחוס מקולופון}
+\item \new{hm:PaleographicAttribution — ייחוס פליאוגרפי}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{היררכיות קנוניות}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:Bible\_hierarchy — היררכיית מקרא}
+\item \new{hm:Mishnah\_hierarchy — היררכיית משנה}
+\item \new{hm:Talmud\_Bavli\_hierarchy — היררכיית תלמוד בבלי}
+\item \new{hm:Talmud\_Yerushalmi\_hierarchy — היררכיית תלמוד ירושלמי}
+\item \new{hm:Mishneh\_Torah\_hierarchy — היררכיית משנה תורה}
+\item \new{hm:Shulchan\_Aruch\_hierarchy — היררכיית שולחן ערוך}
+\item \new{hm:Zohar\_hierarchy — היררכיית ספרות הזוהר}
+\item \new{hm:Midrash\_hierarchy — היררכיית מדרש}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{סטטוסים אפיסטמולוגיים}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:DirectObservation — תצפית ישירה}
+\item \new{hm:ScholarlyInterpretation — פרשנות חוקר}
+\item \new{hm:ComputationalDerivation — גזירה חישובית}
+\item \new{hm:CatalogInherited — ירושה מקטלוג}
+\item \new{hm:TraditionalAttribution — ייחוס מסורתי}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{קטגוריות נתונים}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:PhysicalMeasurement — מדידה פיזית}
+\item \new{hm:ColophonContent — תוכן קולופון}
+\item \new{hm:MaterialObservation — תצפית חומר}
+\item \new{hm:DateAttribution — ייחוס תאריך}
+\item \new{hm:AuthorshipAttribution — ייחוס מחברות}
+\item \new{hm:ScribeIdentification — זיהוי סופר}
+\item \new{hm:PlaceAttribution — ייחוס מקום}
+\item \new{hm:WorkIdentification — זיהוי יצירה}
+\item \new{hm:TextualRelationship — יחס טקסטואלי}
+\end{itemize}
+
+%--------------------------------------------------------------------
+\subsection{\new{שיטות פרשנות}}
+%--------------------------------------------------------------------
+
+\begin{itemize}
+\item \new{hm:PaleographicAnalysis — ניתוח פליאוגרפי}
+\item \new{hm:CodicologicalAnalysis — ניתוח קודיקולוגי}
+\item \new{hm:LinguisticAnalysis — ניתוח לשוני}
+\item \new{hm:HistoricalContextAnalysis — ניתוח הקשר היסטורי}
+\item \new{hm:ComparativeTextualAnalysis — ניתוח טקסטואלי השוואתי}
+\item \new{hm:AIBasedAnalysis — ניתוח מבוסס AI}
+\item \new{hm:RadiocarbonDating — תיארוך פחמן-14}
+\item \new{hm:WatermarkAnalysis — ניתוח סימני מים}
+\end{itemize}
+
+\newpage
+
+%====================================================================
+\section{עקרונות מידול}
+%====================================================================
+
+\subsection{אירועיות}
+
+כל שינוי או פעולה מתועדים כאירוע עם:
+\begin{itemize}
+\item מבצע \en{(P14\_carried\_out\_by)}
+\item זמן \en{(P4\_has\_time-span)}
+\item מקום \en{(P7\_took\_place\_at)}
+\item חפצים מעורבים \en{(P16\_used\_specific\_object)}
+\end{itemize}
+
+\subsection{הפרדת רבדים}
+
+\begin{itemize}
+\item \textbf{Work}: התוכן המופשט )רעיון החיבור(
+\item \textbf{Expression}: הביטוי הטקסטואלי הספציפי
+\item \textbf{Manifestation}: המופע הפיזי )כתב היד(
+\end{itemize}
+
+\subsection{גמישות מבנית}
+
+\begin{itemize}
+\item כתב יד פשוט: CU יחיד
+\item כתב יד מורכב: BU עם מספר CUs
+\item יחידות פלאוגרפיות: PU לפי הצורך
+\end{itemize}
+
+\subsection{קישוריות}
+
+\begin{itemize}
+\item מזהים חיצוניים \en{(VIAF, Wikidata, NLI)}
+\item קישור לקטלוגים ומקורות
+\item יחסים עם פריטים קשורים
+\end{itemize}
+
+\subsection{הרחיבות}
+
+המודל מאפשר הוספת:
+\begin{itemize}
+\item מחלקות Type חדשות
+\item מאפייני נתונים נוספים
+\item יחסי עצמים מותאמים
+\item אירועים מיוחדים
+\end{itemize}
+
+\subsection{השימוש בפועל}
+
+האונטולוגיה מאפשרת שאילתות מורכבות כגון:
+\begin{itemize}
+\item כל כתבי היד של מחבר מסוים
+\item כתבי יד שנוצרו במקום/זמן ספציפיים
+\item שרשרת בעלות של כתב יד
+\item כתבי יד הכוללים יצירה מסוימת
+\item התפוצה הגיאוגרפית של חיבור
+\end{itemize}
+
+המודל תומך גם בניתוח השוואתי ובמחקר כמותי על פני אוספים שונים.
+
+\newpage
+
+%====================================================================
+\section{דוגמאות RDF}
+%====================================================================
+
+%--------------------------------------------------------------------
+\subsection{כתב יד פשוט}
+%--------------------------------------------------------------------
+
+\begin{LTR}
+\begin{verbatim}
+# Codicological Unit (single)
+:MS_Barberini_82 rdf:type hm:Codicological_Unit ;
+    cidoc-crm:P1_is_identified_by :NLI_990000623390205171 ;
+    hm:has_number_of_folios 151 ;
+    hm:has_material :Paper, :Parchment ;
+    hm:has_script_type :SepharadicScript ;
+    hm:has_script_mode :SemicursiveScript ;
+    hm:has_colophon :MS_Barberini_82_Colophon ;
+    lrmoo:R4_embodies :Ginat_Egoz_Expression_MS_Barberini_82 .
+
+# Expression
+:Ginat_Egoz_Expression_MS_Barberini_82 rdf:type lrmoo:F2_Expression ;
+    lrmoo:R3_is_realised_in :Ginat_Egoz_Work ;
+    cidoc-crm:P2_has_type :MainText .
+
+# Work
+:Ginat_Egoz_Work rdf:type lrmoo:F1_Work ;
+    cidoc-crm:P102_has_title :Ginat_Egoz_Title ;
+    cidoc-crm:P2_has_type :Kabbalah_Subject ;
+    cidoc-crm:P72_has_language :Hebrew .
+\end{verbatim}
+\end{LTR}
+
+%--------------------------------------------------------------------
+\subsection{כתב יד מורכב \en{(BU + CUs)}}
+%--------------------------------------------------------------------
+
+\begin{LTR}
+\begin{verbatim}
+# Bibliographic Unit (complete volume)
+:MS_Vatican_Ebr_44 rdf:type hm:Bibliographic_Unit ;
+    cidoc-crm:P1_is_identified_by :MS_Vatican_Ebr_44_Identifier ;
+    hm:has_number_of_folios 284 ;
+    lrmoo:R5_has_component :MS_Vatican_Ebr_44_CU_01, 
+                           :MS_Vatican_Ebr_44_CU_02 .
+
+# Codicological Unit 1
+:MS_Vatican_Ebr_44_CU_01 rdf:type hm:Codicological_Unit ;
+    lrmoo:R5i_is_component_of :MS_Vatican_Ebr_44 ;
+    lrmoo:R4_embodies :Midrash_Tanchuma_Expression_MS_Vatican_44 .
+
+# Codicological Unit 2
+:MS_Vatican_Ebr_44_CU_02 rdf:type hm:Codicological_Unit ;
+    lrmoo:R5i_is_component_of :MS_Vatican_Ebr_44 ;
+    lrmoo:R4_embodies :Alphabet_Ben_Sira_Expression_MS_Vatican_44 .
+\end{verbatim}
+\end{LTR}
+
+%--------------------------------------------------------------------
+\subsection{אירוע הפקה וקולופון}
+%--------------------------------------------------------------------
+
+\begin{LTR}
+\begin{verbatim}
+# Production Event
+:MS_Barberini_82_Production_Event rdf:type lrmoo:F32_Item_Production_Event ;
+    lrmoo:R27_materialized :MS_Barberini_82 ;
+    cidoc-crm:P14_carried_out_by :Moshe_ben_Yitzhak_Ibn_Tibbon ;
+    cidoc-crm:P4_has_time-span :Year_1407_Shvat ;
+    cidoc-crm:P7_took_place_at :Candia_Herakleion .
+
+:Year_1407_Shvat rdf:type cidoc-crm:E52_Time-Span .
+:Moshe_ben_Yitzhak_Ibn_Tibbon rdf:type cidoc-crm:E21_Person .
+:Candia_Herakleion rdf:type cidoc-crm:E53_Place .
+
+# Colophon
+:MS_Barberini_82_Colophon rdf:type hm:Colophon ;
+    hm:mentions_scribe :Moshe_ben_Yitzhak_Ibn_Tibbon ;
+    hm:mentions_date :Year_1407_Shvat ;
+    hm:mentions_place :Candia_Herakleion ;
+    hm:colophon_text "חק אבן תבון וסיימתי בחדש שבט שנת הקס\"ז לבריאת עולם למינן שאנו מונין פה בעיר קנדיאה"@he .
+\end{verbatim}
+\end{LTR}
+
+%--------------------------------------------------------------------
+\subsection{אירוע העברת בעלות}
+%--------------------------------------------------------------------
+
+\begin{LTR}
+\begin{verbatim}
+:MS_Vatican_Ebr_44_Ownership_History_Event rdf:type cidoc-crm:E10_Transfer_of_Custody ;
+    cidoc-crm:P16_used_specific_object :MS_Vatican_Ebr_44 ;
+    cidoc-crm:P24_transferred_title_from :Elijah_ben_Elkanah_Capsali ;
+    cidoc-crm:P23_transferred_title_to :Anton_Fugger ;
+    cidoc-crm:P4_has_time-span :November_8_1541 .
+
+:November_8_1541 rdf:type cidoc-crm:E52_Time-Span .
+\end{verbatim}
+\end{LTR}
+
+\newpage
+
+%====================================================================
+\section{סיכום השינויים מהעיצוב המקורי}
+%====================================================================
+
+האונטולוגיה המעודכנת מרחיבה את העיצוב המקורי של פרופ' גילה פרבור במספר כיוונים מרכזיים:
+
+\subsection{תמיכה בפרדיגמה כפולה}
+
+\new{נוספה תמיכה בשתי גישות שונות לתיאור כתבי יד:}
+\begin{itemize}
+\item \new{\textbf{גישה ביבליוגרפית-מעשית:} מבוססת על מודל Work-Expression, מתאימה לקטלוג וויקידטה.}
+\item \new{\textbf{גישה פילולוגית חדשה:} מתייחסת לכל כתב יד כאירוע תרבותי ייחודי, ללא הנחת "יצירה" אחידה.}
+\end{itemize}
+
+\subsection{מבנה קודיקולוגי מקונן}
+
+\new{הותר קינון של יחידות קודיקולוגיות בעומק שרירותי:}
+\begin{itemize}
+\item \new{CU יכולה להכיל תת-CU שמכילה תת-תת-CU וכו'.}
+\item \new{מאפשר ייצוג כתבי יד מורכבים כמו Sammelbands ו-MTM.}
+\end{itemize}
+
+\subsection{מסגרת אפיסטמולוגית}
+
+\new{נוספה הבחנה שיטתית בין סוגי נתונים:}
+\begin{itemize}
+\item \new{\textbf{תצפיות ישירות:} עובדות ניתנות לאימות (מידות, ספירת דפים).}
+\item \new{\textbf{פרשנויות חוקרים:} הכרעות הדורשות שיפוט מומחה.}
+\item \new{\textbf{גזירות חישוביות:} תוצאות אלגוריתמים ו-AI.}
+\end{itemize}
+
+\subsection{תמיכה בגרנולריות מלאה}
+
+\new{נוספה תמיכה בתיאור ברמות שונות:}
+\begin{itemize}
+\item \new{דף, שורה, מילה, תו}
+\item \new{אינטגרציה עם IIIF לאזורי תמונה}
+\end{itemize}
+
+\subsection{היררכיות קנוניות}
+
+\new{נוספה תמיכה בשמונה היררכיות טקסט קנוניות יהודיות:}
+\begin{itemize}
+\item \new{מקרא (ספר/פרק/פסוק)}
+\item \new{משנה (מסכת/פרק/משנה)}
+\item \new{תלמוד בבלי וירושלמי (מסכת/דף/עמוד)}
+\item \new{משנה תורה ושולחן ערוך (קטע הלכתי)}
+\item \new{זוהר ומדרש (מבנה ספרותי ייחודי)}
+\end{itemize}
+
+\newpage
+
+%====================================================================
+\section{נספח: טבלאות מהתיעוד 26.09.2025}
+%====================================================================
+
+נספח זה משחזר את טבלאות המחלקות והמאפיינים כפי שהופיעו במסמך \textenglish{\LR{``תיעוד אונטולוגיה לכתבי יד עבריים - גרסה מעודכנת (3)''}} מתאריך 26.09.2025.
+
+%--------------------------------------------------------------------
+\subsection{מחלקות \en{(Classes)} — כפי שמופיע בתיעוד 26-9-25}
+%--------------------------------------------------------------------
+
+{\small
+\begin{longtable}{|p{4.5cm}|p{8.5cm}|p{3cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} & \textbf{סופרקלאס} \\
+\hline
+\endhead
+
+\textenglish{lrmoo:F1\_Work} & יצירה מופשטת )רעיון התוכן(. & — \\
+\hline
+\textenglish{lrmoo:F2\_Expression} & ביטוי טקסטואלי ספציפי. & — \\
+\hline
+\textenglish{lrmoo:F3\_Manifestation} & מהדורה כללית. & \textenglish{cidoc-crm:E22\_Human-Made\_Object} \\
+\hline
+\textenglish{lrmoo:F4\_Manifestation\_Singleton} & עותק פיזי יחידאי )כתב יד(. & \textenglish{lrmoo:F3\_Manifestation} \\
+\hline
+\textenglish{lrmoo:F5\_Item} & פריט פיזי \en{(LRMoo)} תואם. & \textenglish{cidoc-crm:E18\_Physical\_Thing} \\
+\hline
+\end{longtable}
+}
+
+{\small
+\begin{longtable}{|p{4.5cm}|p{8.5cm}|p{3cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} & \textbf{יוצר/קשר} \\
+\hline
+\endhead
+
+\textenglish{lrmoo:F27\_Work\_Creation} & אירוע יצירה של \textenglish{Work}. & \textenglish{R16\_created → F1\_Work} \\
+\hline
+\textenglish{lrmoo:F28\_Expression\_Creation} & אירוע יצירה של \textenglish{Expression}. & \textenglish{R17\_created → F2\_Expression} \\
+\hline
+\textenglish{lrmoo:F30\_Manifestation\_Creation} & אירוע יצירה של \textenglish{Manifestation}. & \textenglish{R24\_created → F3\_Manifestation} \\
+\hline
+\textenglish{lrmoo:F32\_Item\_Production\_Event} & אירוע הפקת עותק )העתקה(. & \textenglish{R27\_materialized → F4\_Manifestation\_Singleton} \\
+\hline
+\end{longtable}
+}
+
+{\small
+\begin{longtable}{|p{4.5cm}|p{8.5cm}|p{3cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} & \textbf{סופרקלאס} \\
+\hline
+\endhead
+
+\textenglish{cidoc-crm:E7\_Activity} & פעילות כללית. & \textenglish{cidoc-crm:E1\_CRM\_Entity} \\
+\hline
+\textenglish{cidoc-crm:E12\_Production} & יצירת חפץ פיזי. & \textenglish{cidoc-crm:E7\_Activity} \\
+\hline
+\textenglish{cidoc-crm:E8\_Acquisition} & רכישה. & \textenglish{cidoc-crm:E7\_Activity} \\
+\hline
+\textenglish{cidoc-crm:E10\_Transfer\_of\_Custody} & העברת משמורת. & \textenglish{cidoc-crm:E7\_Activity} \\
+\hline
+\textenglish{cidoc-crm:E21\_Person} & אדם. & \textenglish{cidoc-crm:E39\_Actor} \\
+\hline
+\textenglish{cidoc-crm:E74\_Group} & ארגון/קבוצה. & \textenglish{cidoc-crm:E39\_Actor} \\
+\hline
+\textenglish{cidoc-crm:E52\_Time-Span} & פרק זמן. & \textenglish{cidoc-crm:E1\_CRM\_Entity} \\
+\hline
+\textenglish{cidoc-crm:E53\_Place} & מקום. & \textenglish{cidoc-crm:E1\_CRM\_Entity} \\
+\hline
+\textenglish{cidoc-crm:E55\_Type} & טיפוס/סוג. & — \\
+\hline
+\textenglish{cidoc-crm:E56\_Language} & שפה. & \textenglish{cidoc-crm:E55\_Type} \\
+\hline
+\textenglish{cidoc-crm:E57\_Material} & חומר. & \textenglish{cidoc-crm:E55\_Type} \\
+\hline
+\end{longtable}
+}
+
+{\small
+\begin{longtable}{|p{4.5cm}|p{8.5cm}|p{3cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} & \textbf{סופרקלאס} \\
+\hline
+\endhead
+
+\textenglish{HebrewManuscripts:Bibliographic\_Unit} & יחידה ביבליוגרפית )כרך שלם(. & \textenglish{F4\_Manifestation\_Singleton} \\
+\hline
+\textenglish{HebrewManuscripts:Codicological\_Unit} & יחידה קודיקולוגית )חיבור בזמן/במקום(. & \textenglish{F4\_Manifestation\_Singleton} \\
+\hline
+\textenglish{HebrewManuscripts:Paleographical\_Unit} & יחידה פלאוגרפית )יד כותב(. & \textenglish{F4\_Manifestation\_Singleton} \\
+\hline
+\textenglish{HebrewManuscripts:Colophon} & קולופון )סיום כתב יד(. & \textenglish{cidoc-crm:E73\_Information\_Object} \\
+\hline
+\textenglish{HebrewManuscripts:Reference\_Event} & אזכור/אירוע הפניה במחקר. & \textenglish{cidoc-crm:E7\_Activity} \\
+\hline
+\end{longtable}
+}
+
+{\small
+\begin{longtable}{|p{4.5cm}|p{8.5cm}|p{3cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} & \textbf{סופרקלאס} \\
+\hline
+\endhead
+
+\textenglish{HebrewManuscripts:HebrewScriptType} & סוג כתב עברי. & \textenglish{cidoc-crm:E55\_Type} \\
+\hline
+\textenglish{HebrewManuscripts:TypeScriptType} & סוג כתב לפי מסורת )ספרדי/אשכנזי(. & \textenglish{HebrewScriptType} \\
+\hline
+\textenglish{HebrewManuscripts:ModeScriptType} & סגנון כתב )מרובע/קורסיבי(. & \textenglish{HebrewScriptType} \\
+\hline
+\textenglish{HebrewManuscripts:SubjectType} & נושא תוכן )קבלה, הלכה וכו'(. & \textenglish{cidoc-crm:E55\_Type} \\
+\hline
+\textenglish{HebrewManuscripts:ParticipationRole} & תפקיד השתתפות. & \textenglish{cidoc-crm:E55\_Type} \\
+\hline
+\end{longtable}
+}
+
+%--------------------------------------------------------------------
+\subsection{יחסי עצמים \en{(Object Properties)} — כפי שמופיע בתיעוד 26-9-25}
+%--------------------------------------------------------------------
+
+{\small
+\begin{longtable}{|p{4cm}|p{3.5cm}|p{3.5cm}|p{4.5cm}|}
+\hline
+\textbf{יחס} & \textbf{תחום} & \textbf{טווח} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\textenglish{R3\_is\_realised\_in} & \textenglish{F1\_Work} & \textenglish{F2\_Expression} & יצירה מתממשת בביטוי \\
+\hline
+\textenglish{R4i\_is\_embodied\_in} & \textenglish{F2\_Expression} & \textenglish{F3/F4\_Manifestation} & ביטוי מגולם במהדורה \\
+\hline
+\textenglish{R7\_exemplifies} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{F3\_Manifestation} & עותק מגלם מהדורה \\
+\hline
+\textenglish{R10\_has\_member} & \textenglish{F1\_Work} & \textenglish{F1\_Work} & בת-יצירה כוללת יצירות \\
+\hline
+\textenglish{R5\_has\_component} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{F3/F4\_Manifestation} & הרכבת חלקים \en{(BU→CU→PU)} \\
+\hline
+\textenglish{R69\_has\_physical\_form} & \textenglish{F3/F4\_Manifestation} & \textenglish{E55\_Type} & צורה פיזית \\
+\hline
+\textenglish{R16\_created} & \textenglish{F27\_Work\_Creation} & \textenglish{F1\_Work} & יצירת \textenglish{Work} \\
+\hline
+\textenglish{R17\_created} & \textenglish{F28\_Expression\_Creation} & \textenglish{F2\_Expression} & יצירת \textenglish{Expression} \\
+\hline
+\textenglish{R24\_created} & \textenglish{F30\_Manifestation\_Creation} & \textenglish{F3\_Manifestation} & יצירת \textenglish{Manifestation} \\
+\hline
+\textenglish{R27\_materialized} & \textenglish{F32\_Item\_Production\_Event} & \textenglish{F4\_Manifestation\_Singleton} & הפקת עותק פיזי \\
+\hline
+\textenglish{P1\_is\_identified\_by} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{E42\_Identifier} & מזהה כתב יד \\
+\hline
+\textenglish{P2\_has\_type} & כללי & \textenglish{E55\_Type} & שיוך לטיפוס \\
+\hline
+\textenglish{P72\_has\_language} & \textenglish{F2\_Expression} & \textenglish{E56\_Language} & שפת הטקסט \\
+\hline
+\textenglish{P4\_has\_time-span} & \textenglish{E7\_Activity} & \textenglish{E52\_Time-Span} & זמן אירוע \\
+\hline
+\textenglish{P7\_took\_place\_at} & \textenglish{E7\_Activity} & \textenglish{E53\_Place} & מקום אירוע \\
+\hline
+\textenglish{P14\_carried\_out\_by} & \textenglish{E7\_Activity} & \textenglish{E39\_Actor} & מבצע האירוע \\
+\hline
+\textenglish{P16\_used\_specific\_object} & \textenglish{E7\_Activity} & \textenglish{E18\_Physical\_Thing} & שימוש בחפץ \\
+\hline
+\textenglish{P23\_transferred\_title\_to} & \textenglish{E8\_Acquisition} & \textenglish{E39\_Actor} & בעלים חדש \\
+\hline
+\textenglish{P24\_transferred\_title\_from} & \textenglish{E8\_Acquisition} & \textenglish{E39\_Actor} & בעלים קודם \\
+\hline
+\textenglish{P28\_custody\_surrendered\_by} & \textenglish{E10\_Transfer\_of\_Custody} & \textenglish{E39\_Actor} & מסר משמורת \\
+\hline
+\textenglish{P29\_custody\_received\_by} & \textenglish{E10\_Transfer\_of\_Custody} & \textenglish{E39\_Actor} & קיבל משמורת \\
+\hline
+\textenglish{P70i\_is\_documented\_in} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{F3\_Manifestation} & תועד בקטלוג \\
+\hline
+\textenglish{P102\_has\_title} & \textenglish{E22\_Human-Made\_Object} & \textenglish{E35\_Title} & כותרת \\
+\hline
+\textenglish{has\_colophon} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{Colophon} & קישור לקולופון \\
+\hline
+\textenglish{has\_script\_type} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{E55\_Type} & סוג הכתב \\
+\hline
+\textenglish{has\_Script\_Mode} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{E55\_Type} & סגנון הכתב \\
+\hline
+\textenglish{has\_material} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{E57\_Material} & חומר הכתיבה \\
+\hline
+\textenglish{has\_date\_of\_creation} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{E52\_Time-Span} & תאריך יצירה \\
+\hline
+\textenglish{mentions\_scribe} & \textenglish{Colophon} & \textenglish{E21\_Person} & סופר המוזכר בקולופון \\
+\hline
+\textenglish{mentions\_date} & \textenglish{Colophon} & \textenglish{E52\_Time-Span} & תאריך בקולופון \\
+\hline
+\textenglish{mentions\_place} & \textenglish{Colophon} & \textenglish{E53\_Place} & מקום בקולופון \\
+\hline
+\end{longtable}
+}
+
+%--------------------------------------------------------------------
+\subsection{מאפייני נתונים \en{(Data Properties)} — כפי שמופיע בתיעוד 26-9-25}
+%--------------------------------------------------------------------
+
+{\small
+\begin{longtable}{|p{4cm}|p{3.5cm}|p{3.5cm}|p{4.5cm}|}
+\hline
+\textbf{מאפיין} & \textbf{תחום} & \textbf{טווח} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\textenglish{P190\_has\_symbolic\_content} & \textenglish{E33\_Linguistic\_Object} & \textenglish{xsd:string} & תוכן טקסטואלי \\
+\hline
+\textenglish{P82a\_begin\_of\_the\_begin} & \textenglish{E21\_Person} & \textenglish{xsd:integer} & תחילת חיים \\
+\hline
+\textenglish{P82b\_end\_of\_the\_end} & \textenglish{E21\_Person} & \textenglish{xsd:integer} & סוף חיים \\
+\hline
+\textenglish{colophon\_text} & \textenglish{Colophon} & \textenglish{xsd:string} & טקסט הקולופון \\
+\hline
+\textenglish{mentions\_occasion} & \textenglish{Colophon} & \textenglish{xsd:string} & אירוע המוזכר \\
+\hline
+\textenglish{earliest\_possible\_date} & \textenglish{E52\_Time-Span} & \textenglish{xsd:integer} & תאריך מוקדם ביותר \\
+\hline
+\textenglish{latest\_possible\_date} & \textenglish{E52\_Time-Span} & \textenglish{xsd:integer} & תאריך מאוחר ביותר \\
+\hline
+\textenglish{date\_attribution\_source} & כללי & \textenglish{xsd:string} & מקור ייחוס התאריך \\
+\hline
+\textenglish{place\_attribution\_source} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{xsd:string} & מקור ייחוס המקום \\
+\hline
+\textenglish{has\_number\_of\_folios} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{xsd:int} & מספר דפים \\
+\hline
+\textenglish{has\_folio\_range} & כללי & \textenglish{xsd:string} & טווח דפים \\
+\hline
+\textenglish{has\_height\_mm} & כללי & \textenglish{xsd:decimal} & גובה במ"מ \\
+\hline
+\textenglish{has\_width\_mm} & כללי & \textenglish{xsd:decimal} & רוחב במ"מ \\
+\hline
+\textenglish{material\_arrangement} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{xsd:string} & סידור חומרים \\
+\hline
+\textenglish{opening\_text} & \textenglish{F2\_Expression} & \textenglish{xsd:string} & טקסט פתיחה \\
+\hline
+\textenglish{variation\_note} & \textenglish{F2\_Expression} & \textenglish{xsd:string} & הערת וריאציה \\
+\hline
+\textenglish{external\_identifier\_nli} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{xsd:string} & מזהה ספרייה לאומית \\
+\hline
+\textenglish{external\_uri\_nli} & \textenglish{SubjectType} & \textenglish{xsd:anyURI} & \textenglish{URI} ספרייה לאומית \\
+\hline
+\textenglish{wikidata\_id} & \textenglish{owl:Thing} & \textenglish{xsd:string} & מזהה \textenglish{Wikidata} \\
+\hline
+\textenglish{external\_wikidata\_id} & \textenglish{owl:Thing} & \textenglish{xsd:string} & מזהה \textenglish{Wikidata} \\
+\hline
+\textenglish{external\_wikidata\_uri} & \textenglish{owl:Thing} & \textenglish{xsd:anyURI} & \textenglish{URI Wikidata} \\
+\hline
+\textenglish{viaf\_id} & \textenglish{E21\_Person} & \textenglish{xsd:string} & מזהה \textenglish{VIAF} \\
+\hline
+\textenglish{sfardata\_id} & כללי & \textenglish{xsd:string} & מזהה \textenglish{Sfardata} \\
+\hline
+\textenglish{has\_digital\_representation\_url} & \textenglish{F4\_Manifestation\_Singleton} & \textenglish{xsd:anyURI} & קישור לדיגיטציה \\
+\hline
+\textenglish{ownership\_history} & כללי & \textenglish{xsd:string} & היסטוריית בעלות \\
+\hline
+\textenglish{P44\_has\_condition} & כללי & \textenglish{E55\_Type} & מצב שימור \\
+\hline
+\end{longtable}
+}
+
+%====================================================================
+\section{\new{גרסה 1.5 — מטא-נתונים מנהליים וגישה \en{(Administrative \& Access Metadata)}}}
+%====================================================================
+
+\new{גרסה 1.5 מרחיבה את האונטולוגיה עם תמיכה בשדות מנהליים ובנתוני גישה, המאפשרים ייצוג מלא של כל המידע מרשומות \en{MARC} של הספרייה הלאומית.}
+
+%--------------------------------------------------------------------
+\subsection{\new{מחלקות חדשות}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{מחלקה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newclass{hm:PhysicalHolding} & \new{אחזקה פיזית של כתב היד במוסד מסוים, כולל מיקום וזמינות. נגזר משדה \en{MARC AVA}.}\\
+\hline
+\newclass{hm:DigitalAccess} & \new{נקודת גישה דיגיטלית לכתב יד, כולל קישורי צפייה מקוונת ו-\en{IIIF}. נגזר משדה \en{MARC AVE}.}\\
+\hline
+\newclass{hm:UsageRestriction} & \new{הגבלות שימוש והיתרים לכתב יד, כולל זכויות העתקה ומדיניות שכפול. נגזר משדה \en{MARC 939}.}\\
+\hline
+\newclass{hm:RightsDetermination} & \new{קביעת מצב זכויות לכתב יד, כולל סיווג נחלת הכלל ונימוק. נגזר משדה \en{MARC 952}.}\\
+\hline
+
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות אובייקט חדשות}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{8cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} \\
+\hline
+\endhead
+
+\newprop{hm:has\_physical\_holding} & \new{מקשר כתב יד לאחזקה פיזית.}\\
+\hline
+\newprop{hm:has\_digital\_access} & \new{מקשר כתב יד לנקודת גישה דיגיטלית. הופכי: \en{is\_digital\_access\_of}.}\\
+\hline
+\newprop{hm:has\_usage\_restriction} & \new{מקשר כתב יד למדיניות הגבלת שימוש. הופכי: \en{is\_usage\_restriction\_of}.}\\
+\hline
+\newprop{hm:has\_rights\_determination} & \new{מקשר כתב יד לקביעת זכויות רשמית. הופכי: \en{is\_rights\_determination\_of}.}\\
+\hline
+\newprop{hm:has\_related\_material} & \new{מקשר כתב יד לחומרים קשורים. סימטרי. נגזר משדה \en{MARC 544}.}\\
+\hline
+\newprop{hm:held\_at} & \new{מוסד או ספריית משנה בה מוחזק הפריט.}\\
+\hline
+\newprop{hm:former\_owner} & \new{בעלים קודם של כתב היד. תחום: \en{F4\_Manifestation\_Singleton}, טווח: \en{E21\_Person}.}\\
+\hline
+\newprop{hm:is\_part\_of\_host} & \new{כתב יד כחלק מפריט מארח. נגזר מ-\en{MARC 773}.}\\
+\hline
+
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{תכונות נתונים חדשות}}
+%--------------------------------------------------------------------
+
+\begin{longtable}{|r|p{4cm}|p{2cm}|p{3cm}|}
+\hline
+\textbf{תכונה} & \textbf{תיאור} & \textbf{סוג} & \textbf{מקור \en{MARC}} \\
+\hline
+\endhead
+
+\newprop{hm:copyright\_notice} & \new{הודעת זכויות יוצרים} & \en{xsd:string} & \en{597} \\
+\hline
+\newprop{hm:related\_material\_note} & \new{הערת חומר קשור} & \en{xsd:string} & \en{544} \\
+\hline
+\newprop{hm:acquisition\_source} & \new{מקור רכישה} & \en{xsd:string} & \en{541} \\
+\hline
+\newprop{hm:collection\_name} & \new{שם אוסף} & \en{xsd:string} & \en{966} \\
+\hline
+\newprop{hm:restriction\_type} & \new{סוג הגבלה} & \en{xsd:string} & \en{939\$a} \\
+\hline
+\newprop{hm:restriction\_url} & \new{קישור למדיניות הגבלה} & \en{xsd:anyURI} & \en{939\$u} \\
+\hline
+\newprop{hm:rights\_status} & \new{מצב זכויות} & \en{xsd:string} & \en{952\$a} \\
+\hline
+\newprop{hm:rights\_basis} & \new{בסיס קביעת זכויות} & \en{xsd:string} & \en{952\$b} \\
+\hline
+\newprop{hm:holding\_institution} & \new{מוסד מחזיק} & \en{xsd:string} & \en{AVA\$b} \\
+\hline
+\newprop{hm:holding\_sublibrary} & \new{ספריית משנה} & \en{xsd:string} & \en{AVA\$q} \\
+\hline
+\newprop{hm:holding\_collection} & \new{אוסף} & \en{xsd:string} & \en{AVA\$c} \\
+\hline
+\newprop{hm:holding\_call\_number} & \new{מספר קריאה} & \en{xsd:string} & \en{AVA\$d} \\
+\hline
+\newprop{hm:holding\_availability} & \new{מצב זמינות} & \en{xsd:string} & \en{AVA\$e} \\
+\hline
+\newprop{hm:digital\_access\_url} & \new{קישור גישה דיגיטלית} & \en{xsd:anyURI} & \en{AVE} \\
+\hline
+\newprop{hm:digital\_access\_note} & \new{הערת גישה דיגיטלית} & \en{xsd:string} & \en{AVE\$n} \\
+\hline
+\newprop{hm:digital\_access\_type} & \new{סוג גישה דיגיטלית} & \en{xsd:string} & \en{AVE} \\
+\hline
+\newprop{hm:shelfmark} & \new{סימן מדף / מספר מערכת} & \en{xsd:string} & \en{942\$z} \\
+\hline
+\newprop{hm:has\_multiple\_hands} & \new{כתוב בכמה ידיים (סופרים)} & \en{xsd:boolean} & \en{—} \\
+\hline
+\newprop{hm:anthology\_position} & \new{מיקום מספרי של ביטוי באנתולוגיה; תאימות המרה. ראה להלן מודל אנתולוגיה.} & \en{xsd:integer} & \en{—} \\
+\hline
+
+\end{longtable}
+
+%--------------------------------------------------------------------
+\subsection{\new{מודל אנתולוגיה — הבהרה}}
+%--------------------------------------------------------------------
+
+\new{שלוש תכונות קשורות לאנתולוגיה:}
+\begin{itemize}
+\item \newprop{hm:anthology\_position} — \new{תכונת נתונים: מספר שלם על \en{F2\_Expression}; מתאימה להמרת \en{MARC} פשוטה.}
+\item \newprop{hm:has\_anthology\_position} — \new{תכונת אובייקט: מקשרת ביטוי ל-\en{AnthologyPosition} (אובייקט עם מטא-נתונים).}
+\item \newprop{hm:anthology\_order} — \new{תכונת נתונים על \en{AnthologyPosition}: מספר סדר (\en{xsd:integer}).}
+\end{itemize}
+\new{למודל מלא: צור \en{AnthologyPosition}, השתמש ב-\en{has\_anthology\_position} ו-\en{anthology\_order}. להמרה פשוטה ניתן להשתמש ב-\en{anthology\_position} על הביטוי.}
+
+\vspace{2em}
+\begin{center}
+\rule{0.5\textwidth}{0.4pt}\\[1em]
+\textbf{סוף המסמך}
+\end{center}
+
+\end{document}

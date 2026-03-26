@@ -1,0 +1,1581 @@
+================================================================================
+HEBREW MANUSCRIPTS ONTOLOGY - COMPLETE TECHNICAL REFERENCE
+Version 1.5 (February 2026)
+================================================================================
+
+Author: Alexander Goldberg
+Contributors: Prof. Gila Prebor, Prof. Moshe Lavi, Dr. Eliezer Baumgarten
+
+This document provides a comprehensive scholarly explanation of all components 
+of the Hebrew Manuscripts Ontology, including their purposes, relationships,
+and theoretical foundations.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+I.    INTRODUCTION AND THEORETICAL FRAMEWORK
+II.   IMPORTED ONTOLOGIES AND NAMESPACES
+III.  CLASSES (98 total)
+      A. LRMoo Classes (IFLA Library Reference Model)
+      B. CIDOC-CRM Classes (Cultural Heritage Conceptual Model)
+      C. Core Hebrew Manuscript Classes
+      D. Physical Description Classes
+      E. Textual Structure Classes
+      F. Scholarly Apparatus Classes
+      G. v1.4 Additions: Dual Paradigm, Nested CU, Epistemological Framework
+      H. v1.5 Additions: Administrative & Access Metadata
+IV.   OBJECT PROPERTIES (126 total)
+V.    DATATYPE PROPERTIES (93 total)
+VI.   CONTROLLED VOCABULARY INSTANCES (119 total)
+VII.  USAGE GUIDELINES AND MODELING PATTERNS
+
+================================================================================
+I. INTRODUCTION AND THEORETICAL FRAMEWORK
+================================================================================
+
+The Hebrew Manuscripts Ontology is designed to model the complex metadata
+requirements of Hebrew manuscript cataloging and scholarly research. It 
+addresses the unique challenges posed by medieval Jewish textual culture:
+
+1. CODICOLOGICAL COMPLEXITY
+   Hebrew manuscripts frequently contain multiple texts, sometimes by 
+   different scribes, in varying states of completeness, with later 
+   additions, corrections, and marginalia. The ontology must represent
+   this layered complexity.
+
+2. TEXTUAL TRANSMISSION
+   Jewish texts were transmitted through networks of copying, with 
+   intentional and unintentional variations. The ontology supports both
+   traditional bibliographic description and modern philological analysis
+   that treats each manuscript as a unique cultural artifact.
+
+3. CANONICAL REFERENCE SYSTEMS
+   Jewish literature employs multiple canonical hierarchies (Biblical,
+   Mishnaic, Talmudic, Halachic) for referencing texts. The ontology
+   provides structured support for these systems.
+
+4. EPISTEMOLOGICAL CLARITY
+   Manuscript catalogs contain data of varying certainty - from direct
+   physical measurements to scholarly attributions to AI-derived 
+   identifications. The ontology distinguishes these epistemological
+   categories systematically.
+
+================================================================================
+II. IMPORTED ONTOLOGIES AND NAMESPACES
+================================================================================
+
+The ontology builds upon established international standards:
+
+PREFIX hm:        <http://www.ontology.org.il/HebrewManuscripts/2025-12-06#>
+                  Primary namespace for Hebrew Manuscripts Ontology classes,
+                  properties, and individuals.
+
+PREFIX lrmoo:     <http://iflastandards.info/ns/lrm/lrmoo/>
+                  IFLA Library Reference Model - object-oriented version.
+                  Provides the Work-Expression-Manifestation-Item (WEMI)
+                  framework for bibliographic description.
+
+PREFIX cidoc-crm: <http://www.cidoc-crm.org/cidoc-crm/>
+                  CIDOC Conceptual Reference Model for cultural heritage.
+                  Provides event-based modeling, temporal entities, and
+                  actor descriptions.
+
+PREFIX skos:      <http://www.w3.org/2004/02/skos/core#>
+                  Simple Knowledge Organization System for controlled
+                  vocabularies and thesaurus relationships.
+
+PREFIX dcterms:   <http://purl.org/dc/terms/>
+                  Dublin Core Terms for basic metadata properties.
+
+================================================================================
+III. CLASSES (94 total)
+================================================================================
+
+------------------------------------------------------------------------------
+III.A. LRMoo Classes (IFLA Library Reference Model)
+------------------------------------------------------------------------------
+
+These classes implement the fundamental bibliographic framework:
+
+1. lrmoo:F1_Work
+   PURPOSE: Represents an abstract intellectual creation - the "idea" of a 
+            literary composition independent of any specific textual form.
+   
+   RATIONALE: In Hebrew manuscript studies, Works can span centuries of 
+              copying and adaptation. The Torah, Maimonides' Mishneh Torah,
+              or the Zohar are Works that exist in hundreds of manuscript
+              witnesses.
+   
+   RELATIONSHIPS:
+   - lrmoo:R3_is_realised_in → lrmoo:F2_Expression
+   - hm:is_translation_of → lrmoo:F1_Work
+   - hm:has_commentary_on → lrmoo:F1_Work
+   - hm:is_variant_of → lrmoo:F1_Work
+
+2. lrmoo:F2_Expression
+   PURPOSE: Represents a specific intellectual realization of a Work - a 
+            particular textual version with specific wording, language,
+            and form.
+   
+   RATIONALE: Hebrew texts often exist in multiple Expressions: the Hebrew
+              original vs. Judeo-Arabic translation, abbreviated vs. full
+              versions, with or without vowel pointing, etc.
+   
+   RELATIONSHIPS:
+   - lrmoo:R4i_is_embodied_in → lrmoo:F3_Manifestation
+   - cidoc-crm:P72_has_language → cidoc-crm:E56_Language
+   - hm:has_vocalization → cidoc-crm:E55_Type
+   - hm:belongs_to_tradition → hm:TextTradition
+
+3. lrmoo:F3_Manifestation
+   PURPOSE: Represents the physical embodiment of an Expression in a 
+            general sense - the template from which copies are made.
+   
+   RATIONALE: For printed books, this is straightforward (an edition).
+              For manuscripts, it can represent manuscript families or
+              the hypothetical exemplar from which copies derive.
+
+4. lrmoo:F4_Manifestation_Singleton
+   PURPOSE: Represents a unique physical object - the individual manuscript.
+            This is the central entity for Hebrew manuscript description.
+   
+   RATIONALE: Each Hebrew manuscript is a unique cultural artifact with
+              its own history, physical characteristics, and provenance.
+              This class serves as the primary anchor for descriptive
+              metadata.
+   
+   RELATIONSHIPS:
+   - hm:has_colophon → hm:Colophon
+   - hm:has_binding → hm:Binding
+   - hm:has_decoration → hm:Decoration
+   - hm:has_marginalia → hm:Marginalia
+   - hm:has_script_type → hm:TypeScriptType
+   - hm:has_script_mode → hm:ModeScriptType
+   - hm:has_material → cidoc-crm:E57_Material
+   - hm:copied_from → lrmoo:F4_Manifestation_Singleton
+   - cidoc-crm:P1_is_identified_by → cidoc-crm:E42_Identifier
+
+5. lrmoo:F27_Work_Creation
+   PURPOSE: Event of creating a Work (intellectual composition).
+   
+   RATIONALE: Records when and by whom a text was originally composed,
+              distinct from when manuscripts were copied.
+
+6. lrmoo:F28_Expression_Creation
+   PURPOSE: Event of creating an Expression (specific textual version).
+   
+   RATIONALE: Records translation events, revision events, or the 
+              creation of new textual versions.
+
+7. lrmoo:F30_Manifestation_Creation
+   PURPOSE: Event of creating a Manifestation template.
+
+8. lrmoo:F32_Item_Production_Event
+   PURPOSE: The physical production of a manuscript (copying event).
+   
+   RATIONALE: Central event type for manuscripts. Links the scribe,
+              date, place, and circumstances of copying.
+
+9. lrmoo:F5_Item
+   PURPOSE: A specific physical copy as an exemplar.
+
+------------------------------------------------------------------------------
+III.B. CIDOC-CRM Classes (Cultural Heritage Conceptual Model)
+------------------------------------------------------------------------------
+
+These classes provide cultural heritage modeling foundations:
+
+10. cidoc-crm:E7_Activity
+    PURPOSE: Base class for events and activities.
+    
+    RATIONALE: Manuscript history is understood through events: copying,
+               acquisition, rebinding, damage, conservation, digitization.
+
+11. cidoc-crm:E10_Transfer_of_Custody
+    PURPOSE: Events transferring physical custody of a manuscript.
+    
+    RELATIONSHIPS:
+    - cidoc-crm:P28_custody_surrendered_by → cidoc-crm:E39_Actor
+    - cidoc-crm:P29_custody_received_by → cidoc-crm:E39_Actor
+
+12. cidoc-crm:E12_Production
+    PURPOSE: Physical production activities.
+
+13. cidoc-crm:E65_Creation
+    PURPOSE: Creation of conceptual objects.
+
+14. cidoc-crm:E8_Acquisition
+    PURPOSE: Events where ownership transfers.
+    
+    RELATIONSHIPS:
+    - cidoc-crm:P23_transferred_title_to → cidoc-crm:E39_Actor
+    - cidoc-crm:P24_transferred_title_from → cidoc-crm:E39_Actor
+
+15. cidoc-crm:E18_Physical_Thing
+    PURPOSE: Physical objects of any kind.
+
+16. cidoc-crm:E21_Person
+    PURPOSE: Individual human beings.
+    
+    RATIONALE: Authors, scribes, owners, scholars are all modeled as 
+               Persons with specific roles.
+
+17. cidoc-crm:E22_Human-Made_Object
+    PURPOSE: Physical objects created by humans.
+    
+    RATIONALE: Manuscripts, bindings, and decorations are all human-made
+               objects with production histories.
+
+18. cidoc-crm:E31_Document
+    PURPOSE: Information objects that document something.
+
+19. cidoc-crm:E33_Linguistic_Object
+    PURPOSE: Objects that are linguistic expressions (texts).
+
+20. cidoc-crm:E35_Title
+    PURPOSE: Titles as linguistic objects.
+
+21. cidoc-crm:E39_Actor
+    PURPOSE: Base class for persons and groups.
+
+22. cidoc-crm:E42_Identifier
+    PURPOSE: Identifiers (shelfmarks, catalog numbers).
+    
+    RATIONALE: Manuscripts are identified by institutional shelfmarks
+               (e.g., "Vatican ebr. 44", "Parma 3122").
+
+23. cidoc-crm:E52_Time-Span
+    PURPOSE: Temporal intervals.
+    
+    RATIONALE: Manuscripts are dated to ranges, sometimes spanning decades
+               or centuries when dating is uncertain.
+
+24. cidoc-crm:E53_Place
+    PURPOSE: Geographic locations.
+    
+    RATIONALE: Place of production, current location, provenance locations.
+
+25. cidoc-crm:E55_Type
+    PURPOSE: Classification categories.
+    
+    RATIONALE: Controlled vocabularies for script types, materials, 
+               subjects, and other classifications.
+
+26. cidoc-crm:E56_Language
+    PURPOSE: Languages as types.
+
+27. cidoc-crm:E57_Material
+    PURPOSE: Materials (parchment, paper, papyrus).
+
+28. cidoc-crm:E73_Information_Object
+    PURPOSE: Abstract information content.
+
+29. cidoc-crm:E74_Group
+    PURPOSE: Groups of people (institutions, families).
+
+30. cidoc-crm:E78_Curated_Holding
+    PURPOSE: Collections maintained by institutions.
+    
+    RATIONALE: Used for multi-volume sets and related manuscript groups.
+
+31. cidoc-crm:E28_Conceptual_Object
+    PURPOSE: Abstract conceptual objects.
+    
+    RATIONALE: Base class for TextTradition, ManuscriptView, and other
+               abstract scholarly constructs.
+
+------------------------------------------------------------------------------
+III.C. Core Hebrew Manuscript Classes
+------------------------------------------------------------------------------
+
+32. hm:Bibliographic_Unit (subClassOf lrmoo:F4_Manifestation_Singleton)
+    PURPOSE: A manuscript or book as a cataloging unit - the item as 
+             represented in library catalogs.
+    
+    RATIONALE: Bibliographic Units correspond to shelfmarks. A single BU
+               may contain multiple Codicological Units bound together.
+    
+    RELATIONSHIPS:
+    - Contains one or more hm:Codicological_Unit
+    - Linked to cidoc-crm:E42_Identifier for shelfmark
+
+33. hm:Codicological_Unit (subClassOf lrmoo:F4_Manifestation_Singleton)
+    PURPOSE: A section produced as a physical unit - quires that were 
+             written together and share material characteristics.
+    
+    RATIONALE: Essential for describing composite manuscripts where 
+               different sections have different origins. A Codicological
+               Unit shares material, ruling, and often scribal hand.
+    
+    DATATYPE PROPERTIES:
+    - hm:material_arrangement (quire structure)
+    - hm:has_lines_per_page
+    - hm:has_columns
+    - hm:has_quire_structure
+    - hm:has_ruling_description
+    - hm:has_catchwords (boolean)
+    
+    RELATIONSHIPS:
+    - hm:has_unit_status → hm:UnitStatusType
+    - hm:has_sub_unit → hm:Codicological_Unit (v1.4 - transitive)
+
+34. hm:Paleographical_Unit (subClassOf lrmoo:F4_Manifestation_Singleton)
+    PURPOSE: A section with consistent script characteristics - the work
+             of a single hand.
+    
+    RATIONALE: Paleographical Units identify scribal hands. A single 
+               Codicological Unit may contain multiple PUs if different
+               scribes contributed, or a PU may span multiple CUs if one
+               scribe worked across sections.
+
+35. hm:Colophon (subClassOf cidoc-crm:E33_Linguistic_Object)
+    PURPOSE: The scribe's statement at the end of a text containing 
+             information about the copying.
+    
+    RATIONALE: Colophons are primary sources for dating, locating, and
+               identifying scribes. They are treated as distinct entities
+               because their content must be analyzed separately.
+    
+    DATATYPE PROPERTIES:
+    - hm:colophon_text (the actual text)
+    
+    RELATIONSHIPS:
+    - hm:mentions_date → cidoc-crm:E52_Time-Span
+    - hm:mentions_place → cidoc-crm:E53_Place
+    - hm:mentions_scribe → cidoc-crm:E21_Person
+
+------------------------------------------------------------------------------
+III.D. Physical Description Classes
+------------------------------------------------------------------------------
+
+36. hm:HebrewScriptType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Base class for Hebrew script classifications.
+
+37. hm:TypeScriptType (subClassOf hm:HebrewScriptType)
+    PURPOSE: Regional script types (Ashkenazi, Sephardic, Byzantine, etc.).
+    
+    RATIONALE: Hebrew scripts are classified by geographic origin into
+               distinct "types" with characteristic letter forms.
+
+38. hm:ModeScriptType (subClassOf hm:HebrewScriptType)
+    PURPOSE: Script modes (Square, Semicursive, Cursive).
+    
+    RATIONALE: Within each regional type, scripts vary from formal Square
+               (used for biblical texts) to informal Cursive (used for
+               notes and marginal additions).
+
+39. hm:Binding (subClassOf cidoc-crm:E22_Human-Made_Object)
+    PURPOSE: Physical binding of a manuscript.
+    
+    RATIONALE: Bindings are objects in their own right with their own
+               dates, materials, and production history. Many manuscripts
+               have been rebound multiple times.
+
+40. hm:BindingType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Classification of binding (Original, Rebinding, Conservation).
+
+41. hm:Decoration (subClassOf cidoc-crm:E22_Human-Made_Object)
+    PURPOSE: Decorative elements in a manuscript.
+    
+    RATIONALE: Hebrew manuscripts feature distinctive decorative traditions
+               including micrography, carpet pages, and illuminated initials.
+
+42. hm:DecorationType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Classification of decoration types.
+
+43. hm:Marginalia (subClassOf cidoc-crm:E33_Linguistic_Object)
+    PURPOSE: Marginal annotations in a manuscript.
+    
+    RATIONALE: Marginalia are crucial evidence for manuscript use and 
+               scholarly reception. They may be contemporary or centuries
+               later than the main text.
+
+44. hm:Watermark (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Paper watermarks for dating and localization.
+
+45. hm:ConditionType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Physical condition classifications.
+
+46. hm:VocalizationType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Types of vowel pointing (Tiberian, Babylonian, Palestinian).
+    
+    RATIONALE: Different vocalization systems indicate different textual
+               traditions and geographic origins.
+
+------------------------------------------------------------------------------
+III.E. Textual Structure Classes
+------------------------------------------------------------------------------
+
+47. hm:TextLocation
+    PURPOSE: Specific location within a manuscript.
+    
+    RATIONALE: Many descriptions require precise location reference:
+               scribal interventions, variant readings, damage, etc.
+    
+    DATATYPE PROPERTIES:
+    - hm:folio_number (e.g., "15r", "15v")
+    - hm:line_number
+    - hm:column_number
+    - hm:word_position
+    - hm:character_position
+    - hm:coordinates_iiif (for image regions)
+
+48. hm:FolioLocation (subClassOf hm:TextLocation)
+    PURPOSE: Location at folio/page level.
+
+49. hm:LineLocation (subClassOf hm:TextLocation)
+    PURPOSE: Location at line level.
+
+50. hm:WordLocation (subClassOf hm:TextLocation)
+    PURPOSE: Location at word level.
+
+51. hm:CharacterLocation (subClassOf hm:TextLocation)
+    PURPOSE: Location at character level for paleographic analysis.
+
+52. hm:TextSpan (subClassOf hm:TextLocation)
+    PURPOSE: A range from one location to another.
+    
+    RELATIONSHIPS:
+    - hm:span_start → hm:TextLocation
+    - hm:span_end → hm:TextLocation
+
+53. hm:IIIFRegion (subClassOf cidoc-crm:E73_Information_Object)
+    PURPOSE: Reference to IIIF image region.
+    
+    RATIONALE: Modern digital manuscripts are served via IIIF, allowing
+               precise image region references.
+
+54. hm:CanonicalReference
+    PURPOSE: Reference to canonical Jewish text structure.
+    
+    RATIONALE: Jewish literature uses well-defined reference systems.
+               The ontology supports standardized references to canonical
+               texts for describing manuscript content coverage.
+    
+    DATATYPE PROPERTIES:
+    - hm:book_name
+    - hm:chapter_number
+    - hm:verse_number
+    - hm:tractate_name
+    - hm:mishnah_number
+    - hm:talmud_folio
+    - hm:halacha_section
+
+55. hm:BiblicalReference (subClassOf hm:CanonicalReference)
+    PURPOSE: Book/Chapter/Verse references (e.g., Genesis 1:1).
+
+56. hm:MishnaicReference (subClassOf hm:CanonicalReference)
+    PURPOSE: Tractate/Chapter/Mishnah references.
+
+57. hm:TalmudicReference (subClassOf hm:CanonicalReference)
+    PURPOSE: Tractate/Folio/Side references (e.g., Berakhot 2a).
+
+58. hm:HalachicReference (subClassOf hm:CanonicalReference)
+    PURPOSE: References for Mishneh Torah or Shulchan Aruch.
+
+59. hm:CanonicalHierarchyType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Type of canonical text hierarchy (Bible, Mishnah, etc.).
+
+------------------------------------------------------------------------------
+III.F. Scholarly Apparatus Classes
+------------------------------------------------------------------------------
+
+60. hm:CertaintyLevel (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Degree of certainty for attributions.
+    
+    RATIONALE: Manuscript identifications range from certain (based on
+               colophon evidence) to highly speculative. Recording 
+               certainty prevents false confidence in uncertain data.
+
+61. hm:AttributionSource (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Source of an attribution (expert, AI, catalog, colophon).
+    
+    RATIONALE: Different attribution sources have different reliability.
+               AI attributions must be distinguished from expert analysis.
+
+62. hm:MultiVolumeSet (subClassOf cidoc-crm:E78_Curated_Holding)
+    PURPOSE: A set of manuscript volumes that belong together.
+    
+    RATIONALE: Many Hebrew manuscripts are multi-volume sets (e.g., 
+               complete Talmuds, Bible sets). These sets must be 
+               modeled to show volume relationships.
+
+63. hm:AnthologyStructure (subClassOf lrmoo:F4_Manifestation_Singleton)
+    PURPOSE: Manuscript with intentional anthology arrangement.
+    
+    RATIONALE: Many manuscripts are deliberate anthologies with planned
+               content organization, not random collections.
+
+64. hm:AnthologyPosition
+    PURPOSE: Position of a text within an anthology.
+    
+    DATATYPE PROPERTIES:
+    - hm:anthology_order (sequence number)
+
+65. hm:ScribalIntervention (subClassOf cidoc-crm:E7_Activity)
+    PURPOSE: Corrections, additions, or modifications by scribes.
+    
+    RATIONALE: Scribal interventions are key evidence for textual 
+               transmission and manuscript use history.
+    
+    RELATIONSHIPS:
+    - hm:intervention_location → hm:TextLocation
+    - hm:intervention_by → cidoc-crm:E21_Person
+
+66. hm:TextCorrection (subClassOf hm:ScribalIntervention)
+    PURPOSE: Corrections to text.
+
+67. hm:MarginalAddition (subClassOf hm:ScribalIntervention)
+    PURPOSE: Additions in margins.
+
+68. hm:HandChange (subClassOf hm:ScribalIntervention)
+    PURPOSE: Point where one scribe's work ends and another begins.
+
+69. hm:LostManuscript (subClassOf lrmoo:F4_Manifestation_Singleton)
+    PURPOSE: A manuscript that no longer exists but is known through
+             copies or references.
+    
+    RATIONALE: Many important manuscripts are known only through later
+               copies. The ontology must represent these for textual
+               genealogy purposes.
+
+70. hm:HypotheticalExemplar (subClassOf hm:LostManuscript)
+    PURPOSE: A reconstructed source manuscript based on textual analysis.
+
+71. hm:UnitStatusType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Type indicating if unit is core or foreign to manuscript.
+    
+    RATIONALE: Manuscripts often contain later additions that are not
+               part of the original conception (protective leaves, 
+               unrelated fragments bound together).
+
+72. hm:ParticipationRole (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Roles in manuscript production (scribe, illuminator, owner).
+
+73. hm:SubjectType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Subject classifications (Bible, Talmud, Kabbalah, etc.).
+
+74. hm:Reference_Event (subClassOf cidoc-crm:E7_Activity)
+    PURPOSE: Events of referencing manuscripts in catalogs or studies.
+
+------------------------------------------------------------------------------
+III.G. v1.4 Additions: Philological Framework Classes
+------------------------------------------------------------------------------
+
+75. hm:TextTradition (subClassOf cidoc-crm:E28_Conceptual_Object)
+    PURPOSE: A transmission stream of a text, independent of 'original
+             Work' concept.
+    
+    RATIONALE: The philological approach views texts as fluid streams
+               of transmission rather than copies of a fixed original.
+               This class supports that paradigm alongside traditional
+               Work-based cataloging.
+    
+    DATATYPE PROPERTIES:
+    - hm:tradition_name
+    - hm:tradition_description
+    
+    RELATIONSHIPS:
+    - hm:tradition_includes → lrmoo:F2_Expression
+
+76. hm:TransmissionWitness (subClassOf cidoc-crm:E73_Information_Object)
+    PURPOSE: A manuscript viewed as witness to a textual tradition rather
+             than just a "copy."
+    
+    RATIONALE: In new philology, each manuscript is a unique cultural 
+               event, not merely a derivative of an original.
+
+77. hm:TextualVariant (subClassOf cidoc-crm:E73_Information_Object)
+    PURPOSE: A specific variant reading within a textual tradition.
+    
+    DATATYPE PROPERTIES:
+    - hm:variant_text
+    - hm:standard_text
+    - hm:variant_significance
+    
+    RELATIONSHIPS:
+    - hm:variant_at_location → hm:TextLocation
+
+78. hm:StemmaPosition
+    PURPOSE: Position of a manuscript in a textual stemma.
+    
+    RELATIONSHIPS:
+    - hm:stemma_parent → hm:StemmaPosition
+    - hm:stemma_child → hm:StemmaPosition
+
+79. hm:StemmaHypothesis (subClassOf cidoc-crm:E28_Conceptual_Object)
+    PURPOSE: A scholarly hypothesis about textual relationships.
+
+------------------------------------------------------------------------------
+III.H. v1.4 Additions: Dual Paradigm Classes
+------------------------------------------------------------------------------
+
+80. hm:ManuscriptView (subClassOf cidoc-crm:E28_Conceptual_Object)
+    PURPOSE: Abstract class for different paradigmatic views of a manuscript.
+    
+    RATIONALE: Resolves the philosophical tension between bibliographic
+               (practical cataloging) and philological (research) paradigms.
+
+81. hm:CatalogingView (subClassOf hm:ManuscriptView)
+    PURPOSE: Bibliographic-practical view following LRM Work-Expression-
+             Manifestation model.
+    
+    RATIONALE: Suitable for Wikidata integration, library cataloging,
+               and practical information retrieval. Assumes texts can be
+               identified with Works.
+    
+    RELATIONSHIPS:
+    - hm:cataloging_work → lrmoo:F1_Work
+    - hm:cataloging_expression → lrmoo:F2_Expression
+
+82. hm:PhilologicalView (subClassOf hm:ManuscriptView)
+    PURPOSE: New philological view treating each manuscript as a unique
+             cultural event.
+    
+    RATIONALE: Emphasizes textual fluidity, rejects unified 'Work' concept.
+               Each manuscript is primary evidence, not a degraded copy.
+    
+    RELATIONSHIPS:
+    - hm:philological_tradition → hm:TextTradition
+    - hm:philological_witness → hm:TransmissionWitness
+
+83. hm:ParadigmBridge (subClassOf cidoc-crm:E28_Conceptual_Object)
+    PURPOSE: Entity that explicitly links Work (bibliographic) to 
+             TextTradition (philological).
+    
+    RATIONALE: When both views apply to the same content, this class
+               documents the scholarly justification for the relationship.
+    
+    DATATYPE PROPERTIES:
+    - hm:paradigm_justification
+    
+    RELATIONSHIPS:
+    - hm:has_linked_work → lrmoo:F1_Work
+    - hm:has_linked_tradition → hm:TextTradition
+
+84. hm:ViewType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Type classification for manuscript views.
+
+------------------------------------------------------------------------------
+III.I. v1.4 Additions: Nested Codicological Structure Classes
+------------------------------------------------------------------------------
+
+85. hm:CodicologicalHierarchy (subClassOf cidoc-crm:E28_Conceptual_Object)
+    PURPOSE: Describes the overall structure of nested codicological units
+             in a manuscript.
+    
+    RATIONALE: Complex manuscripts (MTM - Multiple Text Manuscripts,
+               Sammelbands) have hierarchical structures that the simple
+               BU/CU/PU model cannot represent.
+    
+    DATATYPE PROPERTIES:
+    - hm:hierarchy_description
+    - hm:max_nesting_depth
+    
+    RELATIONSHIPS:
+    - hm:hierarchy_root → hm:Codicological_Unit
+    - hm:hierarchy_type → hm:HierarchyType
+
+86. hm:CompositeCodicologicalUnit (subClassOf hm:Codicological_Unit)
+    PURPOSE: A codicological unit that contains sub-units.
+    
+    RATIONALE: Enables recursive composition - a composite unit can 
+               contain atomic units or other composite units.
+
+87. hm:AtomicCodicologicalUnit (subClassOf hm:Codicological_Unit)
+    PURPOSE: A leaf-level codicological unit with no sub-divisions.
+
+88. hm:HierarchyType (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Classification of codicological hierarchy complexity.
+
+------------------------------------------------------------------------------
+III.J. v1.4 Additions: Epistemological Framework Classes
+------------------------------------------------------------------------------
+
+89. hm:EpistemologicalStatus (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Classification of data according to its epistemological nature.
+    
+    RATIONALE: Prof. Moshe Lavi's feedback emphasized the need to 
+               distinguish unambiguous facts from scholarly interpretations.
+               This class provides that classification.
+
+90. hm:EvidenceChain (subClassOf cidoc-crm:E28_Conceptual_Object)
+    PURPOSE: A chain of evidence steps supporting an assertion.
+    
+    RATIONALE: Documents the reasoning path from raw data to conclusion,
+               enabling scrutiny of scholarly methodology.
+    
+    RELATIONSHIPS:
+    - hm:evidence_step → hm:EvidenceStep
+    - hm:supports_assertion → owl:Thing
+    - hm:contradicts_assertion → owl:Thing
+
+91. hm:EvidenceStep (subClassOf cidoc-crm:E7_Activity)
+    PURPOSE: A single step in an evidence chain.
+    
+    DATATYPE PROPERTIES:
+    - hm:interpretation_date
+    - hm:evidence_strength
+    - hm:reasoning_text
+    - hm:methodology_reference
+    - hm:consensus_level
+    
+    RELATIONSHIPS:
+    - hm:evidence_source → cidoc-crm:E73_Information_Object
+    - hm:evidence_agent → cidoc-crm:E39_Actor
+    - hm:derives_from → hm:EvidenceStep
+    - hm:interpretation_method → hm:InterpretationMethod
+    - hm:competing_interpretation → hm:EvidenceStep
+
+92. hm:DirectObservationStep (subClassOf hm:EvidenceStep)
+    PURPOSE: Evidence step based on direct observation of manuscript.
+    
+    RATIONALE: Measurements, colophon transcription, physical features
+               that can be directly observed and verified.
+
+93. hm:InterpretationStep (subClassOf hm:EvidenceStep)
+    PURPOSE: Evidence step involving scholarly interpretation.
+    
+    RATIONALE: Dating, attribution, identification - conclusions that
+               require expert judgment and may be contested.
+
+94. hm:ComputationalStep (subClassOf hm:EvidenceStep)
+    PURPOSE: Evidence step derived through computational analysis.
+    
+    RATIONALE: AI-based identification, statistical analysis, automated
+               methods that produce data requiring distinct validation.
+
+95. hm:DataCategory (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Classification of manuscript data by epistemological origin.
+
+96. hm:InterpretationMethod (subClassOf cidoc-crm:E55_Type)
+    PURPOSE: Scholarly method used for interpretation.
+
+================================================================================
+IV. OBJECT PROPERTIES (120 total)
+================================================================================
+
+[SECTION CONTINUES IN DETAIL FOR ALL 120 OBJECT PROPERTIES]
+
+------------------------------------------------------------------------------
+IV.A. LRMoo Properties
+------------------------------------------------------------------------------
+
+1. lrmoo:R3_is_realised_in
+   DOMAIN: lrmoo:F1_Work
+   RANGE:  lrmoo:F2_Expression
+   PURPOSE: Links a Work to its Expressions.
+   USAGE: Torah (Work) → Torah with Tiberian pointing (Expression)
+
+2. lrmoo:R4_embodies
+   DOMAIN: lrmoo:F4_Manifestation_Singleton
+   RANGE:  lrmoo:F2_Expression
+   PURPOSE: Links a manuscript to the Expression it contains.
+   USAGE: MS Vatican ebr. 44 embodies Mishneh Torah vol. 1 Expression
+
+3. lrmoo:R4i_is_embodied_in
+   INVERSE OF: lrmoo:R4_embodies
+   PURPOSE: Links Expression to its physical embodiment.
+
+4. lrmoo:R5_has_component
+   DOMAIN: lrmoo:F4_Manifestation_Singleton
+   RANGE:  lrmoo:F4_Manifestation_Singleton
+   TYPE: owl:TransitiveProperty
+   PURPOSE: Links composite manuscripts to components.
+
+5-12. [Additional LRMoo properties: R10_has_member, R10i_is_member_of,
+       R16_created, R17_created, R24_created, R27_materialized,
+       R69_has_physical_form, R7_exemplifies, R7i_is_exemplified_by]
+
+------------------------------------------------------------------------------
+IV.B. CIDOC-CRM Properties
+------------------------------------------------------------------------------
+
+13-32. [CIDOC-CRM properties for temporal, spatial, and actor relationships]
+       Including: P102_has_title, P129_is_about, P138i_has_representation,
+       P14_carried_out_by, P16_used_specific_object, P1_is_identified_by,
+       P23_transferred_title_to, P24_transferred_title_from,
+       P28_custody_surrendered_by, P29_custody_received_by, P2_has_type,
+       P46_is_composed_of, P4_has_time-span, P70_documents,
+       P70i_is_documented_in, P72_has_language,
+       P74_has_current_or_former_residence, P7_took_place_at,
+       P89_falls_within, P94_has_created
+
+------------------------------------------------------------------------------
+IV.C. Core Hebrew Manuscript Object Properties
+------------------------------------------------------------------------------
+
+33. hm:P44_has_condition
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  cidoc-crm:E55_Type
+    PURPOSE: Records physical condition of manuscript.
+
+34. hm:has_script_mode
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:ModeScriptType
+    PURPOSE: Records script mode (Square, Semicursive, Cursive).
+
+35. hm:has_colophon
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:Colophon
+    PURPOSE: Links manuscript to its colophon(s).
+
+36. hm:has_date_of_creation
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  cidoc-crm:E52_Time-Span
+    PURPOSE: Dating of manuscript production.
+
+37. hm:has_material
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  cidoc-crm:E57_Material
+    PURPOSE: Writing support material.
+
+38. hm:has_script_type
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:TypeScriptType
+    PURPOSE: Regional script classification.
+
+39-45. [Colophon-related properties: mentions_date, mentions_person,
+        mentions_place, mentions_scribe, colophon links]
+
+46. hm:has_binding
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:Binding
+    PURPOSE: Links to binding description.
+
+47. hm:has_decoration
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:Decoration
+    PURPOSE: Links to decorative elements.
+
+48. hm:has_marginalia
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:Marginalia
+    PURPOSE: Links to marginal annotations.
+
+49. hm:is_translation_of
+    DOMAIN: lrmoo:F1_Work
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Translation relationship between Works.
+
+50. hm:has_commentary_on
+    DOMAIN: lrmoo:F1_Work
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Commentary relationship between Works.
+
+51. hm:has_vocalization
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  cidoc-crm:E55_Type
+    PURPOSE: Type of vowel pointing.
+
+52. hm:has_cantillation
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  cidoc-crm:E55_Type
+    PURPOSE: Cantillation marks presence/type.
+
+53. hm:copied_from
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  lrmoo:F4_Manifestation_Singleton
+    PURPOSE: Links manuscript to its exemplar.
+
+------------------------------------------------------------------------------
+IV.D. Certainty and Attribution Properties (v1.2)
+------------------------------------------------------------------------------
+
+54. hm:has_certainty
+    DOMAIN: owl:Thing
+    RANGE:  hm:CertaintyLevel
+    PURPOSE: Indicates certainty for any attribution.
+    USAGE: Apply to identifications, datings, attributions.
+
+55. hm:attribution_source
+    DOMAIN: owl:Thing
+    RANGE:  hm:AttributionSource
+    PURPOSE: Source type of attribution.
+
+56. hm:attributed_by
+    DOMAIN: owl:Thing
+    RANGE:  cidoc-crm:E39_Actor
+    PURPOSE: Person or system making attribution.
+
+------------------------------------------------------------------------------
+IV.E. Variant and Partial Identification Properties (v1.2)
+------------------------------------------------------------------------------
+
+57. hm:is_variant_of
+    DOMAIN: lrmoo:F1_Work
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Links variant Works.
+
+58. hm:possibly_realises
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Uncertain Work identification.
+
+59. hm:is_abridgment_of (subPropertyOf hm:is_variant_of)
+    PURPOSE: Shortened version relationship.
+
+60. hm:is_adaptation_of (subPropertyOf hm:is_variant_of)
+    PURPOSE: Adaptation relationship.
+
+61. hm:parallels (owl:SymmetricProperty)
+    DOMAIN: lrmoo:F1_Work
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Parallel content with unclear relationship.
+
+------------------------------------------------------------------------------
+IV.F. Textual Overlap Properties (v1.2)
+------------------------------------------------------------------------------
+
+62. hm:has_textual_overlap_with (owl:SymmetricProperty)
+    DOMAIN: hm:Paleographical_Unit
+    RANGE:  hm:Paleographical_Unit
+    PURPOSE: Two scribal units copying overlapping text portions.
+    USAGE: Essential for Huntington 115 type manuscripts.
+
+63. hm:duplicates_part_of
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  lrmoo:F2_Expression
+    PURPOSE: Expression duplicating portion of another.
+
+------------------------------------------------------------------------------
+IV.G. Multi-Volume and Anthology Properties (v1.2)
+------------------------------------------------------------------------------
+
+64. hm:is_volume_of
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:MultiVolumeSet
+    PURPOSE: Links volume to its set.
+
+65. hm:has_anthology_position
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  hm:AnthologyPosition
+    PURPOSE: Position within anthology.
+
+------------------------------------------------------------------------------
+IV.H. Scribal Intervention Properties (v1.2)
+------------------------------------------------------------------------------
+
+66. hm:has_scribal_intervention
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:ScribalIntervention
+    PURPOSE: Links to scribal modifications.
+
+67. hm:intervention_location
+    DOMAIN: hm:ScribalIntervention
+    RANGE:  hm:TextLocation
+    PURPOSE: Where intervention occurs.
+
+68. hm:intervention_by
+    DOMAIN: hm:ScribalIntervention
+    RANGE:  cidoc-crm:E21_Person
+    PURPOSE: Who made intervention.
+
+------------------------------------------------------------------------------
+IV.I. Lost Manuscript Properties (v1.2)
+------------------------------------------------------------------------------
+
+69. hm:is_copy_of_lost
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:LostManuscript
+    PURPOSE: Links to lost exemplar.
+
+70. hm:known_through
+    DOMAIN: hm:LostManuscript
+    RANGE:  lrmoo:F4_Manifestation_Singleton
+    PURPOSE: Extant manuscript through which lost MS is known.
+
+------------------------------------------------------------------------------
+IV.J. Text Tradition Properties (v1.3)
+------------------------------------------------------------------------------
+
+71. hm:belongs_to_tradition
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  hm:TextTradition
+    PURPOSE: Links Expression to textual tradition stream.
+
+72. hm:witnesses
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:TextTradition
+    PURPOSE: Manuscript as witness to tradition.
+
+73-80. [Additional tradition properties: has_variant_reading,
+        variant_at_location, stemma_parent, stemma_child,
+        has_stemma_position, tradition_includes]
+
+------------------------------------------------------------------------------
+IV.K. Full Granularity Location Properties (v1.3)
+------------------------------------------------------------------------------
+
+81. hm:has_location
+    RANGE:  hm:TextLocation
+    PURPOSE: Generic location linking.
+
+82. hm:span_start
+    DOMAIN: hm:TextSpan
+    RANGE:  hm:TextLocation
+    PURPOSE: Start of text span.
+
+83. hm:span_end
+    DOMAIN: hm:TextSpan
+    RANGE:  hm:TextLocation
+    PURPOSE: End of text span.
+
+84. hm:iiif_region
+    DOMAIN: hm:TextLocation
+    RANGE:  cidoc-crm:E73_Information_Object
+    PURPOSE: Links to IIIF image region.
+
+------------------------------------------------------------------------------
+IV.L. Canonical Hierarchy Properties (v1.3)
+------------------------------------------------------------------------------
+
+85. hm:covers_canonical_range
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  hm:CanonicalReference
+    PURPOSE: Links Expression to canonical coverage.
+
+86. hm:canonical_start
+    PURPOSE: Start of canonical range.
+
+87. hm:canonical_end
+    PURPOSE: End of canonical range.
+
+88. hm:is_commentary_on_canonical
+    DOMAIN: lrmoo:F2_Expression
+    RANGE:  hm:CanonicalReference
+    PURPOSE: Commentary on canonical sections.
+
+89. hm:canonical_hierarchy
+    DOMAIN: hm:CanonicalReference
+    RANGE:  hm:CanonicalHierarchyType
+    PURPOSE: Which hierarchy system.
+
+------------------------------------------------------------------------------
+IV.M. Unit Status Properties (v1.3)
+------------------------------------------------------------------------------
+
+90. hm:has_unit_status
+    DOMAIN: hm:Codicological_Unit
+    RANGE:  hm:UnitStatusType
+    PURPOSE: Core vs. foreign status.
+
+------------------------------------------------------------------------------
+IV.N. Dual Paradigm Properties (v1.4)
+------------------------------------------------------------------------------
+
+91. hm:has_cataloging_perspective
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:CatalogingView
+    PURPOSE: Links to bibliographic view.
+
+92. hm:has_philological_perspective
+    DOMAIN: lrmoo:F4_Manifestation_Singleton
+    RANGE:  hm:PhilologicalView
+    PURPOSE: Links to philological view.
+
+93. hm:paradigm_bridge
+    DOMAIN: hm:ParadigmBridge
+    RANGE:  owl:Thing
+    PURPOSE: Generic paradigm bridging.
+
+94. hm:has_linked_work
+    DOMAIN: hm:ParadigmBridge
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Connects bridge to Work.
+
+95. hm:has_linked_tradition
+    DOMAIN: hm:ParadigmBridge
+    RANGE:  hm:TextTradition
+    PURPOSE: Connects bridge to TextTradition.
+
+96. hm:view_type
+    DOMAIN: hm:ManuscriptView
+    RANGE:  hm:ViewType
+    PURPOSE: Classification of view type.
+
+97. hm:cataloging_work
+    DOMAIN: hm:CatalogingView
+    RANGE:  lrmoo:F1_Work
+    PURPOSE: Work used for cataloging.
+
+98. hm:cataloging_expression
+    DOMAIN: hm:CatalogingView
+    RANGE:  lrmoo:F2_Expression
+    PURPOSE: Expression used for cataloging.
+
+99. hm:philological_tradition
+    DOMAIN: hm:PhilologicalView
+    RANGE:  hm:TextTradition
+    PURPOSE: Tradition in philological view.
+
+100. hm:philological_witness
+     DOMAIN: hm:PhilologicalView
+     RANGE:  hm:TransmissionWitness
+     PURPOSE: Witness entity in philological view.
+
+101. hm:is_paradigm_compatible (owl:SymmetricProperty)
+     DOMAIN: hm:ManuscriptView
+     RANGE:  hm:ManuscriptView
+     PURPOSE: Indicates compatible views.
+
+------------------------------------------------------------------------------
+IV.O. Nested CU Properties (v1.4)
+------------------------------------------------------------------------------
+
+102. hm:has_sub_unit (owl:TransitiveProperty)
+     DOMAIN: hm:Codicological_Unit
+     RANGE:  hm:Codicological_Unit
+     PURPOSE: Recursive unit nesting.
+     USAGE: Enables arbitrary depth of codicological hierarchy.
+
+103. hm:is_sub_unit_of (inverse of has_sub_unit)
+     PURPOSE: Child-to-parent relationship.
+
+104. hm:has_parent_unit
+     PURPOSE: Direct parent (not transitive).
+
+105. hm:has_hierarchy
+     DOMAIN: lrmoo:F4_Manifestation_Singleton
+     RANGE:  hm:CodicologicalHierarchy
+     PURPOSE: Links to hierarchy structure.
+
+106. hm:hierarchy_root
+     DOMAIN: hm:CodicologicalHierarchy
+     RANGE:  hm:Codicological_Unit
+     PURPOSE: Top-level unit(s).
+
+107. hm:hierarchy_type
+     DOMAIN: hm:CodicologicalHierarchy
+     RANGE:  hm:HierarchyType
+     PURPOSE: Complexity classification.
+
+108. hm:adjacent_unit (owl:SymmetricProperty)
+     PURPOSE: Physically adjacent units.
+
+109. hm:precedes_unit
+     PURPOSE: Physical sequence ordering.
+
+110. hm:follows_unit (inverse of precedes_unit)
+     PURPOSE: Physical sequence ordering.
+
+------------------------------------------------------------------------------
+IV.P. Epistemological Framework Properties (v1.4)
+------------------------------------------------------------------------------
+
+111. hm:has_epistemological_status
+     DOMAIN: owl:Thing
+     RANGE:  hm:EpistemologicalStatus
+     PURPOSE: Classifies any data point's epistemological nature.
+
+112. hm:has_evidence_chain
+     DOMAIN: owl:Thing
+     RANGE:  hm:EvidenceChain
+     PURPOSE: Links assertion to evidence.
+
+113. hm:evidence_step
+     DOMAIN: hm:EvidenceChain
+     RANGE:  hm:EvidenceStep
+     PURPOSE: Individual step in chain.
+
+114. hm:evidence_source
+     DOMAIN: hm:EvidenceStep
+     RANGE:  cidoc-crm:E73_Information_Object
+     PURPOSE: Source document for step.
+
+115. hm:evidence_agent
+     DOMAIN: hm:EvidenceStep
+     RANGE:  cidoc-crm:E39_Actor
+     PURPOSE: Who provided evidence.
+
+116. hm:derives_from
+     DOMAIN: hm:EvidenceStep
+     RANGE:  hm:EvidenceStep
+     PURPOSE: Derivation chain.
+
+117. hm:supports_assertion
+     DOMAIN: hm:EvidenceChain
+     RANGE:  owl:Thing
+     PURPOSE: What evidence supports.
+
+118. hm:contradicts_assertion
+     DOMAIN: hm:EvidenceChain
+     RANGE:  owl:Thing
+     PURPOSE: What evidence contradicts.
+
+119. hm:data_category
+     DOMAIN: owl:Thing
+     RANGE:  hm:DataCategory
+     PURPOSE: Classification of data type.
+
+120. hm:interpretation_method
+     DOMAIN: hm:EvidenceStep
+     RANGE:  hm:InterpretationMethod
+     PURPOSE: Method used for interpretation.
+
+121. hm:competing_interpretation (owl:SymmetricProperty)
+     DOMAIN: hm:EvidenceStep
+     RANGE:  hm:EvidenceStep
+     PURPOSE: Alternative interpretations.
+
+================================================================================
+V. DATATYPE PROPERTIES (77 total)
+================================================================================
+
+[ABBREVIATED - Full list with domain, range, and purpose for each]
+
+Physical Properties:
+- hm:has_height_mm, hm:has_width_mm (dimensions)
+- hm:has_number_of_folios (extent)
+- hm:has_lines_per_page, hm:has_columns (layout)
+- hm:has_quire_structure, hm:has_ruling_description
+- hm:has_catchwords (boolean)
+
+Textual Properties:
+- hm:has_title, hm:has_incipit, hm:has_explicit
+- hm:opening_text, hm:has_folio_range
+- hm:colophon_text, hm:variation_note
+
+External Identifiers:
+- hm:sfardata_id, hm:viaf_id, hm:wikidata_id
+- hm:external_identifier_nli, hm:external_uri_nli
+- hm:wikidata_id, hm:external_wikidata_uri
+- hm:has_digital_representation_url
+
+Temporal Properties:
+- cidoc-crm:P82a_begin_of_the_begin
+- cidoc-crm:P82b_end_of_the_end
+- hm:earliest_possible_date, hm:latest_possible_date
+
+Attribution Properties:
+- hm:date_attribution_source, hm:place_attribution_source
+- hm:certainty_percentage, hm:certainty_note
+- hm:ownership_history
+
+Location Properties (v1.3):
+- hm:folio_number, hm:line_number, hm:column_number
+- hm:word_position, hm:character_position
+- hm:coordinates_iiif, hm:location_string
+
+Canonical Reference Properties (v1.3):
+- hm:book_name, hm:chapter_number, hm:verse_number
+- hm:tractate_name, hm:mishnah_number, hm:talmud_folio
+- hm:halacha_section
+
+Tradition Properties (v1.3):
+- hm:variant_text, hm:standard_text, hm:variant_significance
+- hm:tradition_name, hm:tradition_description
+
+Foreign Unit Properties (v1.3):
+- hm:is_foreign_addition (boolean)
+- hm:addition_period
+
+Dual Paradigm Properties (v1.4):
+- hm:paradigm_note, hm:is_primary_paradigm
+- hm:paradigm_justification
+
+Nested CU Properties (v1.4):
+- hm:nesting_level, hm:is_atomic_unit
+- hm:unit_sequence, hm:hierarchy_description
+- hm:max_nesting_depth
+
+Epistemological Properties (v1.4):
+- hm:is_factual (boolean)
+- hm:interpretation_date, hm:evidence_strength
+- hm:reasoning_text, hm:methodology_reference
+- hm:consensus_level, hm:supersedes_interpretation
+
+Administrative & Access Properties (v1.5):
+- hm:copyright_notice (copyright statement from MARC 597)
+- hm:related_material_note (related manuscripts/fragments from MARC 544)
+- hm:acquisition_source (donor/acquisition info from MARC 541)
+- hm:collection_name (named collection from MARC 966)
+- hm:restriction_type, hm:restriction_url (usage restrictions from MARC 939)
+- hm:rights_status, hm:rights_basis (rights determination from MARC 952)
+- hm:holding_institution, hm:holding_sublibrary (physical location from AVA)
+- hm:holding_collection, hm:holding_call_number, hm:holding_availability (AVA)
+- hm:digital_access_url, hm:digital_access_note, hm:digital_access_type (AVE)
+
+================================================================================
+V.B. v1.5 OBJECT PROPERTIES (6 new)
+================================================================================
+
+122. hm:has_physical_holding
+     DOMAIN: lrmoo:F4_Manifestation_Singleton
+     RANGE:  hm:PhysicalHolding
+     PURPOSE: Links manuscript to physical holding information at an institution.
+
+123. hm:has_digital_access
+     DOMAIN: lrmoo:F4_Manifestation_Singleton
+     RANGE:  hm:DigitalAccess
+     PURPOSE: Links manuscript to digital access point (online viewer, IIIF).
+
+124. hm:has_usage_restriction
+     DOMAIN: lrmoo:F4_Manifestation_Singleton
+     RANGE:  hm:UsageRestriction
+     PURPOSE: Links manuscript to usage restriction policy.
+
+125. hm:has_rights_determination
+     DOMAIN: lrmoo:F4_Manifestation_Singleton
+     RANGE:  hm:RightsDetermination
+     PURPOSE: Links manuscript to formal rights status determination.
+
+126. hm:has_related_material
+     DOMAIN: lrmoo:F4_Manifestation_Singleton
+     RANGE:  lrmoo:F4_Manifestation_Singleton
+     PURPOSE: Links manuscript to related materials (copies, fragments).
+
+127. hm:held_at
+     DOMAIN: hm:PhysicalHolding
+     RANGE:  cidoc-crm:E74_Group
+     PURPOSE: Institution where the physical holding is located.
+
+================================================================================
+III.H. v1.5 CLASSES (4 new)
+================================================================================
+
+95. hm:PhysicalHolding
+    SUPERCLASS: cidoc-crm:E78_Curated_Holding
+    PURPOSE: Represents a physical holding of a manuscript at a specific
+    institution, including location details and availability status.
+    Derived from MARC AVA fields.
+
+96. hm:DigitalAccess
+    SUPERCLASS: cidoc-crm:E73_Information_Object
+    PURPOSE: Represents a digital access point for a manuscript, including
+    online viewer links and IIIF endpoints. Derived from MARC AVE fields.
+
+97. hm:UsageRestriction
+    SUPERCLASS: cidoc-crm:E30_Right
+    PURPOSE: Describes usage restrictions and permissions for a manuscript,
+    including copying rights and reproduction policies. From MARC 939.
+
+98. hm:RightsDetermination
+    SUPERCLASS: cidoc-crm:E30_Right
+    PURPOSE: Records the rights status determination for a manuscript,
+    including domain classification and determination rationale. From MARC 952.
+
+================================================================================
+VI. CONTROLLED VOCABULARY INSTANCES (119 total)
+================================================================================
+
+Script Types (Regional):
+- hm:AshkenaziScript, hm:SepharadicScript, hm:ItalianScript
+- hm:ByzantineScript, hm:YemeniteScript, hm:OrientalScript
+- hm:PersianScript
+
+Script Modes:
+- hm:SquareScript, hm:SemicursiveScript, hm:CursiveScript
+
+Materials:
+- hm:Parchment, hm:Paper, hm:Papyrus
+
+Languages:
+- hm:Hebrew, hm:Aramaic, hm:Arabic, hm:JudeoArabic
+- hm:Ladino, hm:Yiddish, hm:JudeoPersian
+
+Condition Types:
+- hm:Excellent, hm:Good, hm:Fair, hm:Poor, hm:Fragmentary
+
+Decoration Types:
+- hm:FullPageIllumination, hm:InitialLetters
+- hm:MarginalDecoration, hm:CarpetPage, hm:Micrography
+
+Vocalization Types:
+- hm:TiberianVocalization, hm:BabylonianVocalization
+- hm:PalestinianVocalization, hm:NoVocalization
+
+Binding Types:
+- hm:OriginalBinding, hm:Rebinding
+- hm:ConservationBinding, hm:Unbound
+
+Participation Roles:
+- hm:Scribe_role, hm:Author_role, hm:Illuminator_role
+- hm:Commentator_role, hm:Translator_role, hm:Owner_role
+
+Text Types:
+- hm:MainText, hm:AdditionalText, hm:MarginalText
+
+Subject Types:
+- hm:Bible_Subject, hm:Talmud_Subject, hm:Midrash_Subject
+- hm:Halakha_Subject, hm:Kabbalah_Subject, hm:Philosophy_Subject
+- hm:Liturgy_Subject, hm:Poetry_Subject
+- hm:Medicine_Subject, hm:Science_Subject
+
+Certainty Levels (v1.2):
+- hm:Certain, hm:Probable, hm:Possible, hm:Uncertain
+
+Attribution Sources (v1.2):
+- hm:ExpertAttribution, hm:AIAttribution
+- hm:CatalogAttribution, hm:ColophonAttribution
+- hm:PaleographicAttribution
+
+Intervention Types (v1.2):
+- hm:Correction_type, hm:Erasure_type
+- hm:Interlinear_addition_type, hm:Marginal_gloss_type
+- hm:Later_hand_type
+
+Canonical Hierarchy Types (v1.3):
+- hm:Bible_hierarchy, hm:Mishnah_hierarchy
+- hm:Talmud_Bavli_hierarchy, hm:Talmud_Yerushalmi_hierarchy
+- hm:Mishneh_Torah_hierarchy, hm:Shulchan_Aruch_hierarchy
+- hm:Zohar_hierarchy, hm:Midrash_hierarchy
+
+Unit Status Types (v1.3):
+- hm:CoreUnit_status, hm:LaterAddition_status
+- hm:BinderAddition_status, hm:UnrelatedFragment_status
+- hm:ProtectiveLeaf_status
+
+Variant Significance Types (v1.3):
+- hm:Orthographic_variant, hm:Lexical_variant
+- hm:Syntactic_variant, hm:Semantic_variant
+- hm:Addition_variant, hm:Omission_variant
+
+View Types (v1.4):
+- hm:BibliographicParadigm, hm:PhilologicalParadigm
+- hm:HybridParadigm
+
+Hierarchy Types (v1.4):
+- hm:SimpleHierarchy, hm:NestedHierarchy
+- hm:ComplexHierarchy, hm:FragmentaryHierarchy
+
+Epistemological Status Instances (v1.4):
+- hm:DirectObservation, hm:ScholarlyInterpretation
+- hm:ComputationalDerivation, hm:CatalogInherited
+- hm:TraditionalAttribution
+
+Data Category Instances (v1.4):
+- hm:PhysicalMeasurement, hm:ColophonContent
+- hm:MaterialObservation, hm:DateAttribution
+- hm:AuthorshipAttribution, hm:ScribeIdentification
+- hm:PlaceAttribution, hm:WorkIdentification
+- hm:TextualRelationship
+
+Interpretation Method Instances (v1.4):
+- hm:PaleographicAnalysis, hm:CodicologicalAnalysis
+- hm:LinguisticAnalysis, hm:HistoricalContextAnalysis
+- hm:ComparativeTextualAnalysis, hm:AIBasedAnalysis
+- hm:RadiocarbonDating, hm:WatermarkAnalysis
+
+================================================================================
+VII. USAGE GUIDELINES AND MODELING PATTERNS
+================================================================================
+
+PATTERN 1: Basic Manuscript Description
+----------------------------------------
+:MS_Vatican_ebr_44 a lrmoo:F4_Manifestation_Singleton ;
+    cidoc-crm:P1_is_identified_by [ cidoc-crm:P190_has_symbolic_content "Vatican ebr. 44" ] ;
+    hm:has_script_type hm:ItalianScript ;
+    hm:has_script_mode hm:SquareScript ;
+    hm:has_material hm:Parchment ;
+    hm:has_number_of_folios 289 ;
+    hm:has_height_mm 320 ;
+    hm:has_width_mm 235 .
+
+PATTERN 2: Multi-Volume Set
+---------------------------
+:Vat_44_Set a hm:MultiVolumeSet .
+:MS_Vatican_ebr_44 hm:is_volume_of :Vat_44_Set ;
+    hm:volume_number 1 .
+:MS_Vatican_ebr_45 hm:is_volume_of :Vat_44_Set ;
+    hm:volume_number 2 .
+
+PATTERN 3: Nested Codicological Structure (v1.4)
+-----------------------------------------------
+:MS_Complex_Sammelband hm:has_hierarchy :Complex_Hierarchy .
+:Complex_Hierarchy a hm:CodicologicalHierarchy ;
+    hm:hierarchy_type hm:ComplexHierarchy ;
+    hm:hierarchy_root :CU_Main ;
+    hm:max_nesting_depth 3 .
+:CU_Main a hm:CompositeCodicologicalUnit ;
+    hm:has_sub_unit :CU_Part_A, :CU_Part_B .
+:CU_Part_A a hm:CompositeCodicologicalUnit ;
+    hm:has_sub_unit :CU_Section_1, :CU_Section_2 .
+:CU_Section_1 a hm:AtomicCodicologicalUnit ;
+    hm:nesting_level 2 ;
+    hm:is_atomic_unit true .
+
+PATTERN 4: Dual Paradigm Support (v1.4)
+--------------------------------------
+:MS_BuberMidrash hm:has_cataloging_perspective :Cataloging_View_Buber ;
+    hm:has_philological_perspective :Philological_View_Buber .
+
+:Cataloging_View_Buber a hm:CatalogingView ;
+    hm:cataloging_work :Work_Midrash_Tanchuma ;
+    hm:is_primary_paradigm false .
+
+:Philological_View_Buber a hm:PhilologicalView ;
+    hm:philological_tradition :Tradition_Tanchuma_Buber ;
+    hm:is_primary_paradigm true ;
+    hm:paradigm_note "Buber version represents distinct tradition, not 'copy' of unified original" .
+
+PATTERN 5: Epistemological Classification (v1.4)
+-----------------------------------------------
+:Dating_Assertion_Vatican_44 a owl:Thing ;
+    hm:has_epistemological_status hm:ScholarlyInterpretation ;
+    hm:is_factual false ;
+    hm:data_category hm:DateAttribution ;
+    hm:has_evidence_chain :Evidence_Chain_Dating .
+
+:Evidence_Chain_Dating a hm:EvidenceChain ;
+    hm:evidence_step :Step1_Paleography, :Step2_Interpretation ;
+    hm:supports_assertion :Dating_Assertion_Vatican_44 .
+
+:Step1_Paleography a hm:DirectObservationStep ;
+    hm:reasoning_text "Script shows Italian Square style characteristics" ;
+    hm:evidence_strength 0.9 .
+
+:Step2_Interpretation a hm:InterpretationStep ;
+    hm:interpretation_method hm:PaleographicAnalysis ;
+    hm:derives_from :Step1_Paleography ;
+    hm:reasoning_text "Italian Square script places MS in 14th-15th century" ;
+    hm:consensus_level "majority" ;
+    hm:evidence_agent :Prof_Beit_Arie .
+
+PATTERN 6: Administrative & Access Metadata (v1.5)
+---------------------------------------------------
+:MS_Vatican_Barb_Or_82 
+    hm:copyright_notice "Copyright Biblioteca Apostolica Vaticana..."^^xsd:string ;
+    hm:collection_name "Digitized manuscripts"^^xsd:string ;
+    hm:has_physical_holding :Holding_1 ;
+    hm:has_digital_access :DigitalAccess_1 ;
+    hm:has_usage_restriction :Restriction_1 ;
+    hm:has_rights_determination :Rights_1 .
+
+:Holding_1 a hm:PhysicalHolding ;
+    hm:holding_institution "NLI"^^xsd:string ;
+    hm:holding_collection "R mss microfilms"^^xsd:string ;
+    hm:holding_call_number "F 8566"^^xsd:string ;
+    hm:holding_availability "available"^^xsd:string ;
+    hm:holding_sublibrary "NLI Library"^^xsd:string .
+
+:DigitalAccess_1 a hm:DigitalAccess ;
+    hm:digital_access_url "https://www.nli.org.il/en/manuscripts/..."^^xsd:anyURI ;
+    hm:digital_access_note "For online version, click here"^^xsd:string ;
+    hm:digital_access_type "viewer"^^xsd:string .
+
+:Restriction_1 a hm:UsageRestriction ;
+    hm:restriction_type "איסור העתקה"^^xsd:string ;
+    hm:restriction_url "http://web.nli.org.il/..."^^xsd:anyURI .
+
+:Rights_1 a hm:RightsDetermination ;
+    hm:rights_status "Public domain; Contract"^^xsd:string ;
+    hm:rights_basis "Over 140 years from publishing date"^^xsd:string .
+
+PATTERN 7: Related Materials (v1.5)
+------------------------------------
+:MS_Hunt_115 
+    hm:related_material_note "עותק עתיק יותר, מאה י\"ב-י\"ג, בניו יורק..."@he .
+
+PATTERN 8: Acquisition Source (v1.5)
+-------------------------------------
+:MS_Jerusalem_8210
+    hm:acquisition_source "Donor 2723"^^xsd:string .
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+
+
+
