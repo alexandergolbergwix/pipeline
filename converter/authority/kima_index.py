@@ -236,8 +236,8 @@ def build_kima_index(
                 continue
             kima_id = int(kima_id_raw)
 
-            lat_raw = row.get("lat", "").strip()
-            lon_raw = row.get("lon", "").strip()
+            lat_raw = (row.get("lat") or "").strip()
+            lon_raw = (row.get("lon") or "").strip()
             lat = float(lat_raw) if lat_raw else None
             lon = float(lon_raw) if lon_raw else None
 
