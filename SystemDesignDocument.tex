@@ -1,0 +1,1260 @@
+\documentclass[12pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{mathptmx}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit,backgrounds,calc,decorations.pathreplacing}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage[title]{appendix}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  urlcolor=blue!60!black,
+  citecolor=green!50!black
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=5pt,
+  showstringspaces=false,
+  tabsize=2
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+\fancyhead[R]{\small MHM Pipeline --- System Design}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{1em}{}
+
+\newcommand{\filepath}[1]{\texttt{\small #1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\yes}{\textcolor{green!60!black}{\textbf{Yes}}}
+\newcommand{\no}{\textcolor{red!70!black}{\textbf{No}}}
+\newcommand{\partial}{\textcolor{orange!80!black}{\textbf{Partial}}}
+
+\title{%
+  \vspace{-1cm}
+  {\LARGE\bfseries Mapping Hebrew Manuscripts (MHM)}\\[0.5cm]
+  {\LARGE\bfseries Cross-Platform Desktop Application}\\[0.5cm]
+  {\Large System Design Document}\\[1cm]
+  {\large Version 1.5}
+}
+\author{
+  Alexander Goldberg\\
+  Department of Information Science and Applied Artificial Intelligence\\
+  Bar-Ilan University, Ramat-Gan 5290002, Israel\\[4pt]
+  \href{mailto:alexander.goldberg@biu.ac.il}{alexander.goldberg@biu.ac.il}\\
+  \href{https://orcid.org/0009-0004-5967-9377}{ORCID: 0009-0004-5967-9377}\\[0.5cm]
+  Supervisor: Prof.\ Gila Prebor\\
+  \href{mailto:gila.prebor@biu.ac.il}{gila.prebor@biu.ac.il}\\
+  \href{https://orcid.org/0000-0001-6458-0831}{ORCID: 0000-0001-6458-0831}
+}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\vfill
+\noindent\textbf{Project:} Mapping Hebrew Manuscripts (MHM)\\
+\textbf{Funding:} Israeli Ministry of Innovation, Science and Technology (Grant No.\ 1001706678)\\
+\textbf{Institution:} Bar-Ilan University\\
+\textbf{Repository:} \filepath{/Users/alexandergo/Documents/Doctorat/pipeline}\\
+\textbf{Companion document:} \filepath{ProjectDefinitionDocument.tex}
+
+\newpage
+\tableofcontents
+\newpage
+\listoffigures
+\listoftables
+\newpage
+
+%% ============================================================
+%% SECTION 1: EXECUTIVE SUMMARY
+%% ============================================================
+\section{Executive Summary}
+\label{sec:executive-summary}
+
+The MHM pipeline is a research-grade Python system comprising six tightly coupled stages: MARC parsing, Named Entity Recognition (NER), authority resolution, RDF graph construction, SHACL validation, and Wikidata upload. The pipeline has been developed incrementally as a collection of Python modules and currently includes a partial PyQt6 desktop GUI. This document specifies the design of the complete cross-platform desktop application that wraps and exposes all six pipeline stages to end users on macOS and Windows.
+
+Three requirements drive every decision in this document:
+
+\begin{enumerate}
+\item \textbf{Multiplatform:} The application must run natively on macOS (Apple Silicon M-series and Intel) and Windows 10/11 (64-bit), with full GPU acceleration on each platform (Apple MPS and NVIDIA CUDA respectively).
+\item \textbf{Single-file installation:} A user must be able to install the entire application by downloading and double-clicking one file: a \code{.pkg} on macOS or a \code{.exe} on Windows. No prior Python knowledge or manual dependency installation is required.
+\item \textbf{Open-source clean code:} The application is published under the GPL licence. All Python code must carry type annotations, use \code{pathlib} for paths, and pass \code{ruff}, \code{mypy} (strict), and \code{pytest} checks in a GitHub Actions CI matrix covering both platforms.
+\end{enumerate}
+
+\subsection{Key Decisions}
+
+\begin{description}[style=nextline, leftmargin=3cm]
+\item[GUI framework] \textbf{PyQt6} --- already adopted in \filepath{converter/gui/main\_window.py}, GPL-compatible, richest widget set for pipeline UIs, Apple Silicon arm64 wheels available on PyPI.
+\item[Distribution] \textbf{uv bootstrap + native OS installers} --- the installer ships a small launcher ($<$20\,MB) that invokes a \code{uv}-based bootstrap script to install Python~3.12 and all dependencies into an isolated virtual environment. The joint NER model ($\approx$2.2\,GB) is downloaded on first launch via a PyQt6 wizard using \code{huggingface\_hub}.
+\item[Build toolchain] \textbf{pkgbuild / productbuild} (macOS, included in Xcode Command Line Tools) and \textbf{Inno Setup 6} (Windows, free). Both are invoked automatically by a GitHub Actions release workflow triggered on version tags.
+\item[Project config] A single \code{pyproject.toml} at the repository root replaces all per-module \code{requirements.txt} files and centralises \code{ruff}, \code{mypy}, and \code{pytest} configuration.
+\end{description}
+
+\subsection{Document Scope}
+
+This document covers the application layer built on top of the existing pipeline core. It does not redefine the pipeline stages themselves; those are fully specified in \emph{ProjectDefinitionDocument.tex}. Changes to pipeline behaviour must be reflected in both documents.
+
+
+%% ============================================================
+%% SECTION 2: FRAMEWORK SELECTION
+%% ============================================================
+\section{GUI Framework Selection}
+\label{sec:framework}
+
+\subsection{Evaluation Criteria}
+
+The GUI framework must satisfy five criteria for this project:
+\begin{enumerate}
+\item \textbf{Cross-platform:} identical codebase runs on macOS arm64 and Windows x64 without platform-specific branches.
+\item \textbf{PyTorch compatibility:} the framework must coexist with PyTorch, HuggingFace Transformers, and rdflib in a single virtual environment without DLL or symbol conflicts.
+\item \textbf{Widget completeness:} native file dialogs, progress bars, log viewers, tabbed layouts, and threaded workers must be available as first-class components.
+\item \textbf{Licence:} must be compatible with GPL open-source distribution without commercial fees.
+\item \textbf{Maturity and community:} must have active maintenance, broad Stack Overflow coverage, and documented packaging patterns.
+\end{enumerate}
+
+\subsection{Framework Comparison}
+
+\begin{longtable}{|l|l|l|l|l|l|}
+\hline
+\textbf{Framework} & \textbf{Licence} & \textbf{Maturity} & \textbf{Native look} & \textbf{PyTorch compat} & \textbf{Verdict} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Framework} & \textbf{Licence} & \textbf{Maturity} & \textbf{Native look} & \textbf{PyTorch compat} & \textbf{Verdict} \\
+\hline
+\endhead
+\hline
+\endfoot
+PyQt6 & GPL / commercial & Very high & \yes & \yes & \textbf{Selected} \\
+\hline
+PySide6 & LGPL / GPL & High & \yes & \yes & Alternative \\
+\hline
+Tkinter + CustomTkinter & Python PSF & Medium & Drawn (not native) & \yes & Too limited \\
+\hline
+wxPython & wxWindows & Medium & \yes{} (OS widgets) & \yes & Dated API \\
+\hline
+Flet (Flutter) & Apache 2.0 & Low (pre-1.0) & Material Design & Untested & Rejected \\
+\hline
+Dear PyGui & MIT & Medium & GPU-rendered & \yes & Wrong paradigm \\
+\hline
+\end{longtable}
+
+\subsection{Selection: PyQt6}
+
+PyQt6 is selected for the following reasons:
+
+\begin{itemize}
+\item It is already used in \filepath{converter/gui/main\_window.py} with a functional tabbed interface, so the codebase investment is preserved.
+\item The GPL licence is fully compatible with this open-source project; no commercial licence fee applies.
+\item Qt6 provides every widget required: \code{QFileDialog}, \code{QProgressBar}, \code{QPlainTextEdit} for log output, \code{QTabWidget} for stage panels, \code{QThread} with signals for non-blocking workers, and \code{QSettings} for cross-platform settings persistence.
+\item Pre-built arm64 wheels are available on PyPI for macOS Apple Silicon; no manual compilation is needed.
+\item Qt's built-in style engine renders with native platform appearance on macOS (Aqua/Cocoa) and Windows (Win32/Fluent).
+\end{itemize}
+
+\paragraph{Note on PySide6.} PySide6 is the official Qt Company binding and carries an LGPL licence, which would be preferable if the project were ever distributed commercially without source disclosure. The code migration from PyQt6 to PySide6 is limited to import renaming (\code{from PyQt6} $\to$ \code{from PySide6}) and minor signal/slot syntax adjustments. This migration path is documented but not currently required.
+
+
+%% ============================================================
+%% SECTION 3: DISTRIBUTION STRATEGY
+%% ============================================================
+\section{Distribution Strategy}
+\label{sec:distribution}
+
+\subsection{Installer Tool Comparison}
+
+The heavy ML dependencies (PyTorch 2.x $\approx$ 2\,GB, HuggingFace Transformers, joint NER model $\approx$ 2.2\,GB) make standard Python freezing tools impractical.
+
+\begin{longtable}{|l|l|l|p{2cm}|l|l|}
+\hline
+\textbf{Tool} & \textbf{macOS} & \textbf{Windows} & \textbf{Bundle size} & \textbf{GPU support} & \textbf{Verdict} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Tool} & \textbf{macOS} & \textbf{Windows} & \textbf{Bundle size} & \textbf{GPU support} & \textbf{Verdict} \\
+\hline
+\endhead
+\hline
+\endfoot
+PyInstaller & \yes & \yes & 4--8\,GB & Broken (MPS) & \no{} Rejected \\
+\hline
+cx\_Freeze & \yes & \yes & 4--8\,GB & Known bugs & \no{} Rejected \\
+\hline
+Briefcase & \yes & \yes & N/A & None & \no{} Rejected \\
+\hline
+Docker & \yes & \yes & 1\,GB image & No MPS & \no{} Rejected \\
+\hline
+conda / constructor & \yes & \yes & 3--4\,GB & Full & Alternative \\
+\hline
+\textbf{uv + native pkg} & \textbf{\yes} & \textbf{\yes} & \textbf{$<$20\,MB} & \textbf{Full} & \textbf{Selected} \\
+\hline
+\end{longtable}
+
+\paragraph{Why PyInstaller is ruled out.} PyInstaller bundles a frozen copy of every imported module. With PyTorch 2.x and CUDA libraries this produces a 4--8\,GB directory that: (a) exhibits a severe startup regression on macOS ARM (PyInstaller issue \#8211, January 2024); (b) cannot produce a universal2 binary because PyTorch does not ship universal2 wheels; and (c) duplicates CUDA shared libraries unpredictably, causing runtime symbol errors on Windows. These are not configuration problems --- they are fundamental limitations of the freeze-everything approach at this dependency scale.
+
+\subsection{Selected Strategy: uv Bootstrap + Native OS Installers}
+
+The installer contains only: a \code{uv} binary ($\approx$15\,MB), the project source tree, and a bootstrap script. At install time the script uses \code{uv} to download Python~3.12 and install all Python dependencies into an isolated prefix. ML models are downloaded separately on first launch. This pattern is used by ComfyUI, AUTOMATIC1111, and TransformerLab --- the established ML desktop application ecosystem.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners, minimum height=0.9cm, minimum width=3.8cm,
+              align=center, font=\small},
+  boldbox/.style={draw, rounded corners, minimum height=0.9cm, minimum width=3.8cm,
+                  align=center, font=\small\bfseries, fill=blue!10},
+  arrow/.style={-{Stealth[length=2.5mm]}, thick},
+  label/.style={font=\scriptsize\bfseries, text=gray},
+  >=Stealth
+]
+
+%% macOS column
+\node[label] (mac-title) at (0, 0) {macOS};
+\node[box] (mac1) at (0,-1.0) {GitHub Release\\MHMPipeline.dmg};
+\node[box] (mac2) at (0,-2.4) {Mount .dmg\\drag .pkg to Desktop};
+\node[box] (mac3) at (0,-3.8) {Double-click .pkg\\macOS Installer.app};
+\node[boldbox] (mac4) at (0,-5.2) {postinstall script\\runs install.sh};
+\node[box] (mac5) at (0,-6.6) {uv python install 3.12\\uv sync};
+\node[box] (mac6) at (0,-8.0) {Write MHMPipeline.app\\to /Applications};
+\node[boldbox, fill=green!10] (mac7) at (0,-9.4) {Launch MHMPipeline.app};
+
+%% Windows column
+\node[label] (win-title) at (6.5, 0) {Windows};
+\node[box] (win1) at (6.5,-1.0) {GitHub Release\\MHMPipeline-Setup.exe};
+\node[box] (win2) at (6.5,-2.4) {Double-click .exe\\Inno Setup wizard};
+\node[box] (win3) at (6.5,-3.8) {Accept licence\\choose install dir};
+\node[boldbox] (win4) at (6.5,-5.2) {Inno runs install.ps1\\PowerShell bootstrap};
+\node[box] (win5) at (6.5,-6.6) {uv python install 3.12\\uv sync};
+\node[box] (win6) at (6.5,-8.0) {Write MHMPipeline.exe\\to Program Files};
+\node[boldbox, fill=green!10] (win7) at (6.5,-9.4) {Launch MHMPipeline.exe};
+
+%% arrows macOS
+\draw[arrow] (mac1) -- (mac2);
+\draw[arrow] (mac2) -- (mac3);
+\draw[arrow] (mac3) -- (mac4);
+\draw[arrow] (mac4) -- (mac5);
+\draw[arrow] (mac5) -- (mac6);
+\draw[arrow] (mac6) -- (mac7);
+
+%% arrows Windows
+\draw[arrow] (win1) -- (win2);
+\draw[arrow] (win2) -- (win3);
+\draw[arrow] (win3) -- (win4);
+\draw[arrow] (win4) -- (win5);
+\draw[arrow] (win5) -- (win6);
+\draw[arrow] (win6) -- (win7);
+
+%% shared note
+\node[draw, dashed, rounded corners, fill=yellow!8, font=\scriptsize, align=center,
+      minimum width=4cm] (note) at (3.25,-11.0)
+  {First launch: model download wizard\\(see Section~\ref{sec:wizard})};
+\draw[arrow, dashed] (mac7) -- (note);
+\draw[arrow, dashed] (win7) -- (note);
+
+\end{tikzpicture}
+\caption{Installation flow for macOS (left) and Windows (right). Bold/blue boxes are the bootstrap steps that invoke \code{uv}.}
+\label{fig:install-flow}
+\end{figure}
+
+\subsection{Bootstrap Scripts}
+\label{sec:bootstrap}
+
+\begin{lstlisting}[language=bash, caption={install.sh --- macOS bootstrap (runs as postinstall script)}]
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="/Applications/MHMPipeline"
+UV_BIN="$APP_DIR/bin/uv"
+
+# Install uv if not already present
+if [[ ! -x "$UV_BIN" ]]; then
+  curl -LsSf https://astral.sh/uv/install.sh | \
+    UV_INSTALL_DIR="$APP_DIR/bin" sh
+fi
+
+# Install Python 3.12 into isolated prefix
+"$UV_BIN" python install 3.12
+
+# Create venv and install all dependencies
+cd "$APP_DIR"
+"$UV_BIN" sync --frozen --no-dev
+
+# Write .app launcher wrapper
+cat > /Applications/MHMPipeline.app/Contents/MacOS/mhm_pipeline <<'LAUNCHER'
+#!/usr/bin/env bash
+exec /Applications/MHMPipeline/bin/python \
+     -m mhm_pipeline.app "$@"
+LAUNCHER
+chmod +x /Applications/MHMPipeline.app/Contents/MacOS/mhm_pipeline
+
+echo "MHM Pipeline installed successfully."
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash, caption={install.ps1 --- Windows bootstrap (invoked by Inno Setup)}]
+$ErrorActionPreference = "Stop"
+$AppDir = "$env:ProgramFiles\MHMPipeline"
+$UvBin  = "$AppDir\bin\uv.exe"
+
+# Install uv
+if (-not (Test-Path $UvBin)) {
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest `
+      -Uri "https://astral.sh/uv/install.ps1" `
+      -OutFile "$env:TEMP\uv_install.ps1"
+    & "$env:TEMP\uv_install.ps1" -InstallDir "$AppDir\bin"
+}
+
+# Install Python 3.12 + dependencies
+Set-Location $AppDir
+& $UvBin python install 3.12
+& $UvBin sync --frozen --no-dev
+
+# Write launcher batch file
+$launcher = "@echo off`r`n" +
+            "`"$AppDir\bin\python.exe`" -m mhm_pipeline.app %*`r`n"
+Set-Content "$AppDir\MHMPipeline.bat" $launcher
+
+Write-Host "MHM Pipeline installed successfully."
+\end{lstlisting}
+
+\subsection{First-Run Model Download Wizard}
+\label{sec:wizard}
+
+On the first launch after installation, the application detects that the NER model files are absent and launches a PyQt6 \code{QWizard} with four pages:
+
+\begin{description}[style=nextline, leftmargin=2.5cm]
+\item[Page 1 --- Welcome] Displays hardware detection results: GPU type (Apple MPS / NVIDIA CUDA / CPU-only), available disk space, and estimated download size. Warns the user if less than 10\,GB of free disk space is available.
+\item[Page 2 --- Model Profile] Displays the single joint NER model that will be downloaded:
+  \begin{itemize}
+    \item \textbf{Joint model} (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, $\approx$2.2\,GB): DictaBERT-based multi-task model that performs PERSON entity detection (NER F1 0.9080) and role classification (AUTHOR / COPYIST / OTHER) in a single forward pass; runs on MPS, CUDA, or CPU.
+  \end{itemize}
+\item[Page 3 --- Download] A \code{QThread} worker calls \code{huggingface\_hub.snapshot\_download()} for each required model repository. A \code{QProgressBar} per model and an overall progress bar are updated via Qt signals. The download is resumable: if the wizard is closed and re-opened, already-downloaded shards are skipped.
+\item[Page 4 --- Complete] Writes \code{config.json} to the application data directory (see Section~\ref{sec:crossplatform}) recording \code{HF\_HOME}, selected device, and installed model versions. Sets \code{HF\_HUB\_OFFLINE=1} in the runtime environment so subsequent launches do not attempt network access.
+\end{description}
+
+
+%% ============================================================
+%% SECTION 4: SYSTEM ARCHITECTURE
+%% ============================================================
+\section{System Architecture}
+\label{sec:architecture}
+
+\subsection{Four-Layer Architecture}
+
+The application is organised into four horizontal layers. Each layer depends only on layers below it; no upward dependencies are permitted.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  layer/.style={draw, rounded corners=4pt, minimum height=1.4cm,
+                text width=12cm, align=center, font=\small},
+  >=Stealth
+]
+
+\node[layer, fill=blue!12] (gui) at (0,0)
+  {\textbf{GUI Layer}\\
+   PyQt6 \code{MainWindow} \quad Setup \code{QWizard} \quad Stage Panels \quad Dialogs};
+
+\node[layer, fill=orange!12] (app) at (0,-2.0)
+  {\textbf{Application Layer}\\
+   \code{PipelineController} \quad \code{StageWorker} (×6) \quad \code{SettingsManager} \quad \code{ModelDownloader}};
+
+\node[layer, fill=green!10] (core) at (0,-4.0)
+  {\textbf{Core Pipeline Layer (existing, unchanged)}\\
+   \code{UnifiedReader} \quad \code{MarcToRdfMapper} \quad \code{JointNERPipeline} \quad
+   \code{GraphBuilder} \quad \code{ShaclValidator}};
+
+\node[layer, fill=purple!8] (data) at (0,-6.0)
+  {\textbf{Data / External Services Layer}\\
+   MARC files \quad Mazal SQLite DB \quad KIMA SQLite DB \quad RDF/TTL output \quad
+   VIAF API \quad Wikidata API \quad HuggingFace Hub};
+
+\draw[-{Stealth}, thick] (gui.south) -- (app.north)
+  node[midway, right=2mm, font=\scriptsize] {Qt signals/slots};
+\draw[-{Stealth}, thick] (app.south) -- (core.north)
+  node[midway, right=2mm, font=\scriptsize] {Python function calls};
+\draw[-{Stealth}, thick] (core.south) -- (data.north)
+  node[midway, right=2mm, font=\scriptsize] {file I/O + HTTP};
+
+\end{tikzpicture}
+\caption{Four-layer architecture. Dependency arrows point downward only. The Core layer is the existing \filepath{converter/} and \filepath{ner/} modules; the Application and GUI layers are new.}
+\label{fig:layers}
+\end{figure}
+
+\subsection{Component Responsibilities}
+
+\begin{longtable}{|l|p{4.5cm}|l|p{3cm}|}
+\hline
+\textbf{Component} & \textbf{Responsibility} & \textbf{Thread} & \textbf{Communicates with} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Component} & \textbf{Responsibility} & \textbf{Thread} & \textbf{Communicates with} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{MainWindow} & Root Qt window; hosts stage panels and log viewer & Main & All panels \\
+\hline
+\code{PipelineController} & Sequences stage execution; owns worker lifecycle & Main & \code{StageWorker} \\
+\hline
+\code{StageWorker} (×6) & Executes one pipeline stage; emits progress signals & Worker & Core layer \\
+\hline
+\code{ModelDownloader} & Downloads HuggingFace models; emits byte-level progress & Worker & HF Hub \\
+\hline
+\code{SettingsManager} & Reads/writes \code{QSettings}; exposes typed accessors & Main & All components \\
+\hline
+\code{AuthorityWorker} & Matches NER entities against Mazal (SQLite) + VIAF (REST); matches MARC places against KIMA (SQLite) & Worker & Core authority module \\
+\hline
+\code{MazalIndexWorker} & Re-parses all \code{NLIAUT*.xml} files and rebuilds the Mazal SQLite authority index & Worker & \code{MazalIndex} (core) \\
+\hline
+\code{KimaIndexWorker} & Parses three KIMA TSV files and builds a SQLite place authority index for Hebrew historical place names & Worker & \code{KimaIndex} (core) \\
+\hline
+\end{longtable}
+
+\subsection{Threading Model}
+
+All computation that could block the GUI --- NER inference, RDF graph construction, SHACL validation, API calls --- runs inside a \code{QThread} subclass called \code{StageWorker}. The threading contract is:
+
+\begin{itemize}
+\item Workers \emph{never} call Qt widget methods directly.
+\item Workers communicate with the GUI exclusively through typed Qt signals:\\
+  \code{progress(int)} --- completion percentage (0--100)\\
+  \code{log\_line(str)} --- single log message\\
+  \code{error(str)} --- human-readable error description\\
+  \code{finished(Path)} --- path to stage output file on success
+\item The \code{PipelineController} connects these signals to the appropriate panel slots in the main thread.
+\item Only one stage runs at a time; the controller starts the next \code{StageWorker} in the \code{finished} slot of the previous one.
+\end{itemize}
+
+
+%% ============================================================
+%% SECTION 5: APPLICATION MODULE STRUCTURE
+%% ============================================================
+\section{Application Module Structure}
+\label{sec:modules}
+
+\subsection{Repository Layout}
+
+The repository adopts the \code{src/} layout recommended by the Python Packaging Authority. The existing \filepath{converter/} and \filepath{ner/} trees are preserved unchanged as sibling packages; the new application code lives exclusively under \filepath{src/mhm\_pipeline/}.
+
+\begin{lstlisting}[language=bash, caption={Top-level repository structure}]
+mhm-pipeline/
+|-- pyproject.toml         # unified config: uv, ruff, mypy, pytest
+|-- uv.lock                # locked dependency graph
+|-- CLAUDE.md              # project-level AI assistant instructions
+|-- src/
+|   `-- mhm_pipeline/
+|       |-- __init__.py    # version string only
+|       |-- app.py         # QApplication entry point
+|       |-- gui/
+|       |   |-- main_window.py
+|       |   |-- wizard/
+|       |   |   `-- setup_wizard.py
+|       |   |-- panels/
+|       |   |   |-- convert_panel.py
+|       |   |   |-- ner_panel.py
+|       |   |   |-- authority_panel.py
+|       |   |   |-- rdf_panel.py
+|       |   |   |-- validate_panel.py
+|       |   |   `-- wikidata_panel.py
+|       |   `-- widgets/
+|       |       |-- file_selector.py
+|       |       |-- log_viewer.py
+|       |       |-- stage_progress.py
+|       |       `-- ttl_preview.py
+|       |-- controller/
+|       |   |-- pipeline_controller.py
+|       |   `-- workers.py
+|       |-- settings/
+|       |   `-- settings_manager.py
+|       `-- platform_/
+|           |-- paths.py   # platformdirs-based app directories
+|           `-- gpu.py     # MPS / CUDA / CPU detection cascade
+|-- converter/             # existing core (public API unchanged)
+|-- ner/                   # existing NER (public API unchanged)
+|-- ontology/
+|-- data/
+|-- installer/
+|   |-- macos/
+|   |   |-- build_pkg.sh
+|   |   |-- install.sh
+|   |   `-- MHMPipeline.pkgproj
+|   `-- windows/
+|       |-- build_installer.iss  # Inno Setup script
+|       `-- install.ps1
+|-- tests/
+|   |-- unit/
+|   `-- integration/
+`-- .github/
+    `-- workflows/
+        |-- ci.yml         # lint + typecheck + test
+        `-- release.yml    # build installers on version tag
+\end{lstlisting}
+
+\subsection{pyproject.toml}
+
+A single \code{pyproject.toml} at the repository root replaces all per-module \code{requirements.txt} files and centralises every tool's configuration.
+
+\begin{lstlisting}[language=bash, caption={pyproject.toml --- abridged}]
+[project]
+name = "mhm-pipeline"
+version = "0.1.0"
+description = "MHM MARC-to-RDF Desktop Pipeline"
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-only" }
+dependencies = [
+    # Core pipeline
+    "pymarc>=5.0",
+    "rdflib>=7.0",
+    "pyshacl>=0.25",
+    # NER
+    "torch>=2.3",
+    "transformers>=4.40",
+    "huggingface-hub>=0.23",
+    "pandas>=2.2",
+    # GUI
+    "PyQt6>=6.7",
+    # Platform utilities
+    "platformdirs>=4.2",
+]
+
+[project.scripts]
+mhm-pipeline = "mhm_pipeline.app:main"
+
+[tool.uv.workspace]
+members = ["src/mhm_pipeline"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "UP", "N", "ANN", "S", "B", "A", "C4", "PT"]
+ignore  = ["ANN101", "ANN102"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+ignore_missing_imports = false
+
+[tool.pytest.ini_options]
+testpaths   = ["tests"]
+addopts     = "--cov=src/mhm_pipeline --cov-report=term-missing -q"
+\end{lstlisting}
+
+\subsection{Entry Point}
+
+\begin{lstlisting}[language=Python, caption={src/mhm\_pipeline/app.py --- QApplication entry point}]
+"""MHM Pipeline desktop application entry point."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+
+from mhm_pipeline.gui.main_window import MainWindow
+from mhm_pipeline.platform_.paths import app_data_dir
+from mhm_pipeline.settings.settings_manager import SettingsManager
+
+
+def main() -> None:
+    """Launch the MHM Pipeline desktop application."""
+    app = QApplication(sys.argv)
+    app.setApplicationName("MHMPipeline")
+    app.setOrganizationName("Bar-Ilan University")
+    app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
+
+    settings = SettingsManager()
+
+    # Show first-run wizard if models are absent
+    models_ready = _check_models(settings)
+    if not models_ready:
+        from mhm_pipeline.gui.wizard.setup_wizard import SetupWizard
+        wizard = SetupWizard(settings)
+        if wizard.exec() != SetupWizard.DialogCode.Accepted:
+            sys.exit(0)
+
+    window = MainWindow(settings)
+    window.show()
+    sys.exit(app.exec())
+
+
+def _check_models(settings: SettingsManager) -> bool:
+    """Return True if the required NER model files are present."""
+    model_dir = Path(settings.get("model_dir", str(app_data_dir() / "models")))
+    return (model_dir / "hebrew-manuscript-joint-ner-v2").exists()
+\end{lstlisting}
+
+
+%% ============================================================
+%% SECTION 6: GUI DESIGN
+%% ============================================================
+\section{GUI Design}
+\label{sec:gui}
+
+\subsection{Main Window Layout}
+
+The main window consists of four regions: a menu bar, a left sidebar showing pipeline stage status, a central panel area hosting the active stage, and a bottom log strip.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  region/.style={draw, rounded corners=2pt, align=center, font=\small},
+  label/.style={font=\scriptsize\bfseries\color{gray}},
+  >=Stealth
+]
+
+%% outer frame
+\draw[thick, rounded corners=4pt] (0,0) rectangle (13,9);
+\node[label] at (6.5, 9.3) {MHM Pipeline --- MainWindow};
+
+%% menu bar
+\draw[fill=gray!15] (0,8.3) rectangle (13,9);
+\node[font=\small] at (2, 8.65) {File \quad Pipeline \quad Tools \quad Help};
+
+%% left sidebar
+\draw[fill=blue!5] (0,0) rectangle (3,8.3);
+\node[label] at (1.5, 8.1) {STAGES};
+\foreach \y/\name/\col in {
+  7.3/1. Parse MARC/gray!30,
+  6.5/2. NER/gray!30,
+  5.7/3. Authority/gray!30,
+  4.9/4. Build RDF/gray!30,
+  4.1/5. Validate/gray!30,
+  3.3/6. Wikidata/gray!30} {
+  \draw[fill=\col, rounded corners=2pt] (0.2,\y-0.3) rectangle (2.8,\y+0.3);
+  \node[font=\scriptsize] at (1.5,\y) {\name};
+}
+
+%% central panel
+\draw[fill=white] (3.1,0.9) rectangle (12.9,8.2);
+\node[label] at (8, 7.9) {Active Stage Panel};
+\draw[dashed, fill=orange!5] (3.5,5.5) rectangle (12.5,7.6);
+\node[font=\scriptsize, align=center] at (8, 6.55)
+  {Input file selector \quad Output directory \quad Run button\\
+   Per-field options \quad Stage-specific settings};
+\draw[dashed, fill=blue!5] (3.5,3.0) rectangle (12.5,5.4);
+\node[font=\scriptsize, align=center] at (8, 4.2)
+  {StageProgressWidget\\
+   (6 nodes: Pending $\to$ Running $\to$ Done / Error)};
+
+%% log strip
+\draw[fill=gray!8] (3.1,0) rectangle (12.9,0.85);
+\node[font=\scriptsize] at (8, 0.42) {Log viewer --- QPlainTextEdit (read-only, auto-scroll)};
+
+%% status bar
+\draw[fill=gray!20] (0,0) rectangle (13,0) ;
+\node[font=\scriptsize] at (10, -0.25) {GPU: Apple MPS \quad Records: 0 \quad Ready};
+
+\end{tikzpicture}
+\caption{Main window wireframe. The left sidebar shows the six pipeline stages; the central panel switches content based on the selected stage.}
+\label{fig:main-window}
+\end{figure}
+
+\subsection{Stage Panels}
+
+Each of the six pipeline stages has a dedicated panel. All panels share the same base class \code{StagePanel(QWidget)} which provides the log viewer and progress bar connections.
+
+\begin{longtable}{|l|p{4.5cm}|p{4.5cm}|}
+\hline
+\textbf{Panel} & \textbf{Key Widgets} & \textbf{Worker signal $\to$ slot} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Panel} & \textbf{Key Widgets} & \textbf{Worker signal $\to$ slot} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{ConvertPanel} & MARC file picker, output dir picker, record range spin boxes, Run button & \code{progress} $\to$ progress bar; \code{log\_line} $\to$ log viewer \\
+\hline
+\code{NerPanel} & Input JSON selector, output dir selector, model ID text field (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}), batch size spin box & \code{progress} $\to$ per-record bar; \code{log\_line} $\to$ log \\
+\hline
+\code{AuthorityPanel} & NER results selector, output dir, MARC extract selector, VIAF/KIMA checkboxes, Mazal DB + XML dir selectors, KIMA DB + TSV dir selectors, ``Rebuild Mazal Index\ldots'' and ``Rebuild KIMA Index\ldots'' buttons & \code{run\_requested(Path,Path,Path,bool,bool,str,str)} $\to$ controller; rebuild buttons launch \code{MazalIndexWorker}/\code{KimaIndexWorker} in-panel \\
+\hline
+\code{RdfPanel} & Namespace prefix editor, URI template fields, serialisation format combo & \code{progress} $\to$ bar; \code{finished} $\to$ open TTL in preview widget \\
+\hline
+\code{ValidatePanel} & SHACL shapes file selector, severity filter combo, violations table view & \code{finished} $\to$ populate \code{QTableWidget} with SHACL report \\
+\hline
+\code{WikidataPanel} & OAuth token field (masked), dry-run checkbox, entity reconciliation options & \code{log\_line} $\to$ log; \code{progress} $\to$ upload bar \\
+\hline
+\end{longtable}
+
+\subsection{Pipeline Progress Visualisation}
+
+The \code{StageProgressWidget} is a custom \code{QWidget} that paints six labelled rounded-rectangle nodes connected by arrows. Each node exposes a \code{set\_state(state: StageState)} method that changes its fill colour:
+
+\begin{itemize}
+\item \textbf{Pending} --- light grey
+\item \textbf{Running} --- blue (animated pulse via \code{QPropertyAnimation})
+\item \textbf{Done} --- green
+\item \textbf{Error} --- red
+\end{itemize}
+
+The widget is embedded at the top of every stage panel so the user always sees the full pipeline position regardless of which panel is active.
+
+\subsection{Settings Persistence}
+
+Settings are stored via \code{QSettings} using \code{QSettings.Format.IniFormat} (cross-platform plain text, not the Windows registry). The \code{SettingsManager} class wraps \code{QSettings} with typed getters and setters, providing a stable API to all other components.
+
+\begin{longtable}{|l|l|p{2.5cm}|p{4cm}|}
+\hline
+\textbf{Key} & \textbf{Type} & \textbf{Default} & \textbf{Description} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Key} & \textbf{Type} & \textbf{Default} & \textbf{Description} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{model\_dir} & \code{str} & \code{<app\_data>/models} & Path to NER model files \\
+\hline
+\code{hf\_home} & \code{str} & \code{<app\_data>/hf\_cache} & HuggingFace hub cache root \\
+\hline
+\code{gpu\_device} & \code{str} & \code{auto} & \code{auto} / \code{mps} / \code{cuda} / \code{cpu} \\
+\hline
+\code{batch\_size} & \code{int} & \code{32} & NER inference batch size \\
+\hline
+\code{output\_dir} & \code{str} & \code{<home>/MHM\_Output} & Default TTL output directory \\
+\hline
+\code{wikidata\_token} & \code{str} & \code{""} & OAuth token (stored encrypted) \\
+\hline
+\code{log\_level} & \code{str} & \code{INFO} & Python logging level \\
+\hline
+\code{first\_run\_done} & \code{bool} & \code{false} & Suppresses setup wizard after first run \\
+\hline
+\code{mazal\_db\_path} & \code{str} & \code{converter/authority/mazal\_index.db} & Path to the pre-built Mazal (NLI) SQLite authority index \\
+\hline
+\code{mazal\_xml\_dir} & \code{str} & \code{data/NLI\_AUTHORITY\_XML} & Directory containing \code{NLIAUT*.xml} authority files used to rebuild the index \\
+\hline
+\code{kima\_db\_path} & \code{str} & \code{data/kima/kima\_index.db} & Path to the KIMA SQLite place authority index, built from the three KIMA TSV files \\
+\hline
+\code{kima\_tsv\_dir} & \code{str} & \code{data/kima} & Directory containing the KIMA TSV source files (\emph{20251015 Kima places.tsv}, \emph{Kima-Hebrew-Variants-*.tsv}, \emph{Maagarim-Zurot-\&-Arachim.tsv}) \\
+\hline
+\end{longtable}
+
+
+%% ============================================================
+%% SECTION 7: CROSS-PLATFORM CONSIDERATIONS
+%% ============================================================
+\section{Cross-Platform Considerations}
+\label{sec:crossplatform}
+
+\subsection{Platform Differences}
+
+\begin{longtable}{|p{3cm}|p{3.5cm}|p{3.5cm}|p{3cm}|}
+\hline
+\textbf{Concern} & \textbf{macOS} & \textbf{Windows} & \textbf{Solution} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Concern} & \textbf{macOS} & \textbf{Windows} & \textbf{Solution} \\
+\hline
+\endhead
+\hline
+\endfoot
+App data dir & \code{\textasciitilde/Library/Application Support} & \code{\%APPDATA\%} & \code{platformdirs.user\_data\_dir()} \\
+\hline
+Config file & \code{\textasciitilde/Library/Preferences} & \code{\%APPDATA\%} & \code{QSettings(IniFormat)} \\
+\hline
+Temp dir & \code{/tmp} & \code{\%TEMP\%} & \code{tempfile.mkdtemp()} \\
+\hline
+GPU acceleration & Apple MPS (\code{torch.backends.mps}) & NVIDIA CUDA (\code{torch.cuda}) & \code{gpu.py} cascade \\
+\hline
+Launcher & \code{.app} bundle + shell script & \code{.exe} + \code{.bat} & Installer-generated \\
+\hline
+Hebrew RTL text & Cocoa native & Uniscribe native & Qt handles both \\
+\hline
+File paths & POSIX (\code{/}) & Win32 (\code{\textbackslash}) & \code{pathlib.Path} throughout \\
+\hline
+Case sensitivity & Case-sensitive HFS+ & Case-insensitive NTFS & Always use exact case in code \\
+\hline
+\end{longtable}
+
+\subsection{GPU Detection}
+
+The module \filepath{src/mhm\_pipeline/platform\_/gpu.py} is the single location where device selection is determined. All pipeline stages import \code{get\_device()} from this module; no stage hard-codes a device string.
+
+\begin{lstlisting}[language=Python, caption={platform\_/gpu.py --- GPU detection cascade}]
+"""Detect the best available compute device."""
+
+from __future__ import annotations
+import logging
+import torch
+
+logger = logging.getLogger(__name__)
+
+_DEVICE: str | None = None
+
+
+def get_device(override: str | None = None) -> str:
+    """Return the best available device string.
+
+    Priority: MPS (macOS Apple Silicon) > CUDA (NVIDIA) > CPU.
+    The result is cached after the first call.
+    """
+    global _DEVICE
+    if _DEVICE is not None and override is None:
+        return _DEVICE
+
+    if override and override != "auto":
+        _DEVICE = override
+        return _DEVICE
+
+    if torch.backends.mps.is_available():
+        _DEVICE = "mps"
+    elif torch.cuda.is_available():
+        _DEVICE = "cuda"
+    else:
+        _DEVICE = "cpu"
+
+    logger.info("Compute device selected: %s", _DEVICE)
+    return _DEVICE
+\end{lstlisting}
+
+\subsection{Application Data Paths}
+
+\begin{lstlisting}[language=Python, caption={platform\_/paths.py --- cross-platform app directories}]
+"""Cross-platform application directory helpers."""
+
+from __future__ import annotations
+from pathlib import Path
+import platformdirs
+
+_APP_NAME = "MHMPipeline"
+_APP_AUTHOR = "Bar-Ilan University"
+
+
+def app_data_dir() -> Path:
+    """Return the platform-appropriate application data directory."""
+    return Path(platformdirs.user_data_dir(_APP_NAME, _APP_AUTHOR))
+
+
+def app_config_dir() -> Path:
+    """Return the platform-appropriate configuration directory."""
+    return Path(platformdirs.user_config_dir(_APP_NAME, _APP_AUTHOR))
+
+
+def app_log_dir() -> Path:
+    """Return the platform-appropriate log directory."""
+    return Path(platformdirs.user_log_dir(_APP_NAME, _APP_AUTHOR))
+\end{lstlisting}
+
+
+%% ============================================================
+%% SECTION 8: CLEAN CODE AND OPEN SOURCE STANDARDS
+%% ============================================================
+\section{Clean Code and Open Source Standards}
+\label{sec:cleancode}
+
+This project is open source (GPL-3.0). Every contributor is expected to follow the rules below. Automated checks enforce most of them; the remainder are reviewed in pull requests.
+
+\subsection{Code Quality Rules}
+
+\begin{enumerate}
+\item \textbf{Type annotations on all public functions.} Never use \code{Any}; use proper types or generics. Narrow types with \code{isinstance()} checks before use.
+\item \textbf{\code{pathlib.Path} for all file operations.} Never use \code{os.path} string concatenation or bare string paths.
+\item \textbf{Early returns over nested conditionals.} Prefer one level of nesting; guard clauses at the top of functions reduce cognitive load.
+\item \textbf{No bare \code{except} clauses.} Always catch a specific exception type:\\
+  \code{except SpecificError as exc: logger.error("...", exc\_info=exc); raise}
+\item \textbf{Worker threads emit signals only.} Workers must never call methods on Qt widgets directly; all UI updates flow through signals connected in the main thread.
+\item \textbf{Test files use \code{.spec.py} extension.} Tests live under \filepath{tests/unit/} or \filepath{tests/integration/}; fixtures over \code{setUp}/\code{tearDown}.
+\item \textbf{No commented-out code, dead imports, or override-to-call-super methods.} Remove dead code; use version control history to recover removed code.
+\item \textbf{Validate at boundaries.} Validate user inputs and API responses; trust internal function contracts.
+\end{enumerate}
+
+\subsection{Toolchain}
+
+\begin{longtable}{|l|p{3.5cm}|l|l|}
+\hline
+\textbf{Tool} & \textbf{Purpose} & \textbf{Config location} & \textbf{Command} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Tool} & \textbf{Purpose} & \textbf{Config location} & \textbf{Command} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{ruff} & Lint + format (replaces flake8 + black) & \code{pyproject.toml} & \code{ruff check . \&\& ruff format .} \\
+\hline
+\code{mypy} & Static type checking (strict) & \code{pyproject.toml} & \code{mypy src/} \\
+\hline
+\code{pytest} + \code{pytest-cov} & Unit and integration tests & \code{pyproject.toml} & \code{pytest} \\
+\hline
+\code{pre-commit} & Run ruff + mypy on staged files & \code{.pre-commit-config.yaml} & \code{pre-commit run --all-files} \\
+\hline
+\end{longtable}
+
+\subsection{GitHub Actions CI}
+
+\begin{lstlisting}[language=bash, caption={.github/workflows/ci.yml --- lint, typecheck, and test matrix}]
+name: CI
+on: [push, pull_request]
+
+jobs:
+  ci:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        python: ["3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with: { version: "latest" }
+      - run: uv python install ${{ matrix.python }}
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/
+      - run: uv run pytest
+\end{lstlisting}
+
+\subsection{Release Workflow}
+
+\begin{lstlisting}[language=bash, caption={.github/workflows/release.yml --- build installers on version tag}]
+name: Release
+on:
+  push:
+    tags: ["v*.*.*"]
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: bash installer/macos/build_pkg.sh
+      - uses: actions/upload-release-asset@v1
+        with:
+          asset_path: dist/MHMPipeline.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: iscc installer/windows/build_installer.iss
+      - uses: actions/upload-release-asset@v1
+        with:
+          asset_path: dist/MHMPipeline-Setup.exe
+\end{lstlisting}
+
+\subsection{Branch and PR Conventions}
+
+\begin{description}[style=nextline, leftmargin=3cm]
+\item[\code{main}] Always releasable. Direct commits are prohibited; all changes enter via pull request.
+\item[\code{feat/*}] New features or new pipeline stages.
+\item[\code{fix/*}] Bug fixes in existing code.
+\item[\code{refactor/*}] Code restructuring with no behaviour change.
+\item[\code{docs/*}] Documentation and \code{.tex} document updates.
+\end{description}
+
+Pull request checklist (enforced in PR template):
+\begin{itemize}
+\item CI passes on both macOS and Windows runners.
+\item Type annotations added to all changed public functions.
+\item \code{SystemDesignDocument.tex} or \code{ProjectDefinitionDocument.tex} updated if architecture changed.
+\item New behaviour covered by at least one \code{.spec.py} test.
+\item No new \code{Any} types, no bare \code{except}, no commented-out code.
+\end{itemize}
+
+Commit message format follows Conventional Commits:
+\code{type(scope): short description} where \code{type} is one of \code{feat}, \code{fix}, \code{docs}, \code{refactor}, \code{test}, \code{chore}.
+
+
+%% ============================================================
+%% SECTION 9: ONTOLOGY COVERAGE POLICY (v1.5)
+%% ============================================================
+\section{Ontology Coverage Policy}
+\label{sec:ontology-coverage}
+
+\subsection{Coverage Target}
+
+The Hebrew Manuscripts Ontology (\filepath{ontology/hebrew-manuscripts.ttl}) defines 73 HM-namespace classes, 133 HM object properties, and 104 HM datatype properties, plus borrowed LRMOO and CIDOC-CRM terms. The pipeline targets \textbf{near-100\% coverage} of all ontology terms that can be derived from NLI MARC records. Every intentional gap must be documented here with a justification.
+
+\subsection{MARC Field Handlers (v1.5 additions)}
+
+Version 1.5 extended \filepath{converter/transformer/field\_handlers.py} with 12 new static handler methods, listed in Table~\ref{tbl:v15-handlers}.
+
+\begin{longtable}{|l|p{4cm}|p{5cm}|}
+\hline
+\textbf{Handler} & \textbf{MARC Tag(s)} & \textbf{Fields populated in \code{ExtractedData}} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Handler} & \textbf{MARC Tag(s)} & \textbf{Fields populated in \code{ExtractedData}} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{handle\_040} & 040 & \code{holding\_institution} (cataloguing agency) \\
+\hline
+\code{handle\_090\_shelfmark} & 090, 091, 093, 099 & \code{shelfmark} \\
+\hline
+\code{handle\_520} & 520 & \code{summary} \\
+\hline
+\code{handle\_540} & 540 & \code{rights\_statement}, \code{usage\_restriction}, \code{restriction\_url} \\
+\hline
+\code{handle\_541} & 541 & \code{acquisition\_source} \\
+\hline
+\code{handle\_542} & 542 & \code{copyright\_notice} \\
+\hline
+\code{handle\_546} & 546 & language script note appended to \code{language} \\
+\hline
+\code{handle\_583} & 583 & \code{condition\_notes} \\
+\hline
+\code{handle\_730} & 730 & \code{related\_works} \\
+\hline
+\code{handle\_740} & 740 & \code{related\_works} \\
+\hline
+\code{handle\_751} & 751 & \code{related\_places} \\
+\hline
+\code{handle\_852} & 852 & \code{holding\_institution}, \code{shelfmark}, \code{iiif\_manifest\_url} \\
+\hline
+\caption{New MARC field handlers added in v1.5.}
+\label{tbl:v15-handlers}
+\end{longtable}
+
+\noindent The existing \code{handle\_500} method was also enhanced to detect the following physical-feature patterns in both Hebrew and English free-text notes: \code{has\_watermark}, \code{has\_decoration}, \code{has\_vocalization}, \code{has\_cantillation}, \code{has\_multiple\_hands}, \code{has\_incipit}, \code{has\_explicit}.
+
+\subsection{New RDF Graph Builder Methods (v1.5)}
+
+Ten new private methods were added to \code{GraphBuilder} in \filepath{converter/rdf/graph\_builder.py}, all called at the end of \code{build\_graph()}:
+
+\begin{longtable}{|l|p{4.5cm}|p{4.5cm}|}
+\hline
+\textbf{Method} & \textbf{Ontology classes instantiated} & \textbf{Guard condition} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Method} & \textbf{Ontology classes instantiated} & \textbf{Guard condition} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{\_add\_scribal\_interventions} & \code{ScribalIntervention}, \code{TextCorrection}, \code{MarginalAddition}, \code{Marginalia}, \code{HandChange} & \code{data.scribal\_interventions} non-empty \\
+\hline
+\code{\_add\_canonical\_references} & \code{BiblicalReference}, \code{TalmudicReference}, \code{MishnaicReference}, \code{HalachicReference} & \code{data.canonical\_references} non-empty \\
+\hline
+\code{\_add\_digital\_access} & \code{DigitalAccess} & \code{data.digital\_url} present \\
+\hline
+\code{\_add\_rights\_determination} & \code{RightsDetermination}, \code{UsageRestriction} & \code{rights\_statement} or \code{copyright\_notice} present \\
+\hline
+\code{\_add\_physical\_holding} & \code{PhysicalHolding} & \code{data.holding\_institution} present \\
+\hline
+\code{\_add\_physical\_features} & \code{Watermark}, \code{Decoration}, \code{HandChange} & always called; guarded internally per flag \\
+\hline
+\code{\_add\_related\_works} & \code{F1\_Work} & \code{data.related\_works} non-empty \\
+\hline
+\code{\_add\_related\_places} & \code{E53\_Place} & \code{data.related\_places} non-empty \\
+\hline
+\code{\_add\_condition\_notes} & \code{ConditionType} & \code{data.condition\_notes} non-empty \\
+\hline
+\code{\_add\_codicological\_hierarchy\_from\_data} & \code{CodicologicalHierarchy}, \code{HierarchyType} & always called; guarded internally \\
+\hline
+\caption{New \code{GraphBuilder} methods and the ontology classes they instantiate (v1.5).}
+\label{tbl:v15-methods}
+\end{longtable}
+
+\subsection{Intentional Coverage Gaps}
+
+The following ontology classes and properties cannot be populated from NLI MARC data and are therefore intentionally absent from pipeline output. Every gap is justified below.
+
+\begin{longtable}{|p{4.5cm}|p{8.5cm}|}
+\hline
+\textbf{Term} & \textbf{Justification for non-use} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Term} & \textbf{Justification for non-use} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{VocalizationType} & Subtype classification of vocalization systems (Tiberian, Babylonian, Palestinian) requires manuscript-specialist annotation; not encoded in any standard MARC field. \\
+\hline
+\code{InterpretationMethod} & Records how a text was interpreted hermeneutically; requires scholarly editorial input not present in catalog data. \\
+\hline
+\code{StemmaHypothesis} / \code{StemmaPosition} & Stemmatic relationships between manuscripts are established through philological collation, not MARC cataloging. A dedicated stemma module is planned for v2.0. \\
+\hline
+\code{HypotheticalExemplar} & A conjectured (non-extant) ancestor manuscript; can only be asserted by a critical edition scholar, not a catalog record. \\
+\hline
+\code{CharacterLocation} / \code{WordLocation} / \code{LineLocation} & Precise within-text coordinates require full-text transcription with standoff markup; MARC records provide no positional information. \\
+\hline
+\code{variant\_text} / \code{standard\_text} & Textual variant readings require collation data from a critical apparatus; absent from catalog records. \\
+\hline
+\code{has\_consensus\_level\_type} & A scholarly assessment of consensus among witnesses; requires post-collation editorial judgement. \\
+\hline
+\caption{Intentional ontology coverage gaps and their justifications.}
+\label{tbl:coverage-gaps}
+\end{longtable}
+
+\subsection{Coverage Measurement}
+
+Ontology coverage is measured by running the pipeline over the full \filepath{data/tsvs/17th\_century\_samples.tsv} fixture (897 records) and comparing the set of RDF types and predicates used against the full ontology term set. The \code{/check-coverage} Claude Code skill automates this measurement. The v1.4 baseline was 28/73 classes (38\%) and 66/237 HM properties (28\%). Version 1.5 targets $\geq$85\% of all terms that appear in Table~\ref{tbl:coverage-gaps} and above.
+
+
+%% ============================================================
+%% SECTION 10: TECHNICAL REQUIREMENTS
+%% ============================================================
+\section{Technical Requirements}
+\label{sec:requirements}
+
+This section extends Section~14 of \emph{ProjectDefinitionDocument.tex} with requirements introduced by the desktop application layer.
+
+\subsection{Runtime Requirements}
+
+\begin{longtable}{|l|p{3cm}|p{3cm}|p{3cm}|}
+\hline
+\textbf{Component} & \textbf{Minimum} & \textbf{Recommended} & \textbf{Notes} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Component} & \textbf{Minimum} & \textbf{Recommended} & \textbf{Notes} \\
+\hline
+\endhead
+\hline
+\endfoot
+Python & 3.12 & 3.12 & Installed by uv bootstrap \\
+\hline
+PyQt6 & 6.7 & latest & arm64 wheel on PyPI \\
+\hline
+uv & 0.5 & latest & Self-installs via curl/pwsh \\
+\hline
+platformdirs & 4.2 & latest & Cross-platform paths \\
+\hline
+macOS & 12.3 (Monterey) & 14 (Sonoma) & MPS requires 12.3+ \\
+\hline
+Windows & 10 64-bit & 11 64-bit & PowerShell 5.1+ \\
+\hline
+Disk (app) & 3\,GB & 5\,GB & App + CPU PyTorch \\
+\hline
+Disk (models) & 2.2\,GB & 2.2\,GB & Single joint NER model downloaded at first run \\
+\hline
+RAM & 16\,GB & 32\,GB & For NER batch inference \\
+\hline
+GPU & None (CPU fallback) & Apple M-series or NVIDIA & For NER inference speed \\
+\hline
+\end{longtable}
+
+\subsection{Build Requirements}
+
+\begin{longtable}{|l|l|l|l|}
+\hline
+\textbf{Tool} & \textbf{Version} & \textbf{Platform} & \textbf{Source} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Tool} & \textbf{Version} & \textbf{Platform} & \textbf{Source} \\
+\hline
+\endhead
+\hline
+\endfoot
+\code{pkgbuild} / \code{productbuild} & macOS built-in & macOS only & Xcode Command Line Tools \\
+\hline
+\code{hdiutil} & macOS built-in & macOS only & Xcode Command Line Tools \\
+\hline
+Inno Setup & 6.x & Windows only & Free, \code{jrsoftware.org} \\
+\hline
+\code{ruff} & $\geq$0.4 & Both & \code{uv tool install ruff} \\
+\hline
+\code{mypy} & $\geq$1.10 & Both & \code{uv tool install mypy} \\
+\hline
+\code{pytest} + \code{pytest-cov} & $\geq$8.0 & Both & dev dependency in \code{pyproject.toml} \\
+\hline
+\end{longtable}
+
+
+%% ============================================================
+%% SECTION 11: PHASED RELEASE ROADMAP
+%% ============================================================
+\section{Phased Release Roadmap}
+\label{sec:roadmap}
+
+\begin{longtable}{|l|l|p{5cm}|l|}
+\hline
+\textbf{Version} & \textbf{Milestone} & \textbf{Scope} & \textbf{Target} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Version} & \textbf{Milestone} & \textbf{Scope} & \textbf{Target} \\
+\hline
+\endhead
+\hline
+\endfoot
+v0.1 & Foundation & Migrate to \code{pyproject.toml} + uv; CI passing on both platforms; all existing tests green & Q2 2026 \\
+\hline
+v0.2 & Full GUI & PyQt6 \code{MainWindow} with all six stage panels; \code{StageProgressWidget}; log viewer & Q2 2026 \\
+\hline
+v0.3 & macOS installer & \code{.pkg} + \code{.dmg}; first-run model wizard; MPS GPU support verified & Q3 2026 \\
+\hline
+v0.4 & Windows installer & Inno Setup \code{.exe}; CUDA GPU support verified; PowerShell bootstrap & Q3 2026 \\
+\hline
+v0.5 & Release pipeline & GitHub Actions auto-build on tag; both installers uploaded to GitHub Release & Q3 2026 \\
+\hline
+v1.0 & Public release & Documentation site; \code{CONTRIBUTING.md}; all stages integrated end-to-end & Q4 2026 \\
+\hline
+\multicolumn{4}{|l|}{\textit{Completed milestones}} \\
+\hline
+v1.4 & Epistemological metadata & Certainty levels, attribution sources, cataloging-view and philological-view paradigm bridge & Mar 2026 \\
+\hline
+v1.5 & Ontology coverage & 12 new MARC field handlers; 10 new \code{GraphBuilder} methods; coverage target $\geq$85\% of mappable terms; 33 e2e integration tests & Mar 2026 \\
+\hline
+\end{longtable}
+
+
+%% ============================================================
+%% APPENDIX: DOCUMENT MAINTENANCE
+%% ============================================================
+\appendix
+\section{Document Maintenance}
+\label{sec:maintenance}
+
+This document is a living specification. It must be kept in sync with the implementation. The following rules govern updates:
+
+\begin{itemize}
+\item Any pull request that changes the application architecture (new layer, new component, removed component) must include an update to the relevant section of this document in the same commit.
+\item Any pull request that changes the module structure (\filepath{src/mhm\_pipeline/} package tree) must update Section~\ref{sec:modules}.
+\item Any pull request that changes the GUI design (new panel, new widget, changed settings key) must update Section~\ref{sec:gui}.
+\item Any pull request that changes the installer strategy or bootstrap scripts must update Section~\ref{sec:distribution}.
+\item Changes to \emph{ProjectDefinitionDocument.tex} that affect the pipeline API (new stage, changed interface) must be reflected in the component table in Section~\ref{sec:architecture}.
+\end{itemize}
+
+The PR checklist in \filepath{.github/pull\_request\_template.md} includes a checkbox: ``\emph{Design documents updated if architecture changed}.''
+
+\end{document}
+

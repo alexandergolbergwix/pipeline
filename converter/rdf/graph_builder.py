@@ -221,7 +221,32 @@ class GraphBuilder:
         # Add epistemological metadata for catalog-derived data (v1.4)
         if self.add_epistemological_status:
             self._add_epistemological_metadata(graph, ms_uri, control_number)
-        
+
+        # v1.5 coverage extensions
+        if data.scribal_interventions:
+            self._add_scribal_interventions(graph, ms_uri, data.scribal_interventions, control_number)
+        if data.canonical_references:
+            self._add_canonical_references(graph, ms_uri, data.canonical_references, work_uri, control_number)
+        if data.digital_url:
+            self._add_digital_access(graph, ms_uri, data.digital_url, control_number, data.iiif_manifest_url)
+        if data.rights_statement or data.copyright_notice:
+            self._add_rights_determination(
+                graph, ms_uri,
+                data.rights_statement, data.copyright_notice,
+                data.usage_restriction, data.restriction_url,
+                control_number,
+            )
+        if data.holding_institution:
+            self._add_physical_holding(graph, ms_uri, data.holding_institution, data.shelfmark, control_number)
+        self._add_physical_features(graph, ms_uri, data, control_number)
+        if data.related_works:
+            self._add_related_works(graph, ms_uri, data.related_works, work_uri)
+        if data.related_places:
+            self._add_related_places(graph, ms_uri, data.related_places, prod_uri)
+        if data.condition_notes:
+            self._add_condition_notes(graph, ms_uri, data.condition_notes, control_number)
+        self._add_codicological_hierarchy_from_data(graph, ms_uri, data, control_number)
+
         return graph
     
     def _add_manuscript(self, graph: Graph, ms_uri: URIRef, data: ExtractedData,
@@ -700,7 +725,262 @@ class GraphBuilder:
                    Literal(binding_info, lang='he')))
         
         graph.add((ms_uri, HM.has_binding, binding_uri))
-    
+
+    # ── v1.5 new emission methods ─────────────────────────────────────────────
+
+    def _add_scribal_interventions(self, graph: Graph, ms_uri: URIRef,
+                                   interventions: List[Dict[str, Any]],
+                                   control_number: str) -> None:
+        """Emit ScribalIntervention instances (TextCorrection, MarginalAddition,
+        HandChange, Marginalia) for each detected intervention."""
+        type_map = {
+            'Correction_type':           HM.TextCorrection,
+            'Erasure_type':              HM.ScribalIntervention,
+            'Interlinear_addition_type': HM.MarginalAddition,
+            'Marginal_gloss_type':       HM.Marginalia,
+            'Later_hand_type':           HM.HandChange,
+        }
+        seen: set[str] = set()
+        for idx, iv in enumerate(interventions, 1):
+            iv_type = iv.get('type', 'Correction_type')
+            if iv_type in seen:
+                continue
+            seen.add(iv_type)
+            rdf_class = type_map.get(iv_type, HM.ScribalIntervention)
+            iv_uri = URIRef(f"{HM}Intervention_{control_number}_{iv_type}")
+            graph.add((iv_uri, RDF.type, rdf_class))
+            graph.add((iv_uri, RDF.type, HM.ScribalIntervention))
+            label_en = iv_type.replace('_type', '').replace('_', ' ')
+            graph.add((iv_uri, RDFS.label, Literal(label_en, lang='en')))
+            if iv.get('source_note'):
+                graph.add((iv_uri, HM.intervention_description,
+                           Literal(iv['source_note'], lang='he')))
+            graph.add((ms_uri, HM.has_scribal_intervention, iv_uri))
+            graph.add((iv_uri, HM.is_intervention_in, ms_uri))
+
+    def _add_canonical_references(self, graph: Graph, ms_uri: URIRef,
+                                   refs: List[Dict[str, Any]],
+                                   work_uri: Optional[URIRef],
+                                   control_number: str) -> None:
+        """Emit BiblicalReference / TalmudicReference / MishnaicReference /
+        HalachicReference instances for each detected canonical reference."""
+        hierarchy_class_map = {
+            'Bible':        HM.BiblicalReference,
+            'Talmud_Bavli': HM.TalmudicReference,
+            'Mishnah':      HM.MishnaicReference,
+            'Halacha':      HM.HalachicReference,
+        }
+        seen: set[str] = set()
+        for ref in refs:
+            hier = ref.get('hierarchy', 'Bible')
+            key = hier + ref.get('book', ref.get('tractate', ''))
+            if key in seen:
+                continue
+            seen.add(key)
+            rdf_class = hierarchy_class_map.get(hier, HM.CanonicalReference)
+            book_id = ref.get('book') or ref.get('tractate', 'unknown')
+            ref_uri = URIRef(
+                f"{HM}CanonRef_{control_number}_{hier}_{book_id}"
+                .replace(' ', '_')
+            )
+            graph.add((ref_uri, RDF.type, rdf_class))
+            graph.add((ref_uri, RDF.type, HM.CanonicalReference))
+            graph.add((ref_uri, RDFS.label, Literal(f"{hier}: {book_id}", lang='en')))
+            # Specific datatype properties
+            if ref.get('book'):
+                graph.add((ref_uri, HM.book_name,
+                           Literal(ref['book'], datatype=XSD.string)))
+            if ref.get('chapter'):
+                graph.add((ref_uri, HM.chapter_number,
+                           Literal(int(ref['chapter']), datatype=XSD.integer)))
+            if ref.get('verse'):
+                graph.add((ref_uri, HM.verse_number,
+                           Literal(int(ref['verse']), datatype=XSD.integer)))
+            if ref.get('tractate'):
+                graph.add((ref_uri, HM.tractate_name,
+                           Literal(ref['tractate'], datatype=XSD.string)))
+            if ref.get('folio'):
+                graph.add((ref_uri, HM.talmud_folio,
+                           Literal(ref['folio'], datatype=XSD.string)))
+            target = work_uri if work_uri else ms_uri
+            graph.add((target, HM.covers_canonical_range, ref_uri))
+            graph.add((target, HM.is_commentary_on_canonical, ref_uri))
+
+    def _add_digital_access(self, graph: Graph, ms_uri: URIRef,
+                             digital_url: str, control_number: str,
+                             iiif_url: Optional[str] = None) -> None:
+        """Emit a DigitalAccess instance linked to the manuscript."""
+        da_uri = URIRef(f"{HM}DigitalAccess_{control_number}")
+        graph.add((da_uri, RDF.type, HM.DigitalAccess))
+        graph.add((da_uri, RDFS.label,
+                   Literal(f"Digital access for MS {control_number}", lang='en')))
+        graph.add((da_uri, HM.digital_access_url,
+                   Literal(digital_url, datatype=XSD.anyURI)))
+        if iiif_url:
+            graph.add((da_uri, HM.iiif_manifest_url,
+                       Literal(iiif_url, datatype=XSD.anyURI)))
+            graph.add((da_uri, HM.digital_access_type,
+                       Literal('IIIF', datatype=XSD.string)))
+        graph.add((ms_uri, HM.has_digital_access, da_uri))
+        graph.add((da_uri, HM.is_digital_access_of, ms_uri))
+
+    def _add_rights_determination(self, graph: Graph, ms_uri: URIRef,
+                                   rights_statement: Optional[str],
+                                   copyright_notice: Optional[str],
+                                   usage_restriction: Optional[str],
+                                   restriction_url: Optional[str],
+                                   control_number: str) -> None:
+        """Emit RightsDetermination and UsageRestriction instances."""
+        if rights_statement or copyright_notice:
+            rd_uri = URIRef(f"{HM}Rights_{control_number}")
+            graph.add((rd_uri, RDF.type, HM.RightsDetermination))
+            graph.add((rd_uri, RDFS.label,
+                       Literal(f"Rights for MS {control_number}", lang='en')))
+            if rights_statement:
+                graph.add((rd_uri, HM.rights_status,
+                           Literal(rights_statement, datatype=XSD.string)))
+                graph.add((rd_uri, HM.has_rights_statement,
+                           Literal(rights_statement, datatype=XSD.string)))
+            if copyright_notice:
+                graph.add((rd_uri, HM.copyright_notice,
+                           Literal(copyright_notice, datatype=XSD.string)))
+            graph.add((ms_uri, HM.has_rights_determination, rd_uri))
+            graph.add((rd_uri, HM.is_rights_determination_of, ms_uri))
+
+        if usage_restriction:
+            ur_uri = URIRef(f"{HM}UsageRestriction_{control_number}")
+            graph.add((ur_uri, RDF.type, HM.UsageRestriction))
+            graph.add((ur_uri, HM.usage_restriction_note,
+                       Literal(usage_restriction, datatype=XSD.string)))
+            if restriction_url:
+                graph.add((ur_uri, HM.restriction_url,
+                           Literal(restriction_url, datatype=XSD.anyURI)))
+            graph.add((ms_uri, HM.has_usage_restriction, ur_uri))
+            graph.add((ur_uri, HM.is_usage_restriction_of, ms_uri))
+
+    def _add_physical_holding(self, graph: Graph, ms_uri: URIRef,
+                               holding_institution: str,
+                               shelfmark: Optional[str],
+                               control_number: str) -> None:
+        """Emit a PhysicalHolding instance for the manuscript's location."""
+        ph_uri = URIRef(f"{HM}Holding_{control_number}")
+        graph.add((ph_uri, RDF.type, HM.PhysicalHolding))
+        graph.add((ph_uri, RDFS.label,
+                   Literal(f"Holding of MS {control_number}", lang='en')))
+        graph.add((ph_uri, HM.holding_institution,
+                   Literal(holding_institution, datatype=XSD.string)))
+        if shelfmark:
+            graph.add((ph_uri, HM.shelfmark,
+                       Literal(shelfmark, datatype=XSD.string)))
+            graph.add((ms_uri, HM.shelfmark,
+                       Literal(shelfmark, datatype=XSD.string)))
+        graph.add((ms_uri, HM.has_physical_holding, ph_uri))
+        graph.add((ph_uri, HM.holds_manuscript, ms_uri))
+        # Place: held_at links manuscript to place
+        inst_place_uri = self.uri_gen.place_uri(holding_institution)
+        graph.add((inst_place_uri, RDF.type, CIDOC.E53_Place))
+        graph.add((inst_place_uri, RDFS.label,
+                   Literal(holding_institution, lang='en')))
+        graph.add((ms_uri, HM.held_at, inst_place_uri))
+
+    def _add_physical_features(self, graph: Graph, ms_uri: URIRef,
+                                data: "ExtractedData", control_number: str) -> None:
+        """Emit Watermark, Decoration, Marginalia, and HandChange class instances
+        detected from 500/546 notes."""
+        if data.has_watermark:
+            wm_uri = URIRef(f"{HM}Watermark_{control_number}")
+            graph.add((wm_uri, RDF.type, HM.Watermark))
+            graph.add((wm_uri, RDFS.label,
+                       Literal(f"Watermark in MS {control_number}", lang='en')))
+            graph.add((ms_uri, HM.has_decoration, wm_uri))
+
+        if data.has_decoration:
+            dec_uri = URIRef(f"{HM}Decoration_{control_number}")
+            graph.add((dec_uri, RDF.type, HM.Decoration))
+            graph.add((dec_uri, RDFS.label,
+                       Literal(f"Decoration in MS {control_number}", lang='en')))
+            graph.add((ms_uri, HM.has_decoration, dec_uri))
+
+        if data.has_multiple_hands:
+            hc_uri = URIRef(f"{HM}HandChange_{control_number}")
+            graph.add((hc_uri, RDF.type, HM.HandChange))
+            graph.add((hc_uri, RDFS.label,
+                       Literal(f"Hand change in MS {control_number}", lang='en')))
+            graph.add((ms_uri, HM.has_scribal_intervention, hc_uri))
+            graph.add((hc_uri, HM.is_intervention_in, ms_uri))
+
+        if data.has_vocalization:
+            graph.add((ms_uri, HM.has_vocalization,
+                       Literal(True, datatype=XSD.boolean)))
+
+        if data.has_cantillation:
+            graph.add((ms_uri, HM.has_cantillation,
+                       Literal(True, datatype=XSD.boolean)))
+
+        if data.has_incipit:
+            graph.add((ms_uri, HM.has_incipit,
+                       Literal(data.has_incipit, datatype=XSD.string)))
+
+        if data.has_explicit:
+            graph.add((ms_uri, HM.has_explicit,
+                       Literal(data.has_explicit, datatype=XSD.string)))
+
+        if data.has_multiple_hands:
+            graph.add((ms_uri, HM.has_multiple_hands,
+                       Literal(True, datatype=XSD.boolean)))
+
+    def _add_related_works(self, graph: Graph, ms_uri: URIRef,
+                           related_works: List[Dict[str, Any]],
+                           work_uri: Optional[URIRef]) -> None:
+        """Emit has_linked_work links for 730/related-title entries."""
+        for rel in related_works:
+            title = rel.get('title')
+            if not title:
+                continue
+            rw_uri = self.uri_gen.work_uri(title)
+            graph.add((rw_uri, RDF.type, LRMOO.F1_Work))
+            graph.add((rw_uri, HM.has_title, Literal(title, lang='he')))
+            graph.add((rw_uri, RDFS.label, Literal(title, lang='he')))
+            target = work_uri if work_uri else ms_uri
+            graph.add((target, HM.has_linked_work, rw_uri))
+
+    def _add_related_places(self, graph: Graph, ms_uri: URIRef,
+                            related_places: List[str],
+                            prod_uri: Optional[URIRef]) -> None:
+        """Emit additional place associations from 751 geographic added entries."""
+        for place_name in related_places:
+            place_uri = self.uri_gen.place_uri(place_name)
+            graph.add((place_uri, RDF.type, CIDOC.E53_Place))
+            graph.add((place_uri, RDFS.label, Literal(place_name, lang='he')))
+            graph.add((ms_uri, HM.mentions_place, place_uri))
+
+    def _add_condition_notes(self, graph: Graph, ms_uri: URIRef,
+                             condition_notes: List[str],
+                             control_number: str) -> None:
+        """Emit ConditionType instances from 583 action notes."""
+        for idx, note in enumerate(condition_notes, 1):
+            cond_uri = URIRef(f"{HM}Condition_{control_number}_{idx:02d}")
+            graph.add((cond_uri, RDF.type, HM.ConditionType))
+            graph.add((cond_uri, RDFS.comment, Literal(note, lang='en')))
+            graph.add((ms_uri, CIDOC.P44_has_condition, cond_uri))
+
+    def _add_codicological_hierarchy_from_data(
+        self, graph: Graph, ms_uri: URIRef,
+        data: "ExtractedData", control_number: str
+    ) -> None:
+        """Emit CodicologicalHierarchy, AtomicCodicologicalUnit /
+        CompositeCodicologicalUnit instances when we have multi-text structure."""
+        if not (data.hierarchy_type or data.is_anthology or data.is_multi_volume):
+            return
+        hier_type = data.hierarchy_type or (
+            'ComplexHierarchy' if data.is_anthology else 'SimpleHierarchy'
+        )
+        self.add_codicological_hierarchy(
+            graph, ms_uri, control_number,
+            hierarchy_type=hier_type,
+            max_depth=2 if data.is_anthology else 1,
+        )
+
     def _format_time_label(self, dates: Dict[str, Any]) -> str:
         """Format dates dictionary into a readable label.
         

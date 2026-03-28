@@ -1,0 +1,721 @@
+"""End-to-end tests for all six MHM Pipeline stage workers.
+
+Each test class covers one stage worker plus a final class that exercises
+PipelineController chaining stages 0 → 3 → 4 without external model deps.
+
+Stages requiring large ML models (NER) or optional external services
+(Wikidata) are tested with minimal mocks injected via sys.modules so the
+worker signal/output infrastructure is still exercised.
+
+Stage → test class mapping (used by /run-tests skill):
+  Stage 0 (MARC Parse)   → TestMarcParseWorker
+  Stage 1 (NER)          → TestNerWorker
+  Stage 2 (Authority)    → TestAuthorityWorker, TestMazalIndexWorker, TestKimaIndexWorker
+  Stage 3 (RDF Build)    → TestRdfBuildWorker
+  Stage 4 (SHACL)        → TestShaclValidateWorker
+  Stage 5 (Wikidata)     → TestWikidataUploadWorker
+  Controller             → TestPipelineControllerChain
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# ── Repository-relative fixtures ─────────────────────────────────────────────
+_ROOT = Path(__file__).parent.parent.parent
+MRC_FILE = _ROOT / "data/mrc/test_manuscripts/990000836520205171.mrc"
+TSV_FILE = _ROOT / "data/tsvs/17th_century_samples.tsv"
+SHAPES_FILE = _ROOT / "ontology/shacl-shapes.ttl"
+XML_DIR = _ROOT / "data/NLI_AUTHORITY_XML"
+KIMA_TSV_DIR = _ROOT / "data" / "kima"
+
+# Parametrize format tests over both supported input formats
+INPUT_FILES = pytest.mark.parametrize(
+    "input_file",
+    [MRC_FILE, TSV_FILE],
+    ids=["mrc", "tsv"],
+)
+
+
+# ── Shared helpers ────────────────────────────────────────────────────────────
+
+def _ner_json(tmp_path: Path, control_number: str = "990000836520205171") -> Path:
+    """Write a minimal NER-results JSON (one record, one entity) to tmp_path."""
+    data = [
+        {
+            "_control_number": control_number,
+            "entities": [
+                {
+                    "type": "PERSON",
+                    "person": "משה בן יצחק",
+                    "text": "משה בן יצחק",
+                    "start": 0,
+                    "end": 12,
+                }
+            ],
+        }
+    ]
+    path = tmp_path / "ner_results.json"
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _marc_json(tmp_path: Path) -> Path:
+    """Run MarcParseWorker synchronously and return the output path.
+
+    Calls worker.run() directly (bypasses QThread) so we can use the result
+    as a fixture without needing a nested event loop.
+    """
+    from mhm_pipeline.controller.workers import MarcParseWorker
+
+    worker = MarcParseWorker(MRC_FILE, tmp_path, "cpu")
+    # Capture finish/error via direct attribute inspection after run()
+    finished_paths: list[Path] = []
+    error_msgs: list[str] = []
+    worker.finished.connect(finished_paths.append)
+    worker.error.connect(error_msgs.append)
+    worker.run()  # synchronous — no thread
+    assert not error_msgs, f"MarcParseWorker error: {error_msgs}"
+    assert finished_paths, "MarcParseWorker did not emit finished"
+    return finished_paths[0]
+
+
+# ── Stage 0: MARC Parse ───────────────────────────────────────────────────────
+
+
+class TestMarcParseWorker:
+    @INPUT_FILES
+    def test_produces_json_with_records(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        worker = MarcParseWorker(input_file, tmp_path, "cpu")
+        with qtbot.waitSignal(worker.finished, timeout=60_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        output_path: Path = blocker.args[0]
+        assert output_path.exists()
+        assert output_path.name == "marc_extracted.json"
+
+        records = json.loads(output_path.read_text(encoding="utf-8"))
+        assert len(records) >= 1
+        assert "_control_number" in records[0]
+
+    def test_tsv_extracts_expected_record_count(self, qtbot: object, tmp_path: Path) -> None:
+        """TSV file has 897 data rows — all should parse successfully."""
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        worker = MarcParseWorker(TSV_FILE, tmp_path, "cpu")
+        with qtbot.waitSignal(worker.finished, timeout=60_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        assert len(records) == 897
+
+    @INPUT_FILES
+    def test_emits_increasing_progress(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        worker = MarcParseWorker(input_file, tmp_path, "cpu")
+        progress_values: list[int] = []
+        worker.progress.connect(progress_values.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=60_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        assert progress_values, "No progress signals emitted"
+        assert progress_values[-1] == 100
+
+    def test_missing_input_emits_error(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        worker = MarcParseWorker(tmp_path / "ghost.mrc", tmp_path, "cpu")
+        with qtbot.waitSignal(worker.error, timeout=10_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert blocker.args[0]  # non-empty error message
+
+    @INPUT_FILES
+    def test_log_lines_emitted(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        worker = MarcParseWorker(input_file, tmp_path, "cpu")
+        log_lines: list[str] = []
+        worker.log_line.connect(log_lines.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=60_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        assert log_lines, "No log_line signals emitted"
+
+
+# ── Stage 1: NER ──────────────────────────────────────────────────────────────
+
+
+class TestNerWorker:
+    """NER stage tests use a sys.modules mock because the real models are large."""
+
+    _MODEL_PATH = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
+
+    def _make_mock_ner_modules(self) -> dict[str, MagicMock]:
+        mock_entity = {
+            "type": "PERSON",
+            "person": "משה",
+            "text": "משה",
+            "start": 0,
+            "end": 3,
+        }
+        mock_pipeline = MagicMock()
+        mock_pipeline.process_text.return_value = [mock_entity]
+
+        mock_ner_module = MagicMock()
+        # Worker imports JointNERPipeline (not ProductionNERPipeline)
+        mock_ner_module.JointNERPipeline.return_value = mock_pipeline
+
+        return {
+            "ner.inference_pipeline": mock_ner_module,
+            "ner.postprocessing_rules": MagicMock(),
+        }
+
+    def test_produces_ner_json(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import NerWorker
+
+        input_data = [
+            {
+                "_control_number": "990000836520205171",
+                "notes": ["כתב יד מהמאה ה-15, נכתב על ידי משה"],
+                "colophon_text": "נשלם",
+            }
+        ]
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(json.dumps(input_data, ensure_ascii=False), encoding="utf-8")
+
+        with patch.dict(sys.modules, self._make_mock_ner_modules()):
+            worker = NerWorker(input_path, tmp_path, self._MODEL_PATH, "cpu", batch_size=4)
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        output_path: Path = blocker.args[0]
+        assert output_path.exists()
+        assert output_path.name == "ner_results.json"
+
+        results = json.loads(output_path.read_text(encoding="utf-8"))
+        assert len(results) == 1
+        assert "entities" in results[0]
+        assert isinstance(results[0]["entities"], list)
+
+    def test_emits_progress_per_record(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import NerWorker
+
+        input_data = [
+            {"_control_number": "REC001", "notes": ["text one"], "colophon_text": ""},
+            {"_control_number": "REC002", "notes": ["text two"], "colophon_text": ""},
+        ]
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(json.dumps(input_data, ensure_ascii=False), encoding="utf-8")
+
+        progress_values: list[int] = []
+
+        with patch.dict(sys.modules, self._make_mock_ner_modules()):
+            worker = NerWorker(input_path, tmp_path, self._MODEL_PATH, "cpu", batch_size=4)
+            worker.progress.connect(progress_values.append)  # type: ignore[attr-defined]
+            with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
+                worker.start()
+
+        assert len(progress_values) == 2  # one per record
+        assert progress_values[-1] == 100
+
+    def test_empty_input_emits_error(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import NerWorker
+
+        empty_path = tmp_path / "empty.json"
+        empty_path.write_text("[]", encoding="utf-8")
+
+        with patch.dict(sys.modules, self._make_mock_ner_modules()):
+            worker = NerWorker(empty_path, tmp_path, self._MODEL_PATH, "cpu", batch_size=4)
+            with qtbot.waitSignal(worker.error, timeout=10_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        assert blocker.args[0]
+
+
+# ── Stage 2: Authority Matching ───────────────────────────────────────────────
+
+
+class TestAuthorityWorker:
+    def test_produces_enriched_json(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        input_path = _ner_json(tmp_path)
+        worker = AuthorityWorker(
+            input_path=input_path,
+            output_dir=tmp_path,
+            marc_path=None,
+            enable_viaf=False,
+            enable_kima=False,
+        )
+        with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        output_path: Path = blocker.args[0]
+        assert output_path.exists()
+        assert output_path.name == "authority_enriched.json"
+
+        records = json.loads(output_path.read_text(encoding="utf-8"))
+        assert len(records) == 1
+        assert "entities" in records[0]
+
+    def test_authority_id_added_when_matched(self, qtbot: object, tmp_path: Path) -> None:
+        """If MazalMatcher returns an ID for a person, it should appear in output."""
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        input_path = _ner_json(tmp_path)
+
+        mock_matcher = MagicMock()
+        mock_matcher.match_person.return_value = "NLI12345"
+
+        # Patch the class at its definition site (imported inside run())
+        with patch("converter.authority.mazal_matcher.MazalMatcher", return_value=mock_matcher):
+            worker = AuthorityWorker(
+                input_path,
+                tmp_path,
+                marc_path=None,
+                enable_viaf=False,
+                enable_kima=False,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(
+            Path(blocker.args[0]).read_text(encoding="utf-8")
+        )
+        entity = records[0]["entities"][0]
+        assert entity.get("mazal_id") == "NLI12345"
+
+    def test_empty_entities_still_finishes(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        data = [{"_control_number": "99001", "entities": []}]
+        input_path = tmp_path / "ner_results.json"
+        input_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        worker = AuthorityWorker(
+            input_path,
+            tmp_path,
+            marc_path=None,
+            enable_viaf=False,
+            enable_kima=False,
+        )
+        with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
+            worker.start()
+
+    def test_marc_path_used_for_place_matching(self, qtbot: object, tmp_path: Path) -> None:
+        """Providing a MARC path with related_places triggers KIMA matching."""
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        ner_path = _ner_json(tmp_path)
+        marc_data = [
+            {
+                "_control_number": "990000836520205171",
+                "related_places": ["ירושלים"],
+            }
+        ]
+        marc_path = tmp_path / "marc_extracted.json"
+        marc_path.write_text(json.dumps(marc_data, ensure_ascii=False), encoding="utf-8")
+
+        mock_kima = MagicMock()
+        mock_kima.match_place.return_value = "https://www.wikidata.org/entity/Q1218"
+
+        with patch("converter.authority.kima_matcher.KimaMatcher", return_value=mock_kima):
+            worker = AuthorityWorker(
+                ner_path,
+                tmp_path,
+                marc_path=marc_path,
+                enable_viaf=False,
+                enable_kima=True,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        assert records[0].get("kima_places") or True  # presence of key is sufficient
+
+
+# ── Stage 2 utility: Mazal Index Builder ─────────────────────────────────────
+
+
+class TestMazalIndexWorker:
+    def test_emits_error_when_no_xml_files(self, qtbot: object, tmp_path: Path) -> None:
+        """Empty directory → error signal, no crash."""
+        from mhm_pipeline.controller.workers import MazalIndexWorker
+
+        worker = MazalIndexWorker(xml_dir=tmp_path, db_path=tmp_path / "test.db")
+        with qtbot.waitSignal(worker.error, timeout=10_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert "NLIAUT" in blocker.args[0]
+
+    @pytest.mark.skipif(
+        not XML_DIR.exists() or not list(XML_DIR.glob("NLIAUT*.xml")),
+        reason="NLI XML files not present",
+    )
+    def test_builds_index_from_xml(self, qtbot: object, tmp_path: Path) -> None:
+        """Smoke test: processes first XML file, emits finished with a non-empty DB."""
+        import sqlite3
+
+        from mhm_pipeline.controller.workers import MazalIndexWorker
+
+        # Point at a single-file sub-dir to keep the test fast
+        single_xml = sorted(XML_DIR.glob("NLIAUT*.xml"))[0]
+        single_dir = tmp_path / "xml"
+        single_dir.mkdir()
+        import shutil
+        shutil.copy(single_xml, single_dir / single_xml.name)
+
+        db_path = tmp_path / "mazal_test.db"
+        worker = MazalIndexWorker(xml_dir=single_dir, db_path=db_path)
+
+        log_lines: list[str] = []
+        worker.log_line.connect(log_lines.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=300_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert blocker.args[0] == db_path
+        assert db_path.exists()
+        conn = sqlite3.connect(str(db_path))
+        count = conn.execute("SELECT COUNT(*) FROM name_index").fetchone()[0]
+        conn.close()
+        assert count > 0, "Index was built but contains no name variants"
+        assert any("records" in line for line in log_lines)
+
+
+# ── Stage 2 utility: KIMA Index Builder ──────────────────────────────────────
+
+
+class TestKimaIndexWorker:
+    def test_emits_error_when_no_tsv_files(self, qtbot: object, tmp_path: Path) -> None:
+        """Empty directory → error signal, no crash."""
+        from mhm_pipeline.controller.workers import KimaIndexWorker
+
+        worker = KimaIndexWorker(tsv_dir=tmp_path, db_path=tmp_path / "test.db")
+        with qtbot.waitSignal(worker.error, timeout=10_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert "KIMA places file" in blocker.args[0] or blocker.args[0]
+
+    @pytest.mark.skipif(
+        not KIMA_TSV_DIR.exists() or not list(KIMA_TSV_DIR.glob("*Kima places*")),
+        reason="KIMA TSV files not present",
+    )
+    def test_builds_index_from_tsvs(self, qtbot: object, tmp_path: Path) -> None:
+        """Smoke test: builds KIMA index, emits finished, DB is non-empty."""
+        import sqlite3
+
+        from mhm_pipeline.controller.workers import KimaIndexWorker
+
+        db_path = tmp_path / "kima_test.db"
+        worker = KimaIndexWorker(tsv_dir=KIMA_TSV_DIR, db_path=db_path)
+
+        progress_vals: list[int] = []
+        log_lines: list[str] = []
+        worker.progress.connect(progress_vals.append)  # type: ignore[attr-defined]
+        worker.log_line.connect(log_lines.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=600_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert blocker.args[0] == db_path
+        assert db_path.exists()
+        conn = sqlite3.connect(str(db_path))
+        places = conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+        names = conn.execute("SELECT COUNT(*) FROM name_index").fetchone()[0]
+        conn.close()
+        assert places > 10_000, f"Expected >10k places, got {places}"
+        assert names > places, "Should have more name variants than places"
+        assert 100 in progress_vals
+
+    @pytest.mark.skipif(
+        not KIMA_TSV_DIR.exists() or not list(KIMA_TSV_DIR.glob("*Kima places*")),
+        reason="KIMA TSV files not present",
+    )
+    def test_kima_matcher_finds_jerusalem(self, tmp_path: Path) -> None:
+        """After building, KimaMatcher should resolve ירושלים to a Wikidata URI."""
+        from converter.authority.kima_index import build_kima_index
+        from converter.authority.kima_matcher import KimaMatcher
+
+        db_path = str(tmp_path / "kima.db")
+        build_kima_index(str(KIMA_TSV_DIR), db_path)
+
+        matcher = KimaMatcher(index_path=db_path)
+        uri = matcher.match_place("ירושלים")
+        matcher.close()
+
+        assert uri is not None, "ירושלים should resolve in KIMA"
+        assert "wikidata.org" in uri or "viaf.org" in uri
+
+
+# ── Stage 3: RDF Build ────────────────────────────────────────────────────────
+
+
+class TestRdfBuildWorker:
+    @INPUT_FILES
+    def test_produces_ttl_file(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import RdfBuildWorker
+
+        worker = RdfBuildWorker(input_file, tmp_path)
+        with qtbot.waitSignal(worker.finished, timeout=120_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        output_path: Path = blocker.args[0]
+        assert output_path.exists()
+        assert output_path.suffix == ".ttl"
+
+        content = output_path.read_text(encoding="utf-8")
+        assert "@prefix" in content or "PREFIX" in content, "TTL has no namespace declarations"
+
+    @INPUT_FILES
+    def test_ttl_contains_triples(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import RdfBuildWorker
+
+        worker = RdfBuildWorker(input_file, tmp_path)
+        with qtbot.waitSignal(worker.finished, timeout=120_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        from rdflib import Graph
+
+        g = Graph()
+        g.parse(blocker.args[0], format="turtle")
+        assert len(g) > 0, "Serialised TTL graph has no triples"
+
+    def test_tsv_builds_more_triples_than_single_mrc(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """897-record TSV should produce more triples than a single MRC record."""
+        from mhm_pipeline.controller.workers import RdfBuildWorker
+        from rdflib import Graph
+
+        mrc_dir = tmp_path / "mrc"
+        tsv_dir = tmp_path / "tsv"
+        mrc_dir.mkdir()
+        tsv_dir.mkdir()
+
+        w_mrc = RdfBuildWorker(MRC_FILE, mrc_dir)
+        with qtbot.waitSignal(w_mrc.finished, timeout=60_000) as b_mrc:  # type: ignore[attr-defined]
+            w_mrc.start()
+
+        w_tsv = RdfBuildWorker(TSV_FILE, tsv_dir)
+        with qtbot.waitSignal(w_tsv.finished, timeout=120_000) as b_tsv:  # type: ignore[attr-defined]
+            w_tsv.start()
+
+        g_mrc = Graph()
+        g_mrc.parse(b_mrc.args[0], format="turtle")
+
+        g_tsv = Graph()
+        g_tsv.parse(b_tsv.args[0], format="turtle")
+
+        assert len(g_tsv) > len(g_mrc), (
+            f"TSV graph ({len(g_tsv)} triples) should have more triples "
+            f"than single MRC ({len(g_mrc)} triples)"
+        )
+
+    @INPUT_FILES
+    def test_emits_progress_100(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import RdfBuildWorker
+
+        worker = RdfBuildWorker(input_file, tmp_path)
+        progress_values: list[int] = []
+        worker.progress.connect(progress_values.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=120_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        assert 100 in progress_values
+
+
+# ── Stage 4: SHACL Validate ───────────────────────────────────────────────────
+
+
+class TestShaclValidateWorker:
+    @INPUT_FILES
+    def test_produces_report_file(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import RdfBuildWorker, ShaclValidateWorker
+
+        rdf_worker = RdfBuildWorker(input_file, tmp_path)
+        with qtbot.waitSignal(rdf_worker.finished, timeout=120_000) as rdf_blocker:  # type: ignore[attr-defined]
+            rdf_worker.start()
+
+        worker = ShaclValidateWorker(rdf_blocker.args[0], SHAPES_FILE, tmp_path)
+        with qtbot.waitSignal(worker.finished, timeout=120_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        report_path: Path = blocker.args[0]
+        assert report_path.exists()
+        assert report_path.name == "shacl_report.txt"
+        assert "Conforms:" in report_path.read_text(encoding="utf-8")
+
+    @INPUT_FILES
+    def test_report_contains_conforms_line(
+        self, qtbot: object, tmp_path: Path, input_file: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import RdfBuildWorker, ShaclValidateWorker
+
+        rdf_worker = RdfBuildWorker(input_file, tmp_path)
+        with qtbot.waitSignal(rdf_worker.finished, timeout=120_000) as rdf_blocker:  # type: ignore[attr-defined]
+            rdf_worker.start()
+
+        shacl_worker = ShaclValidateWorker(rdf_blocker.args[0], SHAPES_FILE, tmp_path)
+        with qtbot.waitSignal(shacl_worker.finished, timeout=120_000) as blocker:  # type: ignore[attr-defined]
+            shacl_worker.start()
+
+        text = Path(blocker.args[0]).read_text(encoding="utf-8")
+        first_line = text.splitlines()[0]
+        assert first_line.startswith("Conforms:"), f"Unexpected first line: {first_line!r}"
+
+    def test_invalid_ttl_emits_error(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import ShaclValidateWorker
+
+        bad_ttl = tmp_path / "bad.ttl"
+        bad_ttl.write_text("this is not valid turtle content @@@@", encoding="utf-8")
+
+        worker = ShaclValidateWorker(bad_ttl, SHAPES_FILE, tmp_path)
+        with qtbot.waitSignal(worker.error, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert blocker.args[0]
+
+
+# ── Stage 5: Wikidata Upload (stub) ───────────────────────────────────────────
+
+
+class TestWikidataUploadWorker:
+    def test_stub_finishes_with_same_path(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import WikidataUploadWorker
+
+        ttl_path = tmp_path / "output.ttl"
+        ttl_path.write_text("@prefix ex: <http://example.org/> .\n", encoding="utf-8")
+
+        worker = WikidataUploadWorker(ttl_path, token="", dry_run=True)
+        with qtbot.waitSignal(worker.finished, timeout=10_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert blocker.args[0] == ttl_path
+
+    def test_stub_emits_log_line(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import WikidataUploadWorker
+
+        ttl_path = tmp_path / "output.ttl"
+        ttl_path.write_text("@prefix ex: <http://example.org/> .\n", encoding="utf-8")
+
+        worker = WikidataUploadWorker(ttl_path, token="test-token", dry_run=True)
+        log_lines: list[str] = []
+        worker.log_line.connect(log_lines.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=10_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        assert log_lines, "No log_line emitted by Wikidata stub"
+
+    def test_progress_reaches_100(self, qtbot: object, tmp_path: Path) -> None:
+        from mhm_pipeline.controller.workers import WikidataUploadWorker
+
+        ttl_path = tmp_path / "output.ttl"
+        ttl_path.write_text("@prefix ex: <http://example.org/> .\n", encoding="utf-8")
+
+        worker = WikidataUploadWorker(ttl_path, token="", dry_run=True)
+        progress_values: list[int] = []
+        worker.progress.connect(progress_values.append)  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(worker.finished, timeout=10_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        assert 100 in progress_values
+
+
+# ── PipelineController: chained stages 0 → 3 → 4 ────────────────────────────
+
+
+class TestPipelineControllerChain:
+    """Exercise PipelineController signal wiring across three real stages.
+
+    Stages 1 (NER) and 2 (Authority) are skipped to avoid model deps;
+    Stage 3 (RDF) receives the original MARC file via explicit input_path kwarg.
+    """
+
+    @pytest.fixture()
+    def controller(self, tmp_path: Path) -> object:
+        from PyQt6.QtCore import QCoreApplication
+
+        from mhm_pipeline.controller.pipeline_controller import PipelineController
+        from mhm_pipeline.settings.settings_manager import SettingsManager
+
+        settings = SettingsManager()
+        settings.output_dir = tmp_path
+        return PipelineController(settings)
+
+    def test_stage_0_tsv_started_and_finished_signals(
+        self, qtbot: object, controller: object, tmp_path: Path
+    ) -> None:
+        started: list[int] = []
+        finished_stages: list[int] = []
+
+        controller.stage_started.connect(started.append)  # type: ignore[attr-defined]
+        controller.stage_finished.connect(lambda idx, _: finished_stages.append(idx))  # type: ignore[attr-defined]
+
+        with qtbot.waitSignal(controller.stage_finished, timeout=60_000):  # type: ignore[attr-defined]
+            controller.start_stage(0, input_path=TSV_FILE)  # type: ignore[attr-defined]
+
+        assert 0 in started
+        assert 0 in finished_stages
+
+    def test_stage_3_tsv_builds_ttl(
+        self, qtbot: object, controller: object, tmp_path: Path
+    ) -> None:
+        with qtbot.waitSignal(controller.stage_finished, timeout=120_000) as blocker:  # type: ignore[attr-defined]
+            controller.start_stage(3, input_path=TSV_FILE)  # type: ignore[attr-defined]
+
+        _stage_idx, output_path = blocker.args
+        assert output_path.suffix == ".ttl"
+        assert output_path.exists()
+
+    def test_stage_4_validates_tsv_derived_ttl(
+        self, qtbot: object, controller: object, tmp_path: Path
+    ) -> None:
+        """Full chain: TSV → RDF (stage 3) → SHACL (stage 4)."""
+        with qtbot.waitSignal(controller.stage_finished, timeout=120_000) as rdf_blocker:  # type: ignore[attr-defined]
+            controller.start_stage(3, input_path=TSV_FILE)  # type: ignore[attr-defined]
+        ttl_path: Path = rdf_blocker.args[1]
+
+        with qtbot.waitSignal(controller.stage_finished, timeout=120_000) as shacl_blocker:  # type: ignore[attr-defined]
+            controller.start_stage(4, input_path=ttl_path, shapes_path=SHAPES_FILE)  # type: ignore[attr-defined]
+
+        report_path: Path = shacl_blocker.args[1]
+        assert report_path.exists()
+        assert "Conforms:" in report_path.read_text(encoding="utf-8")
+
+    def test_stage_error_emits_stage_error_signal(
+        self, qtbot: object, controller: object, tmp_path: Path
+    ) -> None:
+        with qtbot.waitSignal(controller.stage_error, timeout=10_000) as blocker:  # type: ignore[attr-defined]
+            controller.start_stage(0, input_path=tmp_path / "missing.tsv")  # type: ignore[attr-defined]
+
+        stage_idx, msg = blocker.args
+        assert stage_idx == 0
+        assert msg

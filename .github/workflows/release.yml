@@ -1,0 +1,52 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS installer
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Build .pkg and .dmg
+        run: bash installer/macos/build_pkg.sh
+
+      - name: Upload macOS DMG
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MHMPipeline.dmg
+
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes
+
+      - name: Build .exe installer
+        run: iscc installer\windows\build_installer.iss
+
+      - name: Upload Windows EXE
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MHMPipeline-Setup.exe

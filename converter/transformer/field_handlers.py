@@ -65,7 +65,7 @@ class ExtractedData:
     certainty_levels: Dict[str, str] = None
     attribution_sources: Dict[str, str] = None
     data_from_colophon: List[str] = None
-    
+
     # v1.4 Ontology features: Codicological structure
     codicological_units: List[Dict[str, Any]] = None
     hierarchy_type: Optional[str] = None
@@ -73,16 +73,37 @@ class ExtractedData:
     is_multi_volume: bool = False
     volume_number: Optional[int] = None
     volume_info: Optional[str] = None
-    
+
     # v1.4 Ontology features: Scribal interventions
     scribal_interventions: List[Dict[str, Any]] = None
-    
+
     # v1.4 Ontology features: Canonical references
     canonical_references: List[Dict[str, Any]] = None
-    
+
     # v1.4 Ontology features: Text tradition
     text_traditions: List[str] = None
     textual_variants: List[Dict[str, Any]] = None
+
+    # v1.5 fields: physical + digital access + rights
+    summary: Optional[str] = None
+    has_incipit: Optional[str] = None
+    has_explicit: Optional[str] = None
+    has_vocalization: bool = False
+    has_cantillation: bool = False
+    has_watermark: bool = False
+    has_decoration: bool = False
+    has_multiple_hands: bool = False
+    condition_notes: List[str] = None
+    rights_statement: Optional[str] = None
+    usage_restriction: Optional[str] = None
+    restriction_url: Optional[str] = None
+    copyright_notice: Optional[str] = None
+    acquisition_source: Optional[str] = None
+    related_works: List[Dict[str, Any]] = None
+    related_places: List[str] = None
+    holding_institution: Optional[str] = None
+    shelfmark: Optional[str] = None
+    iiif_manifest_url: Optional[str] = None
     
     def __post_init__(self):
         if self.variant_titles is None:
@@ -126,6 +147,12 @@ class ExtractedData:
             self.text_traditions = []
         if self.textual_variants is None:
             self.textual_variants = []
+        if self.condition_notes is None:
+            self.condition_notes = []
+        if self.related_works is None:
+            self.related_works = []
+        if self.related_places is None:
+            self.related_places = []
     
     def set_certainty(self, field_name: str, level: str, note: Optional[str] = None):
         """Set certainty level for a field.
@@ -420,17 +447,57 @@ class FieldHandlers:
         cu_indicators = FieldHandlers._detect_codicological_units(note)
         if cu_indicators:
             result['codicological_units'] = cu_indicators
-        
+
         # v1.4: Detect scribal interventions
         interventions = FieldHandlers._detect_scribal_interventions(note)
         if interventions:
             result['scribal_interventions'] = interventions
-        
+
         # v1.4: Detect canonical references
         canonical_refs = FieldHandlers._detect_canonical_references(note)
         if canonical_refs:
             result['canonical_references'] = canonical_refs
-        
+
+        # v1.5: Physical/textual features
+        note_lower = note.lower()
+        if any(k in note_lower for k in ['watermark', 'סימן מים', 'בסימן מים', 'filigrana']):
+            result['has_watermark'] = True
+
+        if any(k in note_lower for k in [
+            'עיטור', 'עיטורים', 'מאויר', 'illuminat', 'decoration', 'decorated',
+            'miniatur', 'מיניאטור', 'ציור', 'ציורים',
+        ]):
+            result['has_decoration'] = True
+
+        if any(k in note_lower for k in ['ניקוד', 'vowel point', 'pointed', 'vocali', 'nikkud']):
+            result['has_vocalization'] = True
+
+        if any(k in note_lower for k in ['טעמים', 'cantillation', 'trope', 'teamim', 'accents']):
+            result['has_cantillation'] = True
+
+        if any(k in note_lower for k in [
+            'יד שנ', 'כתב שנ', 'כתיבה שונ', 'כתב אחר', 'ידות שונ',
+            'second hand', 'later hand', 'different hand', 'another hand',
+            'change of hand', 'multiple hand',
+        ]):
+            result['has_multiple_hands'] = True
+
+        # Incipit: opening words of a text
+        incipit_match = re.search(
+            r'(?:פותח|נפתח|מתחיל|incipit|begins?|opening(?:\s+words)?)[:\s]+[״"\'"]?(.{10,80})',
+            note, re.IGNORECASE
+        )
+        if incipit_match:
+            result['has_incipit'] = incipit_match.group(1).strip()
+
+        # Explicit: closing words of a text
+        explicit_match = re.search(
+            r'(?:מסתיים|נגמר|חותם|explicit|ends?|closing(?:\s+words)?)[:\s]+[״"\'"]?(.{10,80})',
+            note, re.IGNORECASE
+        )
+        if explicit_match:
+            result['has_explicit'] = explicit_match.group(1).strip()
+
         return result
     
     @staticmethod
@@ -724,6 +791,99 @@ class FieldHandlers:
             'note': field.get_subfield('z'),
         }
     
+    @staticmethod
+    def handle_040(field: MarcField) -> Optional[str]:
+        """Extract cataloging agency (holding institution) from 040 field."""
+        return field.get_subfield('a')
+
+    @staticmethod
+    def handle_090_shelfmark(field: MarcField) -> Optional[str]:
+        """Extract local call number / shelfmark from 090/091/093/099 fields."""
+        a = field.get_subfield('a') or ''
+        b = field.get_subfield('b') or ''
+        return (a + ' ' + b).strip() or None
+
+    @staticmethod
+    def handle_520(field: MarcField) -> Optional[str]:
+        """Extract summary / scope note from 520 field."""
+        return field.get_subfield('a')
+
+    @staticmethod
+    def handle_540(field: MarcField) -> Dict[str, Any]:
+        """Extract terms governing use and reproduction from 540 field."""
+        return {
+            'rights_statement': field.get_subfield('a'),
+            'restriction_url': field.get_subfield('u'),
+        }
+
+    @staticmethod
+    def handle_541(field: MarcField) -> Optional[str]:
+        """Extract acquisition source from 541 field."""
+        parts = [
+            field.get_subfield('a'),   # source of acquisition
+            field.get_subfield('b'),   # address
+            field.get_subfield('n'),   # accession number
+        ]
+        return ' '.join(p for p in parts if p) or None
+
+    @staticmethod
+    def handle_542(field: MarcField) -> Optional[str]:
+        """Extract copyright notice from 542 field."""
+        # 542$l = copyright status; $n = copyright notice; $o = public domain
+        parts = [field.get_subfield('l'), field.get_subfield('n'), field.get_subfield('o')]
+        return ' '.join(p for p in parts if p) or None
+
+    @staticmethod
+    def handle_546(field: MarcField) -> Dict[str, bool]:
+        """Detect vocalization / cantillation markers from 546 language note."""
+        note = (field.get_subfield('a') or '').lower()
+        return {
+            'has_vocalization': any(k in note for k in [
+                'ניקוד', 'vowel', 'pointed', 'vocali', 'nikkud',
+            ]),
+            'has_cantillation': any(k in note for k in [
+                'טעמים', 'cantillation', 'trope', 'accents', 'teamim',
+            ]),
+        }
+
+    @staticmethod
+    def handle_583(field: MarcField) -> Optional[str]:
+        """Extract conservation / condition action note from 583 field."""
+        action = field.get_subfield('a') or ''
+        date = field.get_subfield('c') or ''
+        note = field.get_subfield('l') or ''
+        text = ' '.join(p for p in [action, date, note] if p)
+        return text.strip() or None
+
+    @staticmethod
+    def handle_730(field: MarcField) -> Dict[str, Any]:
+        """Extract uniform/related title added entry from 730 field."""
+        return {
+            'title': field.get_subfield('a'),
+            'date': field.get_subfield('f'),
+            'relationship': field.get_subfield('i') or 'related',
+        }
+
+    @staticmethod
+    def handle_740(field: MarcField) -> Optional[str]:
+        """Extract uncontrolled related/analytical title from 740 field."""
+        return field.get_subfield('a')
+
+    @staticmethod
+    def handle_751(field: MarcField) -> Optional[str]:
+        """Extract geographic name added entry from 751 field."""
+        return field.get_subfield('a')
+
+    @staticmethod
+    def handle_852(field: MarcField) -> Dict[str, Any]:
+        """Extract physical location / holding information from 852 field."""
+        return {
+            'holding_institution': field.get_subfield('a'),
+            'holding_sublibrary': field.get_subfield('b'),
+            'shelfmark': field.get_subfield('j') or field.get_subfield('h'),
+            'call_number': field.get_subfield('i'),
+        }
+
     @staticmethod
     def _parse_person_dates(dates_str: str) -> Dict[str, int]:
         """Parse person dates from MARC date string.
@@ -1069,23 +1229,38 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
             data.set_certainty('colophon_text', 'Certain')
             data.set_attribution('colophon_text', 'ColophonAttribution')
             data.mark_from_colophon('colophon_text')
-        
+
         # v1.4: Extract codicological unit indicators
         if note_info.get('codicological_units'):
             data.codicological_units.extend(note_info['codicological_units'])
-            # Check for anthology indicators
             for cu in note_info['codicological_units']:
                 if cu.get('type') == 'anthology_indicator':
                     data.is_anthology = True
                     data.hierarchy_type = 'ComplexHierarchy'
-        
+
         # v1.4: Extract scribal interventions
         if note_info.get('scribal_interventions'):
             data.scribal_interventions.extend(note_info['scribal_interventions'])
-        
+
         # v1.4: Extract canonical references
         if note_info.get('canonical_references'):
             data.canonical_references.extend(note_info['canonical_references'])
+
+        # v1.5: Physical / textual feature flags
+        if note_info.get('has_watermark'):
+            data.has_watermark = True
+        if note_info.get('has_decoration'):
+            data.has_decoration = True
+        if note_info.get('has_vocalization'):
+            data.has_vocalization = True
+        if note_info.get('has_cantillation'):
+            data.has_cantillation = True
+        if note_info.get('has_multiple_hands'):
+            data.has_multiple_hands = True
+        if note_info.get('has_incipit') and not data.has_incipit:
+            data.has_incipit = note_info['has_incipit']
+        if note_info.get('has_explicit') and not data.has_explicit:
+            data.has_explicit = note_info['has_explicit']
     
     for field in record.get_fields('505'):
         contents = handlers.handle_505(field)
@@ -1133,8 +1308,93 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
     for field in record.get_fields('856'):
         url_info = handlers.handle_856(field)
         if url_info.get('url'):
-            data.digital_url = url_info['url']
-    
+            url = url_info['url']
+            data.digital_url = url
+            if 'iiif' in url.lower() or '/manifest' in url.lower():
+                data.iiif_manifest_url = url
+
+    # ── 040: holding institution ──────────────────────────────────────────────
+    field_040 = record.get_field('040')
+    if field_040:
+        inst = handlers.handle_040(field_040)
+        if inst and not data.holding_institution:
+            data.holding_institution = inst
+
+    # ── 090/091/093/099: local shelfmark ─────────────────────────────────────
+    for tag in ['091', '090', '093', '099']:
+        field_shelfmark = record.get_field(tag)
+        if field_shelfmark:
+            sm = handlers.handle_090_shelfmark(field_shelfmark)
+            if sm and not data.shelfmark:
+                data.shelfmark = sm
+                break
+
+    # ── 520: summary ──────────────────────────────────────────────────────────
+    for field in record.get_fields('520'):
+        summary = handlers.handle_520(field)
+        if summary:
+            data.summary = summary
+            break
+
+    # ── 540: terms of use ─────────────────────────────────────────────────────
+    for field in record.get_fields('540'):
+        rights = handlers.handle_540(field)
+        if rights.get('rights_statement') and not data.rights_statement:
+            data.rights_statement = rights['rights_statement']
+        if rights.get('restriction_url') and not data.restriction_url:
+            data.restriction_url = rights['restriction_url']
+
+    # ── 541: acquisition source ───────────────────────────────────────────────
+    field_541 = record.get_field('541')
+    if field_541:
+        data.acquisition_source = handlers.handle_541(field_541)
+
+    # ── 542: copyright notice ─────────────────────────────────────────────────
+    field_542 = record.get_field('542')
+    if field_542:
+        data.copyright_notice = handlers.handle_542(field_542)
+
+    # ── 546: language / script note (vocalization, cantillation) ─────────────
+    for field in record.get_fields('546'):
+        flags = handlers.handle_546(field)
+        if flags.get('has_vocalization'):
+            data.has_vocalization = True
+        if flags.get('has_cantillation'):
+            data.has_cantillation = True
+
+    # ── 583: condition / action note ──────────────────────────────────────────
+    for field in record.get_fields('583'):
+        note = handlers.handle_583(field)
+        if note:
+            data.condition_notes.append(note)
+
+    # ── 730: related uniform titles ───────────────────────────────────────────
+    for field in record.get_fields('730'):
+        rel = handlers.handle_730(field)
+        if rel.get('title'):
+            data.related_works.append(rel)
+
+    # ── 740: uncontrolled added titles ────────────────────────────────────────
+    for field in record.get_fields('740'):
+        vt = handlers.handle_740(field)
+        if vt and vt not in data.variant_titles:
+            data.variant_titles.append(vt)
+
+    # ── 751: geographic name added entry ──────────────────────────────────────
+    for field in record.get_fields('751'):
+        place = handlers.handle_751(field)
+        if place and place not in data.related_places:
+            data.related_places.append(place)
+
+    # ── 852: physical location / holding ─────────────────────────────────────
+    field_852 = record.get_field('852')
+    if field_852:
+        holding = handlers.handle_852(field_852)
+        if holding.get('holding_institution') and not data.holding_institution:
+            data.holding_institution = holding['holding_institution']
+        if holding.get('shelfmark') and not data.shelfmark:
+            data.shelfmark = holding['shelfmark']
+
     return data
 
 

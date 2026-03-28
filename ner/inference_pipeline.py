@@ -245,6 +245,192 @@ class ProductionNERPipeline:
         return [self.process_text(text) for text in texts]
 
 
+class JointNERPipeline:
+    """Inference pipeline using alexgoldberg/hebrew-manuscript-joint-ner-v2.
+
+    The model is a raw nn.Module (JointModel from train_joint_entity_role_model_kfold.py)
+    with a shared DictaBERT encoder plus separate NER and role-classification heads.
+    Weights are stored as a state-dict checkpoint (pytorch_model.bin).
+    forward() returns (ner_logits, class_logits) — a tuple, not a HF output object.
+    """
+
+    NER_ID2LABEL: Dict[int, str] = {0: 'O', 1: 'B-PERSON', 2: 'I-PERSON'}
+    ROLE_ID2LABEL: Dict[int, str] = {
+        0: 'AUTHOR', 1: 'TRANSCRIBER', 2: 'OWNER',
+        3: 'CENSOR', 4: 'TRANSLATOR', 5: 'COMMENTATOR',
+    }
+    _BASE_MODEL = "dicta-il/dictabert"
+    _NUM_NER_LABELS = 3
+    _NUM_CLASS_LABELS = 6
+    _DROPOUT = 0.3
+
+    def __init__(self, model_path: str, device: str = 'auto') -> None:
+        import sys as _sys
+        import torch
+        from pathlib import Path as _Path
+        from transformers import AutoTokenizer
+
+        # Ensure ner/ is on sys.path so JointModel can be imported
+        _ner_dir = str(_Path(__file__).parent)
+        if _ner_dir not in _sys.path:
+            _sys.path.insert(0, _ner_dir)
+        from train_joint_entity_role_model_kfold import JointModel
+
+        if device == 'auto':
+            _dev = (
+                'mps' if torch.backends.mps.is_available() else
+                'cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            self.device = torch.device(_dev)
+        else:
+            self.device = torch.device(device)
+
+        print(f"Loading tokenizer from {self._BASE_MODEL}")
+        self.tokenizer = AutoTokenizer.from_pretrained(self._BASE_MODEL)
+
+        print(f"Initialising JointModel ({self._BASE_MODEL})")
+        self.model = JointModel(
+            bert_model_name=self._BASE_MODEL,
+            num_ner_labels=self._NUM_NER_LABELS,
+            num_class_labels=self._NUM_CLASS_LABELS,
+            dropout=self._DROPOUT,
+        )
+
+        weights_path = self._resolve_weights(model_path)
+        print(f"Loading weights from {weights_path}")
+        checkpoint = torch.load(weights_path, map_location=self.device, weights_only=False)
+        state_dict = checkpoint.get('model_state_dict', checkpoint)
+        self.model.load_state_dict(state_dict)
+
+        self.model.to(self.device)
+        self.model.eval()
+        print(f"Joint NER pipeline ready on {self.device}.")
+
+    # ── helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_weights(model_path: str) -> str:
+        """Return a local path to the model weights file.
+
+        Accepts a local directory, a local .pt/.bin file, or a HuggingFace
+        repo ID (downloads pytorch_model.bin via huggingface_hub).
+        """
+        from pathlib import Path
+        local = Path(model_path)
+
+        if local.is_dir():
+            for name in ('pytorch_model.bin', 'best_model.pt', 'fold_4_model.pt'):
+                candidate = local / name
+                if candidate.exists():
+                    return str(candidate)
+            raise FileNotFoundError(f"No model weights found in {model_path}")
+
+        if local.is_file():
+            return str(local)
+
+        # Treat as a HuggingFace repo ID
+        from huggingface_hub import hf_hub_download
+        print(f"Downloading pytorch_model.bin from HuggingFace repo {model_path}")
+        return hf_hub_download(repo_id=model_path, filename="pytorch_model.bin")
+
+    # ── inference ────────────────────────────────────────────────────
+
+    def process_text(self, text: str) -> List[Dict]:
+        """Extract PERSON entities with roles from *text*.
+
+        Returns dicts with keys: person, role, confidence, start, end.
+        The role is predicted once per text and assigned to all detected entities.
+        """
+        import torch
+
+        tokens = text.split()
+        if not tokens:
+            return []
+
+        encoding = self.tokenizer(
+            tokens,
+            is_split_into_words=True,
+            return_tensors='pt',
+            truncation=True,
+            max_length=256,
+        )
+        input_ids = encoding['input_ids'].to(self.device)
+        attention_mask = encoding['attention_mask'].to(self.device)
+
+        with torch.no_grad():
+            ner_logits, class_logits = self.model(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
+
+        ner_preds = torch.argmax(ner_logits[0], dim=-1).cpu().tolist()
+        role_probs = torch.softmax(class_logits[0], dim=-1).cpu()
+        role_idx = int(torch.argmax(role_probs).item())
+        role = self.ROLE_ID2LABEL[role_idx]
+        confidence = float(role_probs[role_idx].item())
+
+        # Align subword predictions to word-level (keep first subtoken per word)
+        word_ids = encoding.word_ids(batch_index=0)
+        aligned: List[int] = []
+        prev_word_id = None
+        for i, word_id in enumerate(word_ids):
+            if word_id is None:
+                continue
+            if word_id != prev_word_id:
+                aligned.append(ner_preds[i])
+            prev_word_id = word_id
+
+        # Build entity spans from BIO tags
+        entities: List[Dict] = []
+        current: List[str] = []
+        current_start = 0
+        search_from = 0
+
+        for token, pred in zip(tokens, aligned):
+            label = self.NER_ID2LABEL.get(pred, 'O')
+            if label == 'B-PERSON':
+                if current:
+                    entity_text = ' '.join(current)
+                    entities.append({
+                        'person': entity_text,
+                        'role': role,
+                        'confidence': confidence,
+                        'start': current_start,
+                        'end': current_start + len(entity_text),
+                    })
+                    search_from = current_start + len(entity_text)
+                current = [token]
+                current_start = text.find(token, search_from)
+            elif label == 'I-PERSON' and current:
+                current.append(token)
+            else:
+                if current:
+                    entity_text = ' '.join(current)
+                    entities.append({
+                        'person': entity_text,
+                        'role': role,
+                        'confidence': confidence,
+                        'start': current_start,
+                        'end': current_start + len(entity_text),
+                    })
+                    search_from = current_start + len(entity_text)
+                    current = []
+
+        if current:
+            entity_text = ' '.join(current)
+            entities.append({
+                'person': entity_text,
+                'role': role,
+                'confidence': confidence,
+                'start': current_start,
+                'end': current_start + len(entity_text),
+            })
+
+        return entities
+
+    def process_batch(self, texts: List[str]) -> List[List[Dict]]:
+        return [self.process_text(text) for text in texts]
+
+
 def main():
     parser = argparse.ArgumentParser(description='Production NER Inference Pipeline')
     parser.add_argument('--ner-model', type=str, 
