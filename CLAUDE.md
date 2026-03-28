@@ -36,16 +36,19 @@ MHM (Mapping Hebrew Manuscripts) is an end-to-end MARC-to-RDF conversion pipelin
 
 1. **Stage 1** — MARC Input Parsing (`UnifiedReader` + `field_handlers.py`)
 2. **Stage 2** — NER Extraction (HalleluBERT + NeoDictaBERT)
-3. **Stage 3** — Authority Resolution (Mazal, VIAF, LCNAF, GeoNames)
-4. **Stage 4** — RDF Graph Construction (`GraphBuilder`, HMO ontology)
+3. **Stage 3** — Authority Resolution (Mazal/NLI, VIAF, KIMA)
+4. **Stage 4** — RDF Graph Construction (`MarcToRdfMapper`, HMO ontology)
 5. **Stage 5** — SHACL Validation (`pyshacl`)
 6. **Stage 6** — Wikidata Upload (API + QuickStatements)
 
 Key paths:
-- Entry point: `converter/main.py`
-- GUI: `converter/gui/main_window.py` (PyQt6)
-- NER inference: `ner/inference_pipeline.py`
-- Authority DB: `converter/authority/mazal_index.db`
+- GUI entry point: `src/mhm_pipeline/app.py`
+- Main window: `src/mhm_pipeline/gui/main_window.py`
+- NER inference: `ner/inference_pipeline.py` (`JointNERPipeline`, model: `alexgoldberg/hebrew-manuscript-joint-ner-v2`)
+- RDF mapper: `converter/transformer/mapper.py` (`MarcToRdfMapper`)
+- Mazal authority DB: `converter/authority/mazal_index.db`
+- KIMA authority DB: `data/kima/kima_index.db` (built from TSVs in `data/kima/`)
+- KIMA data: `data/kima/` — three TSV files (places, Hebrew variants, Maagarim)
 - Ontology: `ontology/hebrew-manuscripts.ttl`
 - SHACL shapes: `ontology/shacl-shapes.ttl`
 

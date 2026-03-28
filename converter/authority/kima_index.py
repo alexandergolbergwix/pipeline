@@ -23,6 +23,7 @@ import csv
 import logging
 import re
 import sqlite3
+import sys
 import unicodedata
 from pathlib import Path
 from typing import Optional
@@ -204,6 +205,9 @@ def build_kima_index(
         verbose:     If True, log progress to the root logger.
         progress_cb: Optional callable(int) — receives percent complete 0–100.
     """
+    # Some KIMA rows contain very long URL fields; raise the csv field limit once.
+    csv.field_size_limit(sys.maxsize)
+
     directory = Path(tsv_dir)
 
     places_file = _find_tsv(directory, _PLACES_GLOB)
@@ -231,10 +235,14 @@ def build_kima_index(
     with open(places_file, encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
-            kima_id_raw = row.get("Id", "").strip()
+            kima_id_raw = (row.get("Id") or "").strip()
             if not kima_id_raw:
                 continue
-            kima_id = int(kima_id_raw)
+            try:
+                kima_id = int(kima_id_raw)
+            except ValueError:
+                logger.debug("Skipping malformed places row with Id=%r", kima_id_raw)
+                continue
 
             lat_raw = (row.get("lat") or "").strip()
             lon_raw = (row.get("lon") or "").strip()
@@ -288,11 +296,15 @@ def build_kima_index(
     with open(variants_file, encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         for row in reader:
-            place_id_raw = row.get("PlaceId", "").strip()
+            place_id_raw = (row.get("PlaceId") or "").strip()
             variant = (row.get("variant") or "").strip()
             if not place_id_raw or not variant:
                 continue
-            kima_id = int(place_id_raw)
+            try:
+                kima_id = int(place_id_raw)
+            except ValueError:
+                logger.debug("Skipping malformed variants row with PlaceId=%r", place_id_raw)
+                continue
             norm = KimaIndex.normalize_name(variant)
             if norm:
                 index.insert_name_variant(norm, kima_id, "heb")
