@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
 
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
+from mhm_pipeline.gui.widgets.validation_result_view import ValidationResultView
 
 
 class ValidatePanel(QWidget):
@@ -55,7 +57,15 @@ class ValidatePanel(QWidget):
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
-        # violations table
+        # Progress bar
+        self._progress = PercentProgressWidget()
+        layout.addWidget(self._progress)
+
+        # Validation result view
+        self._validation_view = ValidationResultView()
+        layout.addWidget(self._validation_view, stretch=2)
+
+        # violations table (legacy, keep for compatibility)
         self._table = QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels(["Severity", "Focus Node", "Message"])
         header = self._table.horizontalHeader()
@@ -75,6 +85,11 @@ class ValidatePanel(QWidget):
     def log_viewer(self) -> LogViewer:
         """Return the embedded log viewer."""
         return self._log_viewer
+
+    @property
+    def stage_progress(self) -> PercentProgressWidget:
+        """Return the embedded progress widget."""
+        return self._progress
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -128,3 +143,11 @@ class ValidatePanel(QWidget):
         if ttl_path is None or shapes_path is None:
             return
         self.run_requested.emit(ttl_path, shapes_path)
+
+    def load_validation_results(self, result: dict) -> None:
+        """Load validation results into the view.
+
+        Args:
+            result: Dictionary with validation results from pyshacl.
+        """
+        self._validation_view.load_results(result)

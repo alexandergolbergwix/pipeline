@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
 
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
+from mhm_pipeline.gui.widgets.upload_progress_view import UploadProgressView
 
 
 class WikidataPanel(QWidget):
@@ -59,6 +61,14 @@ class WikidataPanel(QWidget):
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
+        # Progress bar
+        self._progress = PercentProgressWidget()
+        layout.addWidget(self._progress)
+
+        # Upload progress view
+        self._upload_view = UploadProgressView()
+        layout.addWidget(self._upload_view, stretch=2)
+
         # log viewer
         self._log_viewer = LogViewer()
         layout.addWidget(self._log_viewer, stretch=1)
@@ -69,6 +79,16 @@ class WikidataPanel(QWidget):
     def log_viewer(self) -> LogViewer:
         """Return the embedded log viewer."""
         return self._log_viewer
+
+    @property
+    def upload_view(self) -> UploadProgressView:
+        """Return the upload progress view."""
+        return self._upload_view
+
+    @property
+    def stage_progress(self) -> PercentProgressWidget:
+        """Return the embedded progress widget."""
+        return self._progress
 
     # ── Slots ─────────────────────────────────────────────────────────
 

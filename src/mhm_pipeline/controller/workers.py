@@ -92,6 +92,51 @@ class MarcParseWorker(StageWorker):
 # ── Stage 1: NER ─────────────────────────────────────────────────────
 
 
+def _extract_texts_from_record(record: dict) -> list[str]:
+    """Extract non-empty text segments from notes and colophon."""
+    texts: list[str] = []
+    for note in record.get("notes") or []:
+        if isinstance(note, str) and note.strip():
+            texts.append(note)
+    colophon = record.get("colophon_text")
+    if isinstance(colophon, str) and colophon.strip():
+        texts.append(colophon)
+    return texts
+
+
+def _calculate_segment_offset(texts: list[str], index: int) -> int:
+    """Calculate character offset for text at given index.
+
+    The offset accounts for all previous text lengths plus newline separators.
+    """
+    offset = 0
+    for i, text in enumerate(texts):
+        if i >= index:
+            break
+        offset += len(text)
+        if i < len(texts) - 1:
+            offset += 1  # Account for "\n"
+    return offset
+
+
+def _adjust_entity_positions(
+    entities: list[dict[str, object]], offset: int
+) -> list[dict[str, object]]:
+    """Adjust entity positions by adding offset to start/end."""
+    for ent in entities:
+        ent["start"] = ent.get("start", 0) + offset
+        ent["end"] = ent.get("end", 0) + offset
+    return entities
+
+
+def _process_text_segment(
+    pipeline: object, text: str, offset: int
+) -> list[dict[str, object]]:
+    """Process one text segment and return position-adjusted entities."""
+    segment_entities = pipeline.process_text(text)
+    return _adjust_entity_positions(segment_entities, offset)
+
+
 class NerWorker(StageWorker):
     """Run NER inference on extracted MARC data."""
 
@@ -114,8 +159,7 @@ class NerWorker(StageWorker):
         try:
             import sys as _sys
             from pathlib import Path as _Path
-            # workers.py lives at src/mhm_pipeline/controller/workers.py
-            # parents[3] is the repo root; ner/ is a sibling of src/
+
             _ner_dir = str(_Path(__file__).parents[3] / "ner")
             if _ner_dir not in _sys.path:
                 _sys.path.insert(0, _ner_dir)
@@ -139,20 +183,18 @@ class NerWorker(StageWorker):
             self.log_line.emit(f"Processing {total} records")
             results: list[dict[str, object]] = []
             for idx, record in enumerate(records):
-                texts: list[str] = []
-                for note in (record.get("notes") or []):
-                    if isinstance(note, str) and note.strip():
-                        texts.append(note)
-                colophon = record.get("colophon_text")
-                if isinstance(colophon, str) and colophon.strip():
-                    texts.append(colophon)
+                texts = _extract_texts_from_record(record)
+                full_text = "\n".join(texts)
 
                 ner_entities: list[dict[str, object]] = []
-                for text in texts:
-                    ner_entities.extend(pipeline.process_text(text))
+                for i, text in enumerate(texts):
+                    offset = _calculate_segment_offset(texts, i)
+                    segment_entities = _process_text_segment(pipeline, text, offset)
+                    ner_entities.extend(segment_entities)
 
                 results.append({
                     "_control_number": record.get("_control_number"),
+                    "text": full_text,
                     "entities": ner_entities,
                 })
                 self.progress.emit(int((idx + 1) / total * 100))
@@ -179,8 +221,8 @@ class AuthorityWorker(StageWorker):
 
     Sources:
       - Mazal (מז"ל / NLI): persons, places, works — local SQLite index
-      - VIAF: persons — REST API
-      - GeoNames: places from MARC extract — REST API
+      - VIAF: persons — public SRU API (no key required)
+      - KIMA: places from MARC extract — local SQLite index
     """
 
     def __init__(
@@ -202,6 +244,245 @@ class AuthorityWorker(StageWorker):
         self._kima_db_path = kima_db_path or None
         self._mazal_db_path = mazal_db_path or None
 
+    # ── Pure predicate functions ───────────────────────────────────────
+
+    @staticmethod
+    def _has_valid_name(data: dict, key: str) -> bool:
+        """Check if entity has a valid non-empty name."""
+        name = str(data.get(key, "")).strip()
+        return bool(name)
+
+    @staticmethod
+    def _is_already_matched(match_info: dict) -> bool:
+        """Check if entity already has at least one authority match."""
+        return bool(match_info.get("mazal_id") or match_info.get("viaf_uri"))
+
+    # ── Pure transformation functions ──────────────────────────────────
+
+    @staticmethod
+    def _create_match_info(
+        name: str,
+        role: str,
+        source: str,
+        field: str,
+        mazal_id: str | None,
+        viaf_uri: str | None,
+    ) -> dict[str, object]:
+        """Create a match info dictionary with authority references."""
+        info: dict[str, object] = {
+            "name": name,
+            "role": role,
+            "source": source,
+            "field": field,
+        }
+        if mazal_id:
+            info["mazal_id"] = mazal_id
+        if viaf_uri:
+            info["viaf_uri"] = viaf_uri
+        return info
+
+    @staticmethod
+    def _count_match_result(match_info: dict) -> dict[str, int]:
+        """Count whether this match result should increment counters."""
+        has_mazal = bool(match_info.get("mazal_id"))
+        has_viaf = bool(match_info.get("viaf_uri"))
+        return {
+            "counted": 1,
+            "matched": 1 if (has_mazal or has_viaf) else 0,
+        }
+
+    # ── Authority matching functions ─────────────────────────────────
+
+    def _match_against_authorities(
+        self,
+        name: str,
+        mazal: "MazalMatcher",
+        viaf: "VIAFMatcher | None",
+    ) -> tuple[str | None, str | None]:
+        """Match a name against Mazal and optionally VIAF authorities.
+
+        Returns tuple of (mazal_id, viaf_uri).
+        """
+        mazal_id = mazal.match_person(name)
+        viaf_uri = None
+
+        if viaf:
+            viaf_uri = viaf.match_person(name)
+
+        return mazal_id, viaf_uri
+
+    def _match_ner_entity(
+        self,
+        entity: dict,
+        mazal: "MazalMatcher",
+        viaf: "VIAFMatcher | None",
+    ) -> dict[str, int]:
+        """Match a single NER entity against authority databases.
+
+        Updates entity dict in place with authority IDs.
+        Returns dict with counted/matched flags for statistics.
+        """
+        # Guard clause: skip entities without valid names
+        if not self._has_valid_name(entity, "person"):
+            return {"counted": 0, "matched": 0}
+
+        name = str(entity.get("person", "")).strip()
+        mazal_id, viaf_uri = self._match_against_authorities(name, mazal, viaf)
+
+        if mazal_id:
+            entity["mazal_id"] = mazal_id
+        if viaf_uri:
+            entity["viaf_uri"] = viaf_uri
+
+        return {"counted": 1, "matched": 1 if (mazal_id or viaf_uri) else 0}
+
+    def _match_marc_person_entry(
+        self,
+        person: dict,
+        role: str,
+        field: str,
+        mazal: "MazalMatcher",
+        viaf: "VIAFMatcher | None",
+    ) -> dict[str, object] | None:
+        """Match a single MARC person entry (author or contributor).
+
+        Returns match info dict with count metadata, or None if no valid name.
+        """
+        # Guard clause: skip entries without valid names
+        if not self._has_valid_name(person, "name"):
+            return None
+
+        name = str(person.get("name", "")).strip()
+        role_value = str(person.get("role", role))
+        mazal_id, viaf_uri = self._match_against_authorities(name, mazal, viaf)
+
+        match_info = self._create_match_info(
+            name=name,
+            role=role_value,
+            source="MARC",
+            field=field,
+            mazal_id=mazal_id,
+            viaf_uri=viaf_uri,
+        )
+
+        counts = self._count_match_result(match_info)
+        match_info.update(counts)
+
+        return match_info
+
+    def _match_marc_persons(
+        self,
+        control_number: str,
+        marc_by_cn: dict[str, dict[str, object]],
+        mazal: "MazalMatcher",
+        viaf: "VIAFMatcher | None",
+    ) -> list[dict[str, object]]:
+        """Match all persons from MARC record (authors and contributors).
+
+        Returns list of match info dicts with count metadata.
+        """
+        # Guard clause: return empty if record not found
+        if control_number not in marc_by_cn:
+            return []
+
+        marc_rec = marc_by_cn[control_number]
+        matches: list[dict[str, object]] = []
+
+        # Match authors (100, 110 fields)
+        for author in marc_rec.get("authors") or []:
+            result = self._match_marc_person_entry(
+                person=author,
+                role="author",
+                field="100/110/111",
+                mazal=mazal,
+                viaf=viaf,
+            )
+            if result:
+                matches.append(result)
+
+        # Match contributors (700, 710 fields)
+        for contributor in marc_rec.get("contributors") or []:
+            result = self._match_marc_person_entry(
+                person=contributor,
+                role="contributor",
+                field="700/710/711",
+                mazal=mazal,
+                viaf=viaf,
+            )
+            if result:
+                matches.append(result)
+
+        return matches
+
+    def _match_marc_places(
+        self,
+        control_number: str,
+        marc_by_cn: dict[str, dict[str, object]],
+        kima: "KimaMatcher | None",
+    ) -> dict[str, str] | None:
+        """Match places from MARC record against KIMA authority.
+
+        Returns dict mapping place names to URIs, or None if no kima/kima not available.
+        """
+        # Guard clauses: return early if dependencies not available
+        if kima is None:
+            return None
+        if control_number not in marc_by_cn:
+            return None
+
+        marc_rec = marc_by_cn[control_number]
+        places: list[str] = [
+            str(p) for p in (marc_rec.get("related_places") or []) if p
+        ]
+
+        if not places:
+            return None
+
+        place_matches: dict[str, str] = {}
+        for place in places:
+            uri = kima.match_place(place)
+            if uri:
+                place_matches[place] = uri
+
+        return place_matches if place_matches else None
+
+    # ── Helper methods for initialization ────────────────────────────
+
+    def _load_marc_by_control_number(self) -> dict[str, dict[str, object]]:
+        """Load MARC records indexed by control number."""
+        if not self._marc_path or not self._marc_path.exists():
+            return {}
+
+        marc_records: list[dict[str, object]] = json.loads(
+            self._marc_path.read_text(encoding="utf-8"),
+        )
+        marc_by_cn = {
+            str(r.get("_control_number", "")): r
+            for r in marc_records
+        }
+        self.log_line.emit(f"Loaded {len(marc_by_cn)} MARC records for cross-reference")
+        return marc_by_cn
+
+    def _init_viaf(self, viaf_matcher_class: type) -> "VIAFMatcher | None":
+        """Initialize VIAF matcher if enabled."""
+        if not self._enable_viaf:
+            return None
+        self.log_line.emit("VIAF matching enabled")
+        return viaf_matcher_class()
+
+    def _init_kima(
+        self,
+        marc_by_cn: dict[str, dict[str, object]],
+        kima_matcher_class: type,
+    ) -> "KimaMatcher | None":
+        """Initialize KIMA matcher if enabled and MARC data is available."""
+        if not self._enable_kima:
+            return None
+        if not marc_by_cn:
+            return None
+        self.log_line.emit("KIMA place matching enabled")
+        return kima_matcher_class(index_path=self._kima_db_path)
+
     def run(self) -> None:
         try:
             from converter.authority.mazal_matcher import MazalMatcher
@@ -218,65 +499,46 @@ class AuthorityWorker(StageWorker):
                 return
 
             # ── load MARC extract for place matching ──────────────────
-            marc_by_cn: dict[str, dict[str, object]] = {}
-            if self._marc_path and self._marc_path.exists():
-                marc_records: list[dict[str, object]] = json.loads(
-                    self._marc_path.read_text(encoding="utf-8"),
-                )
-                marc_by_cn = {
-                    str(r.get("_control_number", "")): r
-                    for r in marc_records
-                }
+            marc_by_cn = self._load_marc_by_control_number()
 
             # ── initialise matchers ───────────────────────────────────
             self.log_line.emit("Loading Mazal authority index")
             mazal = MazalMatcher(index_path=self._mazal_db_path)
+            self.log_line.emit(f"Mazal index available: {mazal.is_available} (path: {mazal.index_path})")
 
-            viaf: VIAFMatcher | None = None
-            if self._enable_viaf:
-                self.log_line.emit("VIAF matching enabled")
-                viaf = VIAFMatcher()
-
-            kima: KimaMatcher | None = None
-            if self._enable_kima and marc_by_cn:
-                self.log_line.emit("KIMA place matching enabled")
-                kima = KimaMatcher(index_path=self._kima_db_path)
+            viaf = self._init_viaf(VIAFMatcher)
+            kima = self._init_kima(marc_by_cn, KimaMatcher)
 
             # ── match ─────────────────────────────────────────────────
+            total_entities = 0
+            total_matched = 0
+
             for idx, record in enumerate(records):
                 cn = str(record.get("_control_number", ""))
 
                 # --- persons from NER entities ---
-                entities = record.get("entities") or []
-                for entity in entities:
-                    name = str(entity.get("person", "")).strip()
-                    if not name:
-                        continue
+                ner_entities = record.get("entities") or []
+                for entity in ner_entities:
+                    result = self._match_ner_entity(entity, mazal, viaf)
+                    total_entities += result["counted"]
+                    total_matched += result["matched"]
 
-                    mazal_id = mazal.match_person(name)
-                    if mazal_id:
-                        entity["mazal_id"] = mazal_id
-
-                    if viaf:
-                        viaf_uri = viaf.match_person(name)
-                        if viaf_uri:
-                            entity["viaf_uri"] = viaf_uri
+                # --- persons from MARC extract (100, 110, 700, 710 fields) ---
+                marc_matches = self._match_marc_persons(cn, marc_by_cn, mazal, viaf)
+                if marc_matches:
+                    record["marc_authority_matches"] = marc_matches
+                    total_entities += sum(m["counted"] for m in marc_matches)
+                    total_matched += sum(m["matched"] for m in marc_matches)
 
                 # --- places from MARC extract ---
-                if kima and cn in marc_by_cn:
-                    marc_rec = marc_by_cn[cn]
-                    places: list[str] = [
-                        str(p) for p in (marc_rec.get("related_places") or []) if p
-                    ]
-                    place_matches: dict[str, str] = {}
-                    for place in places:
-                        uri = kima.match_place(place)
-                        if uri:
-                            place_matches[place] = uri
-                    if place_matches:
-                        record["kima_places"] = place_matches
+                place_result = self._match_marc_places(cn, marc_by_cn, kima)
+                if place_result:
+                    record["kima_places"] = place_result
 
                 self.progress.emit(int((idx + 1) / total * 100))
+
+            # Log summary
+            self.log_line.emit(f"Authority matching: {total_matched}/{total_entities} entities matched")
 
             mazal.close()
             if kima is not None:
@@ -295,16 +557,29 @@ class AuthorityWorker(StageWorker):
                 1 for r in records
                 for e in (r.get("entities") or [])
                 if e.get("viaf_uri")
+            ) + sum(
+                1 for r in records
+                for e in (r.get("marc_authority_matches") or [])
+                if e.get("viaf_uri")
             )
             n_mazal = sum(
                 1 for r in records
                 for e in (r.get("entities") or [])
                 if e.get("mazal_id")
+            ) + sum(
+                1 for r in records
+                for e in (r.get("marc_authority_matches") or [])
+                if e.get("mazal_id")
             )
             n_kima = sum(1 for r in records if r.get("kima_places"))
+            n_marc_matched = sum(
+                len(r.get("marc_authority_matches", []))
+                for r in records
+            )
             self.log_line.emit(
                 f"Authority matching complete — {total} records | "
-                f"Mazal: {n_mazal} | VIAF: {n_viaf} | KIMA: {n_kima} records with place URIs"
+                f"Mazal: {n_mazal} | VIAF: {n_viaf} | KIMA: {n_kima} | "
+                f"MARC name fields matched: {n_marc_matched}"
             )
             self.finished.emit(output_path)
         except Exception as exc:

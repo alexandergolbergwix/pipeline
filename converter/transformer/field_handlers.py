@@ -291,7 +291,41 @@ class FieldHandlers:
             'type': 'organization',
             'authority_id': field.get_subfield('0'),
         }
-    
+
+    @staticmethod
+    def handle_111(field: MarcField) -> Dict[str, Any]:
+        """Extract meeting name from 111 field.
+
+        Args:
+            field: MARC 111 field (Main Entry - Meeting Name)
+
+        Returns:
+            Dictionary with meeting name data
+        """
+        result = {
+            'name': field.get_subfield('a'),
+            'type': 'meeting',
+            'role': 'author',
+        }
+
+        location = field.get_subfield('c')
+        if location:
+            result['location'] = location
+
+        date = field.get_subfield('d')
+        if date:
+            result['date'] = date
+
+        subordinate_unit = field.get_subfield('e')
+        if subordinate_unit:
+            result['subordinate_unit'] = subordinate_unit
+
+        authority_id = field.get_subfield('0')
+        if authority_id:
+            result['authority_id'] = authority_id
+
+        return result
+
     @staticmethod
     def handle_245(field: MarcField) -> Dict[str, str]:
         """Extract title from 245 field.
@@ -774,7 +808,25 @@ class FieldHandlers:
             result['relator_code'] = relator_code
         
         return result
-    
+
+    @staticmethod
+    def handle_711(field: MarcField) -> Dict[str, Any]:
+        """Extract added meeting name from 711 field.
+
+        Args:
+            field: MARC 711 field (Added Entry - Meeting Name)
+
+        Returns:
+            Dictionary with meeting name data
+        """
+        result = FieldHandlers.handle_111(field)
+
+        relator_code = field.get_subfield('4')
+        if relator_code:
+            result['relator_code'] = relator_code
+
+        return result
+
     @staticmethod
     def handle_856(field: MarcField) -> Dict[str, str]:
         """Extract electronic location from 856 field.
@@ -1166,7 +1218,12 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         org = handlers.handle_110(field)
         if org.get('name'):
             data.authors.append(org)
-    
+
+    for field in record.get_fields('111'):
+        meeting = handlers.handle_111(field)
+        if meeting.get('name'):
+            data.authors.append(meeting)
+
     field_245 = record.get_field('245')
     if field_245:
         title_info = handlers.handle_245(field_245)
@@ -1304,7 +1361,12 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         org = handlers.handle_110(field)
         if org.get('name'):
             data.contributors.append(org)
-    
+
+    for field in record.get_fields('711'):
+        meeting = handlers.handle_711(field)
+        if meeting.get('name'):
+            data.contributors.append(meeting)
+
     for field in record.get_fields('856'):
         url_info = handlers.handle_856(field)
         if url_info.get('url'):

@@ -67,9 +67,7 @@ class FileSelector(QWidget):
         if self._mode == "directory":
             result = QFileDialog.getExistingDirectory(self, "Select Directory")
         else:
-            result, _ = QFileDialog.getOpenFileName(
-                self, "Open File", "", self._filter
-            )
+            result, _ = QFileDialog.getOpenFileName(self, "Open File", "", self._filter)
 
         if result:
             self._edit.setText(result)

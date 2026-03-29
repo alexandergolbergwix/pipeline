@@ -697,7 +697,7 @@ Each of the six pipeline stages has a dedicated panel. All panels share the same
 \endfoot
 \code{ConvertPanel} & MARC file picker, output dir picker, record range spin boxes, Run button & \code{progress} $\to$ progress bar; \code{log\_line} $\to$ log viewer \\
 \hline
-\code{NerPanel} & Input JSON selector, output dir selector, model ID text field (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}), batch size spin box & \code{progress} $\to$ per-record bar; \code{log\_line} $\to$ log \\
+\code{NerPanel} & Input JSON selector, output dir selector, model ID text field (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}), batch size spin box, ``Load Results'' button for viewing previously generated NER JSON & \code{progress} $\to$ per-record bar; \code{log\_line} $\to$ log; \code{finished} $\to$ \code{display\_entities()} \\
 \hline
 \code{AuthorityPanel} & NER results selector, output dir, MARC extract selector, VIAF/KIMA checkboxes, Mazal DB + XML dir selectors, KIMA DB + TSV dir selectors, ``Rebuild Mazal Index\ldots'' and ``Rebuild KIMA Index\ldots'' buttons & \code{run\_requested(Path,Path,Path,bool,bool,str,str)} $\to$ controller; rebuild buttons launch \code{MazalIndexWorker}/\code{KimaIndexWorker} in-panel \\
 \hline
@@ -721,6 +721,22 @@ The \code{StageProgressWidget} is a custom \code{QWidget} that paints six labell
 \end{itemize}
 
 The widget is embedded at the top of every stage panel so the user always sees the full pipeline position regardless of which panel is active.
+
+\subsection{Dark Mode Support}
+\label{sec:dark-mode}
+
+The GUI supports automatic dark mode detection and adaptation via the \code{is\_dark\_mode()} utility in \filepath{base\_visualization\_widget.py}. Widgets must not use hardcoded light colours; instead they provide dark variants:
+
+\begin{itemize}
+\item \textbf{BaseVisualizationWidget} --- placeholder text uses palette colours instead of \code{\#6b7280}
+\item \textbf{PipelineFlowWidget} --- default, completed, and active animation colours have dark variants (e.g., \code{\_DEFAULT\_BG\_DARK = "\#374151"})
+\item \textbf{ValidationResultView} --- summary bar uses \code{palette(base)} instead of \code{\#f3f4f6}
+\item \textbf{TripleGraphView} --- transparent background inherits palette; edges use \code{palette(mid)}
+\item \textbf{MarcFieldVisualizer} --- field colour backgrounds are pre-calculated with sufficient contrast for both modes
+\item \textbf{EntityHighlighter} --- legend uses inline styles with explicit text colours
+\end{itemize}
+
+The \code{is\_dark\_mode(widget)} function calculates luminance from the window background palette colour and returns \code{True} when the system is in dark mode. Widgets call this at runtime to select appropriate colour palettes.
 
 \subsection{Settings Persistence}
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
@@ -17,7 +18,11 @@ from PyQt6.QtWidgets import (
 
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.marc_field_visualizer import MarcFieldVisualizer
 from mhm_pipeline.gui.widgets.stage_progress import StageProgressWidget
+
+if TYPE_CHECKING:
+    from converter.transformer.field_handlers import ExtractedData
 
 
 class ConvertPanel(QWidget):
@@ -67,6 +72,10 @@ class ConvertPanel(QWidget):
         self._progress = StageProgressWidget()
         layout.addWidget(self._progress)
 
+        # MARC field visualizer
+        self._field_visualizer = MarcFieldVisualizer()
+        layout.addWidget(self._field_visualizer, stretch=2)
+
         # log viewer
         self._log_viewer = LogViewer()
         layout.addWidget(self._log_viewer, stretch=1)
@@ -96,3 +105,11 @@ class ConvertPanel(QWidget):
             self._start_spin.value(),
             self._end_spin.value(),
         )
+
+    def display_extracted_data(self, data: ExtractedData) -> None:
+        """Display extracted MARC data in the visualizer.
+
+        Args:
+            data: The ExtractedData containing parsed MARC fields.
+        """
+        self._field_visualizer.load_from_extracted_data(data)

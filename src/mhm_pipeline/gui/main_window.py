@@ -5,10 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -28,7 +27,9 @@ from mhm_pipeline.gui.panels.ner_panel import NerPanel
 from mhm_pipeline.gui.panels.rdf_panel import RdfPanel
 from mhm_pipeline.gui.panels.validate_panel import ValidatePanel
 from mhm_pipeline.gui.panels.wikidata_panel import WikidataPanel
+from mhm_pipeline.gui.widgets.entity_highlighter import Entity
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.pipeline_flow_widget import PipelineFlowWidget
 from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.settings.settings_manager import SettingsManager
 
@@ -111,6 +112,11 @@ class MainWindow(QMainWindow):
 
         main_layout = QVBoxLayout(central)
 
+        # Pipeline flow widget (overview at top)
+        self._flow_widget = PipelineFlowWidget()
+        self._flow_widget.stage_clicked.connect(self._on_stage_clicked)
+        main_layout.addWidget(self._flow_widget)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # sidebar
@@ -178,6 +184,7 @@ class MainWindow(QMainWindow):
         self._controller.stage_started.connect(self._on_stage_started)
         self._controller.stage_finished.connect(self._on_stage_finished)
         self._controller.stage_error.connect(self._on_stage_error)
+        self._controller.stage_progress.connect(self._on_stage_progress)
         self._controller.pipeline_finished.connect(self._on_pipeline_finished)
 
         # Stage panels → controller
@@ -192,12 +199,137 @@ class MainWindow(QMainWindow):
         self._update_stage_state(index, "running")
         self._shared_log.append_line(f"Stage {index + 1} started…")
 
+    def _on_stage_progress(self, index: int, pct: int) -> None:
+        """Update progress bar for the given stage."""
+        panel = self._panels[index] if 0 <= index < len(self._panels) else None
+        if panel and hasattr(panel, "stage_progress"):
+            panel.stage_progress.set_progress(pct)
+
     def _on_stage_finished(self, index: int, output: Path) -> None:
         self._update_stage_state(index, "done")
         self._shared_log.append_line(
             f"Stage {index + 1} finished. Output: {output}"
         )
+        self._load_stage_results(index, output)
         self._autofill_next_stage(index, output)
+
+    def _load_stage_results(self, index: int, output: Path) -> None:
+        """Load stage output into the appropriate panel visualization."""
+        if index == 1:  # NER stage
+            self._load_ner_results(output)
+        elif index == 2:  # Authority stage
+            self._load_authority_results(output)
+
+    def _load_ner_results(self, output: Path) -> None:
+        """Load NER results and display entities in the panel."""
+        try:
+            import json
+
+            with open(output, encoding="utf-8") as f:
+                results = json.load(f)
+
+            # Collect all entities from all records
+            all_entities = []
+            texts = []
+
+            # Handle both list and dict formats
+            if isinstance(results, list):
+                records = results
+            elif isinstance(results, dict) and "records" in results:
+                records = results["records"]
+            else:
+                records = [results]
+
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+
+                entities = record.get("entities", [])
+                text = record.get("text", "")
+
+                if text:
+                    texts.append(text)
+
+                for ent in entities:
+                    if not isinstance(ent, dict):
+                        continue
+
+                    # Map the entity data
+                    entity = Entity(
+                        text=ent.get("person", ent.get("text", "")),
+                        type="PERSON",  # The model extracts persons
+                        start=ent.get("start", 0),
+                        end=ent.get("end", 0),
+                        role=ent.get("role"),
+                        confidence=ent.get("confidence"),
+                    )
+                    all_entities.append(entity)
+
+            # Display in the panel - use display_records for proper formatting
+            display_text = texts[0] if texts else "NER results loaded"
+            self._ner_panel.display_entities(display_text, all_entities, records)
+
+        except Exception as e:
+            self._shared_log.append_line(f"Failed to load NER results: {e}")
+
+    def _load_authority_results(self, output: Path) -> None:
+        """Load authority results and display matches in the panel."""
+        try:
+            import json
+
+            from mhm_pipeline.gui.widgets.authority_matcher_view import (
+                AuthorityMatch,
+            )
+
+            with open(output, encoding="utf-8") as f:
+                results = json.load(f)
+
+            matches: list[tuple[str, AuthorityMatch]] = []
+
+            # Handle different result formats
+            if isinstance(results, dict) and "matches" in results:
+                records = results["matches"]
+            elif isinstance(results, list):
+                records = results
+            else:
+                records = [results]
+
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+
+                extracted = record.get("extracted_name", "")
+                match_data = record.get("match", {})
+
+                if extracted and match_data:
+                    match = AuthorityMatch(
+                        source=match_data.get("source", "unknown"),
+                        id=match_data.get("id", ""),
+                        preferred_name=match_data.get("preferred_name", ""),
+                        confidence=match_data.get("confidence", 0.0),
+                        found=match_data.get("found", False),
+                    )
+                    matches.append((extracted, match))
+
+                # Also include MARC authority matches
+                for marc_match in record.get("marc_authority_matches") or []:
+                    if marc_match.get("mazal_id") or marc_match.get("viaf_uri"):
+                        match = AuthorityMatch(
+                            source="mazal" if marc_match.get("mazal_id") else "viaf",
+                            id=marc_match.get("mazal_id") or marc_match.get("viaf_uri", ""),
+                            preferred_name=marc_match.get("name", ""),
+                            confidence=1.0 if marc_match.get("mazal_id") else 0.9,
+                            found=True,
+                        )
+                        matches.append((marc_match.get("name", ""), match))
+
+            self._authority_panel.display_matches(matches)
+            self._shared_log.append_line(
+                f"Loaded {len(matches)} authority matches from {output.name}"
+            )
+
+        except Exception as e:
+            self._shared_log.append_line(f"Failed to load authority results: {e}")
 
     def _autofill_next_stage(self, completed: int, output: Path) -> None:
         """Pre-populate the next panel's input and output selectors."""
@@ -242,6 +374,15 @@ class MainWindow(QMainWindow):
     def _on_sidebar_changed(self, row: int) -> None:
         if 0 <= row < self._stack.count():
             self._stack.setCurrentIndex(row)
+            self._flow_widget.set_active_stage(row)
+
+    def _on_stage_clicked(self, index: int) -> None:
+        """Handle stage clicked in flow widget.
+
+        Args:
+            index: The stage index (0-5).
+        """
+        self._sidebar.setCurrentRow(index)
 
     def _on_run_convert(
         self, input_path: Path, output_path: Path, start: int, end: int

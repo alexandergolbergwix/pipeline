@@ -76,6 +76,7 @@ This project is open source (GPL). Follow these rules on every change:
 - Use `pathlib.Path` for all file paths — never `os.path` string concatenation
 - GPU device selection must always fall through: MPS → CUDA → CPU
 - Never hardcode absolute paths; use `platformdirs` for app data directories
+- Prefer pure functions over deeply nested if statements — use predicate functions like `should_handle()`, `is_something()`, `has_data()` to make logic explicit and testable
 
 ---
 

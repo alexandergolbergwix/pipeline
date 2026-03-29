@@ -37,12 +37,14 @@ class PipelineController(QObject):
       - stage_started(int): emitted when a stage begins
       - stage_finished(int, Path): emitted when a stage completes successfully
       - stage_error(int, str): emitted when a stage fails
+      - stage_progress(int, int): emitted when progress updates (stage, percentage)
       - pipeline_finished(): emitted when all stages are done
     """
 
     stage_started = pyqtSignal(int)
     stage_finished = pyqtSignal(int, Path)
     stage_error = pyqtSignal(int, str)
+    stage_progress = pyqtSignal(int, int)
     pipeline_finished = pyqtSignal()
 
     def __init__(self, settings: SettingsManager) -> None:
@@ -60,11 +62,15 @@ class PipelineController(QObject):
 
         worker.finished.connect(partial(self._on_worker_finished, stage_index))
         worker.error.connect(partial(self._on_worker_error, stage_index))
+        worker.progress.connect(partial(self._on_worker_progress, stage_index))
 
         name = _STAGE_NAMES.get(stage_index, f"Stage {stage_index}")
         logger.info("Starting stage %d (%s)", stage_index, name)
         self.stage_started.emit(stage_index)
         worker.start()
+
+    def _on_worker_progress(self, stage_index: int, pct: int) -> None:
+        self.stage_progress.emit(stage_index, pct)
 
     def cancel(self) -> None:
         """Request the current worker to stop and wait for it to finish."""

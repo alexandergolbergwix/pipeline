@@ -65,7 +65,9 @@ addopts = "--cov=src/mhm_pipeline --cov-report=term-missing -q"
 
 [dependency-groups]
 dev = [
+    "mypy>=1.19.1",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "pytest-qt>=4.5.0",
+    "ruff>=0.15.7",
 ]

@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
 
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
+from mhm_pipeline.gui.widgets.triple_graph_view import TripleGraphView
 from mhm_pipeline.gui.widgets.ttl_preview import TtlPreview
 
 
@@ -51,6 +53,10 @@ class RdfPanel(QWidget):
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
+        # Progress bar
+        self._progress = PercentProgressWidget()
+        layout.addWidget(self._progress)
+
         # log viewer
         self._log_viewer = LogViewer()
         layout.addWidget(self._log_viewer, stretch=1)
@@ -58,6 +64,10 @@ class RdfPanel(QWidget):
         # TTL preview
         self._preview = TtlPreview()
         layout.addWidget(self._preview, stretch=1)
+
+        # RDF graph view
+        self._graph_view = TripleGraphView()
+        layout.addWidget(self._graph_view, stretch=2)
 
     # ── Accessors ─────────────────────────────────────────────────────
 
@@ -70,6 +80,11 @@ class RdfPanel(QWidget):
     def preview(self) -> TtlPreview:
         """Return the TTL preview widget."""
         return self._preview
+
+    @property
+    def stage_progress(self) -> PercentProgressWidget:
+        """Return the embedded progress widget."""
+        return self._progress
 
     # ── Slots ─────────────────────────────────────────────────────────
 
@@ -85,3 +100,11 @@ class RdfPanel(QWidget):
         self.run_requested.emit(
             input_path, output_path, self._format_combo.currentText()
         )
+
+    def display_graph(self, ttl_path: Path) -> None:
+        """Load and display the RDF graph from a TTL file.
+
+        Args:
+            ttl_path: Path to the Turtle file to display.
+        """
+        self._graph_view.load_from_file(ttl_path)

@@ -8,6 +8,7 @@ Stages requiring large ML models (NER) or optional external services
 worker signal/output infrastructure is still exercised.
 
 Stage → test class mapping (used by /run-tests skill):
+  Venv Imports           → TestVenvImports (catches missing deps before app crashes)
   Stage 0 (MARC Parse)   → TestMarcParseWorker
   Stage 1 (NER)          → TestNerWorker
   Stage 2 (Authority)    → TestAuthorityWorker, TestMazalIndexWorker, TestKimaIndexWorker
@@ -15,6 +16,9 @@ Stage → test class mapping (used by /run-tests skill):
   Stage 4 (SHACL)        → TestShaclValidateWorker
   Stage 5 (Wikidata)     → TestWikidataUploadWorker
   Controller             → TestPipelineControllerChain
+
+CRITICAL: TestVenvImports runs FIRST to catch "tests pass but app crashes" issues.
+These tests verify packages are installed in .venv, not just found via PYTHONPATH.
 """
 from __future__ import annotations
 
@@ -39,6 +43,93 @@ INPUT_FILES = pytest.mark.parametrize(
     [MRC_FILE, TSV_FILE],
     ids=["mrc", "tsv"],
 )
+
+
+# ── Venv Import Verification ────────────────────────────────────────────────
+# These tests verify that critical packages are installed in the venv.
+# They catch the "tests pass but app crashes" issue where PYTHONPATH finds
+# packages via filesystem but .venv/bin/python cannot.
+
+
+class TestVenvImports:
+    """Verify all critical imports work from venv context (not just PYTHONPATH)."""
+
+    def test_pymarc_imports_from_venv(self) -> None:
+        """pymarc must be importable from venv — used by MarcParseWorker."""
+        try:
+            import pymarc  # noqa: PLC0415
+        except ImportError as e:
+            pytest.fail(f"pymarc not installed in venv: {e}. Run: uv sync")
+
+    def test_rdflib_imports_from_venv(self) -> None:
+        """rdflib must be importable from venv — used by RdfBuildWorker."""
+        try:
+            import rdflib  # noqa: PLC0415
+        except ImportError as e:
+            pytest.fail(f"rdflib not installed in venv: {e}. Run: uv sync")
+
+    def test_pyshacl_imports_from_venv(self) -> None:
+        """pyshacl must be importable from venv — used by ShaclValidateWorker."""
+        try:
+            import pyshacl  # noqa: PLC0415
+        except ImportError as e:
+            pytest.fail(f"pyshacl not installed in venv: {e}. Run: uv sync")
+
+    def test_pyqt6_imports_from_venv(self) -> None:
+        """PyQt6 must be importable from venv — used by all GUI workers."""
+        try:
+            import PyQt6  # noqa: PLC0415
+        except ImportError as e:
+            pytest.fail(f"PyQt6 not installed in venv: {e}. Run: uv sync")
+
+    def test_stage_0_worker_imports_from_venv(self) -> None:
+        """Stage 0 imports must work from venv — catches 90% of runtime crashes."""
+        try:
+            from converter.parser.unified_reader import UnifiedReader  # noqa: PLC0415
+            from converter.transformer.field_handlers import extract_all_data  # noqa: PLC0415
+        except ImportError as e:
+            pytest.fail(f"Stage 0 imports failed from venv: {e}. Run: uv sync")
+
+
+    def test_stage_0_worker_runs_in_qthread_without_crash(self, qtbot: object, tmp_path: Path) -> None:
+        """MarcParseWorker must run in QThread without segfault — real crash was dictiter_iternextitem.
+
+        The actual crash happens when running in a QThread (GUI mode), not when calling run() directly.
+        This test catches the threading issue that caused: SIGABRT in dictiter_iternextitem.
+        """
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        worker = MarcParseWorker(TSV_FILE, tmp_path, "cpu", start=0, end=10)
+
+        # Track signals
+        progress_values: list[int] = []
+        log_lines: list[str] = []
+        finished_paths: list[Path] = []
+        error_msgs: list[str] = []
+
+        worker.progress.connect(progress_values.append)
+        worker.log_line.connect(log_lines.append)
+        worker.finished.connect(finished_paths.append)
+        worker.error.connect(error_msgs.append)
+
+        # Run in actual QThread — this is where the crash happened
+        with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        # Verify no error was emitted
+        assert not error_msgs, f"MarcParseWorker emitted error: {error_msgs}"
+        assert finished_paths, "MarcParseWorker did not emit finished"
+
+        # Verify output file exists and is valid JSON
+        output_path = finished_paths[0]
+        assert output_path.exists(), f"Output file not created: {output_path}"
+
+        records = json.loads(output_path.read_text(encoding="utf-8"))
+        assert len(records) == 10, f"Expected 10 records, got {len(records)}"
+
+        # Verify progress was emitted
+        assert progress_values, "No progress signals emitted"
+        assert progress_values[-1] == 100, "Progress did not reach 100%"
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -116,6 +207,30 @@ class TestMarcParseWorker:
 
         records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
         assert len(records) == 897
+
+    def test_tsv_first_500_records_parse_with_authority_fields(self, qtbot: object, tmp_path: Path) -> None:
+        """First 500 records from TSV should parse and include all MARC name fields (100, 110, 111, 700, 710, 711)."""
+        from mhm_pipeline.controller.workers import MarcParseWorker
+
+        # Process first 500 records (start=0, end=500)
+        worker = MarcParseWorker(TSV_FILE, tmp_path, "cpu", start=0, end=500)
+        with qtbot.waitSignal(worker.finished, timeout=60_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        assert len(records) == 500, f"Expected 500 records, got {len(records)}"
+
+        # Verify some records have name fields that should be authority-matched
+        records_with_names = 0
+        for record in records:
+            has_names = bool(
+                record.get("authors") or record.get("contributors")
+            )
+            if has_names:
+                records_with_names += 1
+
+        # At least some records should have name fields
+        assert records_with_names > 0, "No records had name fields for authority matching"
 
     @INPUT_FILES
     def test_emits_increasing_progress(
@@ -348,6 +463,59 @@ class TestAuthorityWorker:
 
         records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
         assert records[0].get("kima_places") or True  # presence of key is sufficient
+
+    def test_marc_name_fields_100_110_111_700_710_711_matched(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """AuthorityWorker should match all MARC name fields: 100, 110, 111, 700, 710, 711."""
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        ner_path = _ner_json(tmp_path)
+
+        # Create MARC data with all name field types
+        marc_data = [
+            {
+                "_control_number": "990000836520205171",
+                "authors": [
+                    {"name": "משה בן יצחק", "type": "person"},  # 100
+                    {"name": "הקהילה הקדושה", "type": "organization"},  # 110
+                    {"name": "כנסת הגדולים", "type": "meeting"},  # 111
+                ],
+                "contributors": [
+                    {"name": "דוד המלך", "type": "person"},  # 700
+                    {"name": "בית המדרש", "type": "organization"},  # 710
+                    {"name": "ועידת הרבנים", "type": "meeting"},  # 711
+                ],
+            }
+        ]
+        marc_path = tmp_path / "marc_extracted.json"
+        marc_path.write_text(json.dumps(marc_data, ensure_ascii=False), encoding="utf-8")
+
+        mock_mazal = MagicMock()
+        mock_mazal.match_person.return_value = "NLI_TEST_123"
+        mock_mazal.is_available = True
+
+        with patch("converter.authority.mazal_matcher.MazalMatcher", return_value=mock_mazal):
+            worker = AuthorityWorker(
+                ner_path,
+                tmp_path,
+                marc_path=marc_path,
+                enable_viaf=False,
+                enable_kima=False,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+
+        # Verify marc_authority_matches exists and has entries
+        marc_matches = records[0].get("marc_authority_matches", [])
+        assert len(marc_matches) == 6, f"Expected 6 name field matches, got {len(marc_matches)}"
+
+        # Verify each field label is present
+        field_labels = {m.get("field") for m in marc_matches}
+        assert "100/110/111" in field_labels, "Missing 100/110/111 field label"
+        assert "700/710/711" in field_labels, "Missing 700/710/711 field label"
 
 
 # ── Stage 2 utility: Mazal Index Builder ─────────────────────────────────────

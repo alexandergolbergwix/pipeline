@@ -101,7 +101,7 @@ This document defines the Mapping Hebrew Manuscripts (MHM) MARC-to-RDF Conversio
 \begin{enumerate}
 \item \textbf{MARC Parser and Field Decomposer} --- reads binary MARC (\code{.mrc}), CSV, and TSV files, extracting structured data from more than 30 MARC fields and subfields.
 \item \textbf{Named Entity Recognition (NER) System} --- a two-stage deep-learning pipeline (HalleluBERT multi-entity NER at 88.71\% F1 + NeoDictaBERT role classifier at 90.64\% accuracy) that extracts person names and their roles (author, scribe, owner, censor, translator, commentator) from unstructured Hebrew note fields (MARC 500, 520, 545, 546, 561, 957).
-\item \textbf{Authority File Integration} --- matching extracted entities against the NLI Authority File (Mazal), VIAF, Library of Congress Name Authority File (LCNAF), and GeoNames/Wikidata for geographic enrichment.
+\item \textbf{Authority File Integration} --- matching extracted entities against the NLI Authority File (Mazal), VIAF, and KIMA (Hebrew historical place names) for geographic enrichment.
 \item \textbf{RDF Graph Builder with SHACL Validation} --- constructing an OWL/RDF graph aligned with CIDOC CRM and LRMoo, implementing HMO's three-layer architecture (cataloging-bibliographic, philological, epistemological) and BU-CU-PU structural model, with constraint validation via SHACL shapes.
 \end{enumerate}
 
@@ -211,7 +211,7 @@ The pipeline consists of six sequential stages, each feeding its output to the n
 
 \node[note, below=0.15cm of input] {.mrc / .csv / .tsv\\UnifiedReader};
 \node[note, below=0.15cm of ner] {HalleluBERT\\+ NeoDictaBERT};
-\node[note, below=0.15cm of auth] {Mazal, VIAF,\\LCNAF, GeoNames};
+\node[note, below=0.15cm of auth] {Mazal, VIAF,\\KIMA};
 \node[note, above=0.15cm of rdf] {HMO Ontology\\GraphBuilder};
 \node[note, above=0.15cm of valid] {shacl-shapes.ttl\\PyShacl};
 \node[note, above=0.15cm of wiki] {Wikidata API\\QuickStatements};
@@ -231,7 +231,7 @@ The pipeline consists of six sequential stages, each feeding its output to the n
   Unstructured text from note fields (500, 520, 545, 546, 561, 957) is passed to the NER inference pipeline. The HalleluBERT multi-entity model identifies person name spans; the NeoDictaBERT role classifier assigns a role category to each extracted person. Post-processing rules clean up edge cases.
 
 \item[Stage 3: Authority Resolution]
-  Extracted entity names (persons, places, works) are matched against multiple authority sources: the NLI Mazal authority file (local SQLite database with fuzzy matching), VIAF (API-based), Library of Congress Name Authority File (API-based), and GeoNames/Wikidata (for geographic entities). Matched entities receive stable global identifiers.
+  Extracted entity names (persons, places, works) are matched against multiple authority sources: the NLI Mazal authority file (local SQLite database with fuzzy matching), VIAF (public SRU API, persons), and KIMA --- an open, attestation-based database of 48,128 Hebrew historical place names, 100\% Wikidata-linked, queried via a local SQLite index. Matched entities receive stable global identifiers.
 
 \item[Stage 4: RDF Graph Construction]
   The \code{GraphBuilder} assembles an RDF graph from the enriched extracted data. The \code{UriGenerator} creates stable URIs for each entity. The builder implements the HMO three-layer architecture: creating F4\_Manifestation\_Singleton instances, Work-Expression pairs, BU-CU-PU composition structures, production and transfer events, text traditions, and epistemological annotations.
@@ -263,7 +263,7 @@ The pipeline consists of six sequential stages, each feeding its output to the n
 \node[data] (persons) at (4,-7.2) {Persons + Roles};
 \node[ext] (mazal) at (8,-3.6) {Mazal DB};
 \node[ext] (viaf) at (8,-4.6) {VIAF API};
-\node[ext] (geonames) at (8,-5.6) {GeoNames};
+\node[ext] (kima) at (8,-5.6) {KIMA SQLite};
 \node[ext] (wikidata) at (8,-6.6) {Wikidata API};
 \node[proc] (resolver) at (8,-8) {Authority\\Resolver};
 \node[data] (enriched) at (4,-9.2) {Enriched Data\\+ Global IDs};
@@ -281,7 +281,7 @@ The pipeline consists of six sequential stages, each feeding its output to the n
 \draw[arrow] (ner) -- (persons);
 \draw[arrow] (mazal) -- (resolver);
 \draw[arrow] (viaf) -- (resolver);
-\draw[arrow] (geonames) -- (resolver);
+\draw[arrow] (kima) -- (resolver);
 \draw[arrow] (wikidata) -- (resolver);
 \draw[arrow] (persons) -- (resolver);
 \draw[arrow] (resolver) -- (enriched);
@@ -839,24 +839,41 @@ The Library of Congress Name Authority File (LCNAF) will be queried via the LC L
 \item Access alternative name forms and biographical data
 \end{itemize}
 
-\subsection{GeoNames / Wikidata Geographic Enrichment (Planned)}
+\subsection{KIMA Hebrew Place Names (Implemented)}
 
-Geographic names---production places, ownership locations, current repositories---will be enriched through:
+Geographic names---production places, ownership locations, current repositories---are enriched through KIMA (\texthebrew{קימ"א}, \emph{Corpus of Hebrew Place Name Attestations}), an open, attestation-based database maintained by HLT/INT and the National Library of Israel.
 
+KIMA covers 48,128 historical Hebrew-script place names with:
 \begin{itemize}
-\item \textbf{GeoNames API} (\code{https://api.geonames.org/}): Resolving place names to geographic coordinates, administrative hierarchies, and GeoNames IDs.
-\item \textbf{Wikidata API} (\code{https://www.wikidata.org/w/api.php}): Resolving places, persons, and works to Wikidata QIDs, enabling integration with the global knowledge graph.
+\item 100\% Wikidata linkage (every record has a \code{Q}-identifier)
+\item VIAF and GeoNames identifiers stored as cross-references (no external API calls)
+\item 48,225 Hebrew name variants and Maagarim grammatical word-forms for morphological matching
 \end{itemize}
+
+The integration uses a local SQLite index (\filepath{data/kima/kima\_index.db}) built from three TSV source files:
+\begin{itemize}
+\item \filepath{20251015 Kima places.tsv} --- 48,128 primary place records with coordinates
+\item \filepath{Kima-Hebrew-Variants-20250929.tsv} --- 48,225 Hebrew name variants
+\item \filepath{Maagarim-Zurot-\&-Arachim.tsv} --- 14,522 grammatical word-forms (inflected/suffixed forms)
+\end{itemize}
+
+The \code{KimaIndex} normalises queries by stripping Hebrew niqqud, diacritics, and parenthetical geopolitical context (e.g.\ \texthebrew{ישראל} in \texthebrew{ירושלים (ישראל)}), then performs exact lookup against the indexed forms. A match returns the Wikidata URI, with VIAF as fallback.
 
 \subsection{Resolution Strategy}
 
-The planned authority resolution strategy follows a cascading priority:
+Authority resolution follows a cascading priority by entity type:
 
+\textbf{Persons (NER-extracted):}
 \begin{enumerate}
 \item \textbf{Local (Mazal):} Query the NLI authority file first (fastest, domain-specific).
-\item \textbf{VIAF:} If no Mazal match, query VIAF for international coverage.
-\item \textbf{Wikidata:} If no VIAF match, attempt Wikidata reconciliation.
-\item \textbf{Unresolved:} If no match is found, the entity is flagged for manual review.
+\item \textbf{VIAF:} If no Mazal match, query VIAF via the public SRU API (no API key required).
+\item \textbf{Unresolved:} Entity flagged with name only; manual review.
+\end{enumerate}
+
+\textbf{Places (from MARC fields):}
+\begin{enumerate}
+\item \textbf{KIMA:} Query the local KIMA SQLite index (48k Hebrew historical place names, 100\% Wikidata-linked).
+\item \textbf{Unresolved:} Place stored as literal; manual review.
 \end{enumerate}
 
 \subsection{File Inventory: Authority Integration}
@@ -878,7 +895,17 @@ The planned authority resolution strategy follows a cascading priority:
 \hline
 \filepath{pipeline/converter/authority/mazal\_index.db} & 983\,MB \\
 \hline
-\filepath{pipeline/scripts/build\_mazal\_index.py} & --- \\
+\filepath{pipeline/converter/authority/kima\_index.py} & --- \\
+\hline
+\filepath{pipeline/converter/authority/kima\_matcher.py} & --- \\
+\hline
+\filepath{pipeline/data/kima/kima\_index.db} & $\sim$25\,MB \\
+\hline
+\filepath{pipeline/data/kima/20251015 Kima places.tsv} & --- \\
+\hline
+\filepath{pipeline/data/kima/Kima-Hebrew-Variants-20250929.tsv} & --- \\
+\hline
+\filepath{pipeline/data/kima/Maagarim-Zurot-\&-Arachim.tsv} & --- \\
 \hline
 \end{longtable}
 
@@ -1442,7 +1469,7 @@ Currently, the pipeline components exist as separate modules with partial integr
 \item The MARC parser $\to$ RDF builder path is fully functional via \code{MarcToRdfMapper}.
 \item The Mazal authority matcher is integrated into the mapper (optional).
 \item The NER system operates as a standalone pipeline with its own input/output format.
-\item VIAF, LCNAF, and GeoNames integration exists only at schema level (properties defined, not populated).
+\item VIAF and KIMA integration is fully implemented; LCNAF integration remains planned.
 \item Wikidata upload is not yet implemented.
 \end{itemize}
 
@@ -1531,7 +1558,7 @@ Mazal & Database unavailable & Skip local matching, try VIAF \\
 \hline
 VIAF API & Timeout / error & Cache miss, proceed without VIAF ID \\
 \hline
-GeoNames API & Rate limit / error & Queue for retry \\
+KIMA index & File not found / build error & Log error, skip place matching \\
 \hline
 Graph Builder & Invalid data & Partial graph with warning annotations \\
 \hline
@@ -1674,7 +1701,7 @@ LAST  P8189  "990000623390205171"
 \begin{itemize}
 \item Integrate NER pipeline into the MARC-to-RDF flow
 \item Implement VIAF API client with caching
-\item Implement GeoNames API client for place resolution
+\item KIMA place authority matching (implemented)
 \item Build OpenRefine reconciliation workflow for batch entity matching
 \item Implement Wikidata reconciliation API client
 \end{itemize}
@@ -1809,7 +1836,7 @@ VIAF & \code{viaf.org/viaf/search} & None (public) \\
 \hline
 Library of Congress & \code{id.loc.gov/} & None (public) \\
 \hline
-GeoNames & \code{api.geonames.org/} & API key (free tier) \\
+KIMA & local SQLite index & None (offline) \\
 \hline
 Wikidata API & \code{www.wikidata.org/w/api.php} & OAuth for editing \\
 \hline
@@ -1854,7 +1881,9 @@ pipeline/
 |   |-- authority/
 |   |   |-- mazal_index.py          (SQLite authority index)
 |   |   |-- mazal_matcher.py        (fuzzy matching service)
-|   |   +-- mazal_index.db          (983 MB - NLI authority DB)
+|   |   |-- mazal_index.db          (983 MB - NLI authority DB)
+|   |   |-- kima_index.py           (KIMA SQLite index builder + query)
+|   |   +-- kima_matcher.py         (KIMA place matching service)
 |   |-- config/
 |   |   |-- namespaces.py           (RDF namespace bindings)
 |   |   +-- vocabularies.py         (controlled vocab mappings)
@@ -1867,6 +1896,11 @@ pipeline/
 |   |-- mrc/
 |   |   |-- BIBLIOGRAPHIC_*.mrc     (229 MB - full NLI catalog)
 |   |   +-- test_manuscripts/       (6 pilot .mrc files + combined)
+|   |-- kima/
+|   |   |-- 20251015 Kima places.tsv          (48,128 place records)
+|   |   |-- Kima-Hebrew-Variants-*.tsv        (48,225 Hebrew variants)
+|   |   |-- Maagarim-Zurot-&-Arachim.tsv      (14,522 grammatical forms)
+|   |   +-- kima_index.db                     (~25 MB - built SQLite index)
 |   |-- output/                     (generated TTL files)
 |   |-- samples/
 |   |-- annotation_templates/

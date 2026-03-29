@@ -4,17 +4,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from mhm_pipeline.gui.widgets.authority_matcher_view import (
+    AuthorityMatch,
+    AuthorityMatcherView,
+)
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 
 
 class AuthorityPanel(QWidget):
@@ -56,27 +65,26 @@ class AuthorityPanel(QWidget):
         )
         layout.addWidget(self._marc_selector)
 
-        # ── Authority sources ──────────────────────────────────────────
-        sources_group = QGroupBox("Authority Sources")
-        sources_layout = QVBoxLayout(sources_group)
+        # ── Authority sources button ─────────────────────────────────
+        sources_btn_layout = QHBoxLayout()
+        self._sources_btn = QPushButton("⚙️ Authority Sources")
+        self._sources_btn.setToolTip("Click to configure authority matching sources")
+        self._sources_btn.clicked.connect(self._on_sources_clicked)
+        sources_btn_layout.addWidget(self._sources_btn)
+        sources_btn_layout.addStretch()
+        layout.addLayout(sources_btn_layout)
 
-        self._viaf_cb = QCheckBox("Enable VIAF (person names)")
-        self._viaf_cb.setChecked(True)
-
-        self._kima_cb = QCheckBox("Enable KIMA (Hebrew historical place names)")
-        self._kima_cb.setChecked(False)
-        self._kima_cb.setToolTip(
-            "KIMA — an open, attestation-based database of historical place names "
-            "in the Hebrew script. Requires the KIMA SQLite index to be built first."
-        )
-
-        sources_layout.addWidget(self._viaf_cb)
-        sources_layout.addWidget(self._kima_cb)
-        layout.addWidget(sources_group)
+        # Store checkbox states (default values)
+        self._viaf_enabled = True
+        self._kima_enabled = False
+        self._mazal_enabled = True
 
         # ── Mazal index ────────────────────────────────────────────────
-        mazal_group = QGroupBox("Mazal (NLI) Authority Index")
-        mazal_layout = QVBoxLayout(mazal_group)
+        self._mazal_group = QGroupBox("Mazal (NLI) Authority Index ▼")
+        self._mazal_group.setCheckable(True)
+        self._mazal_group.setChecked(True)
+        self._mazal_group.toggled.connect(self._on_mazal_group_toggled)
+        mazal_layout = QVBoxLayout(self._mazal_group)
 
         self._mazal_db_selector = FileSelector(
             "Index DB:", mode="open", filter="SQLite DB (*.db)"
@@ -97,11 +105,14 @@ class AuthorityPanel(QWidget):
         mazal_layout.addWidget(self._mazal_db_selector)
         mazal_layout.addWidget(self._xml_dir_selector)
         mazal_layout.addWidget(self._rebuild_mazal_btn)
-        layout.addWidget(mazal_group)
+        layout.addWidget(self._mazal_group)
 
         # ── KIMA index ─────────────────────────────────────────────────
-        kima_group = QGroupBox("KIMA Place Authority Index")
-        kima_layout = QVBoxLayout(kima_group)
+        self._kima_group = QGroupBox("KIMA Place Authority Index ▼")
+        self._kima_group.setCheckable(True)
+        self._kima_group.setChecked(False)
+        self._kima_group.toggled.connect(self._on_kima_group_toggled)
+        kima_layout = QVBoxLayout(self._kima_group)
 
         self._kima_db_selector = FileSelector(
             "Index DB:", mode="open", filter="SQLite DB (*.db)"
@@ -127,12 +138,29 @@ class AuthorityPanel(QWidget):
         kima_layout.addWidget(self._kima_db_selector)
         kima_layout.addWidget(self._kima_tsv_selector)
         kima_layout.addWidget(self._rebuild_kima_btn)
-        layout.addWidget(kima_group)
+        layout.addWidget(self._kima_group)
 
         # ── Run button ─────────────────────────────────────────────────
         self._run_btn = QPushButton("Run Stage 3")
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
+
+        # Progress bar
+        self._progress = PercentProgressWidget()
+        layout.addWidget(self._progress)
+
+        # ── Authority matcher view ────────────────────────────────────
+        # Results header with expand button
+        results_header = QHBoxLayout()
+        results_header.addWidget(QWidget())  # Spacer placeholder
+        self._view_full_btn = QPushButton("View Full Results →")
+        self._view_full_btn.setToolTip("Open results in a larger window")
+        self._view_full_btn.clicked.connect(self._on_view_full_results)
+        results_header.addWidget(self._view_full_btn)
+        layout.addLayout(results_header)
+
+        self._matcher_view = AuthorityMatcherView()
+        layout.addWidget(self._matcher_view, stretch=2)
 
         # ── Log viewer ─────────────────────────────────────────────────
         self._log_viewer = LogViewer()
@@ -144,7 +172,79 @@ class AuthorityPanel(QWidget):
     def log_viewer(self) -> LogViewer:
         return self._log_viewer
 
+    @property
+    def stage_progress(self) -> PercentProgressWidget:
+        """Return the embedded progress widget."""
+        return self._progress
+
     # ── Slots ─────────────────────────────────────────────────────────
+
+    def _on_sources_clicked(self) -> None:
+        """Open a dialog to configure authority sources."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Authority Sources")
+        dialog.setMinimumWidth(350)
+
+        layout = QVBoxLayout(dialog)
+
+        # Checkboxes
+        viaf_cb = QCheckBox("Enable VIAF (person names)")
+        viaf_cb.setChecked(self._viaf_enabled)
+        viaf_cb.setToolTip("Virtual International Authority File - person names")
+
+        mazal_cb = QCheckBox("Enable Mazal (NLI person names)")
+        mazal_cb.setChecked(self._mazal_enabled)
+        mazal_cb.setToolTip("Mazal — National Library of Israel authority records")
+
+        kima_cb = QCheckBox("Enable KIMA (Hebrew historical place names)")
+        kima_cb.setChecked(self._kima_enabled)
+        kima_cb.setToolTip(
+            "KIMA — an open, attestation-based database of historical place names "
+            "in the Hebrew script."
+        )
+
+        layout.addWidget(viaf_cb)
+        layout.addWidget(mazal_cb)
+        layout.addWidget(kima_cb)
+        layout.addSpacing(10)
+
+        # Info label
+        info_label = QLabel("Select which authority sources to use for matching.")
+        info_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(info_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        ok_btn = QPushButton("OK")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._viaf_enabled = viaf_cb.isChecked()
+            self._mazal_enabled = mazal_cb.isChecked()
+            self._kima_enabled = kima_cb.isChecked()
+            self._sync_group_boxes_with_sources()
+
+    def _sync_group_boxes_with_sources(self) -> None:
+        """Update group box expansion based on source selection."""
+        # Update Mazal group
+        self._mazal_group.blockSignals(True)
+        self._mazal_group.setChecked(self._mazal_enabled)
+        arrow = "▼" if self._mazal_enabled else "▶"
+        self._mazal_group.setTitle(f"Mazal (NLI) Authority Index {arrow}")
+        self._mazal_group.blockSignals(False)
+
+        # Update KIMA group
+        self._kima_group.blockSignals(True)
+        self._kima_group.setChecked(self._kima_enabled)
+        arrow = "▼" if self._kima_enabled else "▶"
+        self._kima_group.setTitle(f"KIMA Place Authority Index {arrow}")
+        self._kima_group.blockSignals(False)
 
     def _on_run(self) -> None:
         input_path = self._input_selector.path
@@ -158,15 +258,15 @@ class AuthorityPanel(QWidget):
             self._output_selector.path = output_path
 
         marc_path = self._marc_selector.path or Path("")
-        kima_db_path = str(self._kima_db_selector.path or "")
-        mazal_db_path = str(self._mazal_db_selector.path or "")
+        kima_db_path = str(self._kima_db_selector.path or "") if self._kima_enabled else ""
+        mazal_db_path = str(self._mazal_db_selector.path or "") if self._mazal_enabled else ""
 
         self.run_requested.emit(
             input_path,
             output_path,
             marc_path,
-            self._viaf_cb.isChecked(),
-            self._kima_cb.isChecked(),
+            self._viaf_enabled,
+            self._kima_enabled,
             kima_db_path,
             mazal_db_path,
         )
@@ -232,3 +332,54 @@ class AuthorityPanel(QWidget):
     def _on_rebuild_kima_error(self, msg: str) -> None:
         self._log_viewer.append_line(f"KIMA rebuild error: {msg}")
         self._rebuild_kima_btn.setEnabled(True)
+
+    def display_matches(
+        self, matches: list[tuple[str, AuthorityMatch]]
+    ) -> None:
+        """Display authority matches in the matcher view.
+
+        Args:
+            matches: List of (extracted_name, authority_match) tuples.
+        """
+        self._matcher_view.set_match_data(matches)
+        self._current_matches = matches
+
+    def _on_mazal_group_toggled(self, checked: bool) -> None:
+        """Handle Mazal group box toggle - update arrow and stored value."""
+        arrow = "▼" if checked else "▶"
+        self._mazal_group.setTitle(f"Mazal (NLI) Authority Index {arrow}")
+        self._mazal_enabled = checked
+
+    def _on_kima_group_toggled(self, checked: bool) -> None:
+        """Handle KIMA group box toggle - update arrow and stored value."""
+        arrow = "▼" if checked else "▶"
+        self._kima_group.setTitle(f"KIMA Place Authority Index {arrow}")
+        self._kima_enabled = checked
+
+    def _on_view_full_results(self) -> None:
+        """Open a dialog with the full results table."""
+        if not hasattr(self, "_current_matches") or not self._current_matches:
+            QMessageBox.information(
+                self,
+                "No Results",
+                "No authority matches to display. Run Stage 3 first.",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Authority Match Results")
+        dialog.setMinimumSize(900, 600)
+
+        layout = QVBoxLayout(dialog)
+
+        # Create a larger matcher view
+        full_view = AuthorityMatcherView()
+        full_view.set_match_data(self._current_matches)
+        layout.addWidget(full_view)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+
+        dialog.exec()

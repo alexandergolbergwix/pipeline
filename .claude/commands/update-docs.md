@@ -12,6 +12,7 @@ This skill must be invoked — or the relevant sections must be updated inline �
 | Changed worker `__init__` signature | SystemDesignDocument.tex | §5 component table, §7.2 panel table |
 | New/removed setting in SettingsManager | SystemDesignDocument.tex | §7.4 settings table |
 | New GUI panel or widget | SystemDesignDocument.tex | §7.1 main window, §7.2 panel table |
+| Changed GUI widget styling/colors | SystemDesignDocument.tex | §7.3 dark mode support |
 | Changed module structure (`src/mhm_pipeline/`) | SystemDesignDocument.tex | §6.1 repo layout |
 | New external API integrated | ProjectDefinitionDocument.tex | §external APIs; SystemDesignDocument.tex §5 |
 | Changed distribution/installer strategy | SystemDesignDocument.tex | §4 |
@@ -40,3 +41,15 @@ grep "^class.*Worker" src/mhm_pipeline/controller/workers.py
 ```
 
 Compare outputs against the §5 component table and §7.4 settings table in SystemDesignDocument.tex.
+
+## Key GUI widgets to document
+
+- `PipelineFlowWidget` — Stage progress visualization with dark mode support
+- `EntityHighlighter` — NER results display with colored entity spans
+- `MarcFieldVisualizer` — MARC field tree view with color-coded field types
+- `TripleGraphView` — Interactive RDF graph visualization
+- `ValidationResultView` — SHACL validation results with filtering
+- `AuthorityMatcherView` — Authority match results table
+- `UploadProgressView` — Wikidata upload progress with entity status
+
+All visualization widgets inherit from `BaseVisualizationWidget` which provides the `is_dark_mode()` utility for theme adaptation.

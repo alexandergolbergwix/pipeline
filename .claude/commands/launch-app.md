@@ -1,5 +1,9 @@
 Launch the MHM Pipeline GUI application.
 
+**Prerequisites:**
+- Ensure `README.md` exists (required by `pyproject.toml`)
+- Virtual environment at `.venv/` with all dependencies installed
+
 First ensure the setup wizard skip flag is set (safe to run repeatedly):
 ```bash
 PYTHONPATH=src:. .venv/bin/python -c "
@@ -30,3 +34,9 @@ QTimer.singleShot(1500, app.quit)
 sys.exit(app.exec())
 "
 ```
+
+**Key paths:**
+- Entry point: `src/mhm_pipeline/app.py`
+- Main window: `src/mhm_pipeline/gui/main_window.py`
+- NER model: `alexgoldberg/hebrew-manuscript-joint-ner-v2`
+- Settings: stored via `QSettings` in `SettingsManager`

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QRegularExpression, Qt
+from PyQt6.QtCore import QRegularExpression
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -28,23 +28,17 @@ class _TurtleHighlighter(QSyntaxHighlighter):
         # @ directives (e.g. @prefix, @base)
         fmt_directive = QTextCharFormat()
         fmt_directive.setForeground(QColor(30, 80, 200))
-        self._rules.append(
-            (QRegularExpression(r"^@.*$"), fmt_directive)
-        )
+        self._rules.append((QRegularExpression(r"^@.*$"), fmt_directive))
 
         # URIs <http...>
         fmt_uri = QTextCharFormat()
         fmt_uri.setForeground(QColor(20, 140, 60))
-        self._rules.append(
-            (QRegularExpression(r"<http[^>]*>"), fmt_uri)
-        )
+        self._rules.append((QRegularExpression(r"<http[^>]*>"), fmt_uri))
 
         # Comments starting with #
         fmt_comment = QTextCharFormat()
         fmt_comment.setForeground(QColor(140, 140, 140))
-        self._rules.append(
-            (QRegularExpression(r"#.*$"), fmt_comment)
-        )
+        self._rules.append((QRegularExpression(r"#.*$"), fmt_comment))
 
     def highlightBlock(self, text: str) -> None:  # noqa: N802
         """Apply highlighting rules to a single text block."""

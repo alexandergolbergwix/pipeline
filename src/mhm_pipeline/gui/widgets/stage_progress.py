@@ -78,9 +78,7 @@ class StageProgressWidget(QWidget):
             r1 = rects[i]
             r2 = rects[i + 1]
             y_mid = r1.center().y()
-            painter.drawLine(
-                int(r1.right()), int(y_mid), int(r2.left()), int(y_mid)
-            )
+            painter.drawLine(int(r1.right()), int(y_mid), int(r2.left()), int(y_mid))
 
         # draw nodes and labels
         for i, rect in enumerate(rects):
@@ -94,11 +92,7 @@ class StageProgressWidget(QWidget):
 
             # label below
             painter.setPen(Qt.GlobalColor.black)
-            label_rect = QRectF(
-                rect.x(), rect.bottom() + _LABEL_GAP, _NODE_W, 16
-            )
-            painter.drawText(
-                label_rect, Qt.AlignmentFlag.AlignCenter, self._states[i]
-            )
+            label_rect = QRectF(rect.x(), rect.bottom() + _LABEL_GAP, _NODE_W, 16)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._states[i])
 
         painter.end()
