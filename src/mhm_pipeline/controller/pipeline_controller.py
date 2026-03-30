@@ -129,16 +129,16 @@ class PipelineController(QObject):
         if stage_index == 2:
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
-            # marc_path: explicit kwarg → stage 0 output → None
-            marc_path_raw = kwargs.get("marc_path")
-            if marc_path_raw is not None:
-                marc_path: Path | None = Path(str(marc_path_raw))
+            # ner_path: explicit kwarg → stage 1 output → None
+            ner_path_raw = kwargs.get("ner_path")
+            if ner_path_raw is not None:
+                ner_path: Path | None = Path(str(ner_path_raw))
             else:
-                marc_path = self._stage_outputs.get(0)
+                ner_path = self._stage_outputs.get(1)
             return AuthorityWorker(
-                input_path=self._resolve_input(1, kwargs),
+                input_path=self._resolve_input(0, kwargs),
                 output_dir=output_dir,
-                marc_path=marc_path,
+                ner_path=ner_path,
                 enable_viaf=bool(kwargs.get("enable_viaf", True)),
                 enable_kima=bool(kwargs.get("enable_kima", False)),
                 kima_db_path=str(

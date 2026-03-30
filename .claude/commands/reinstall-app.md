@@ -61,7 +61,31 @@ print('OK - venv')
 "
 ```
 
-### 4. **Test Stage 0 Import (Most Common Crash)**
+### 4. **Run GUI Widget Contract Tests** ⚠️ CATCHES SIGABRT CRASHES
+
+Missing widget methods cause SIGABRT (not a Python traceback — the app just dies). Always run:
+
+```bash
+PYTHONPATH=src:. .venv/bin/python -m pytest tests/ -q --tb=short \
+  -k "TestGuiWidgetContracts" 2>&1
+```
+
+If any test fails, a panel's `stage_progress` widget is missing `set_progress()`. This WILL crash the app when any stage runs.
+
+### 5. **Verify KIMA Index Exists** ⚠️ SILENT FAILURE
+
+KIMA place matching silently returns zero results if the index DB is missing. Check:
+
+```bash
+ls -la data/kima/kima_index.db
+# If missing, rebuild from TSVs:
+PYTHONPATH=src:. .venv/bin/python -c "
+from converter.authority.kima_index import build_kima_index
+build_kima_index('data/kima', 'data/kima/kima_index.db', verbose=True)
+"
+```
+
+### 6. **Test Stage 0 Import (Most Common Crash)**
 
 Stage 1 (MARC Parse) crashes if `pymarc` or parser imports fail:
 
@@ -203,7 +227,8 @@ open "/Users/alexandergo/Applications/MHM Pipeline.app"
 | `ModuleNotFoundError: pymarc` | Parser import failed | Check `uv sync` output |
 | Import works with PYTHONPATH but not venv | Packages missing in venv | Run `uv sync` |
 | App opens then closes on Stage 1 | Import error in worker | Check imports from venv context |
-| Stage 0 (Parse) crashes | Missing pymarc or parser deps | Run dependency sync |
+| Stage 0/1/2 crashes with SIGABRT | JSON serialization thread-safety | Fixed: `copy.deepcopy()` before `json.dumps()` |
+| Any stage crashes with SIGABRT | Panel widget missing `set_progress` | Run `TestGuiWidgetContracts` — add method to widget |
 | GUI elements missing | Widget not added to layout | Check `layout.addWidget()` calls |
 
 ## Critical Lesson Learned

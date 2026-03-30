@@ -205,3 +205,30 @@ QTimer.singleShot(1500, app.quit)
 sys.exit(app.exec())
 "
 ```
+
+### 11. VIAF API requires Accept header — never use recordSchema param
+
+The VIAF SRU API no longer returns JSON via `recordSchema=info:srw/schema/1/JSON`. It now requires the `Accept: application/json` HTTP header. Without it, the API returns an HTML page and `resp.json()` fails silently. The JSON response structure is also namespaced: `records.record[].recordData.ns2:VIAFCluster.ns2:viafID`. Rate limit: max 2 requests per second (0.5s between requests).
+
+### 12. Always verify KIMA index DB exists before running authority matching
+
+`data/kima/kima_index.db` must be built from TSV source files before KIMA place matching works. The matcher silently returns `None` (only logs at DEBUG level) when the DB is missing — it does NOT raise an error. After a fresh clone or if KIMA returns zero results, rebuild:
+
+```bash
+PYTHONPATH=src:. .venv/bin/python -c "
+from converter.authority.kima_index import build_kima_index
+build_kima_index('data/kima', 'data/kima/kima_index.db', verbose=True)
+"
+```
+
+### 13. AuthorityWorker input_path is MARC extract, not NER results
+
+`AuthorityWorker` takes the MARC extract (stage 0 output) as `input_path` and NER results (stage 1 output) as optional `ner_path`. NER entities are merged into MARC records by `_control_number` before authority matching. This ensures MARC name fields (100/110/111/700/710/711) are always matched, even without running NER.
+
+```python
+# WRONG — old API
+AuthorityWorker(input_path=ner_results, marc_path=marc_extract, ...)
+
+# CORRECT — current API
+AuthorityWorker(input_path=marc_extract, ner_path=ner_results, ...)
+```

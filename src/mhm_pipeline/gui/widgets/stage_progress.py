@@ -34,6 +34,7 @@ class StageProgressWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._states: list[str] = ["pending"] * len(_STAGE_NAMES)
+        self._progress_pct: int = 0
         total_w = len(_STAGE_NAMES) * _NODE_W + (len(_STAGE_NAMES) - 1) * _SPACING
         self.setMinimumSize(total_w + 20, _NODE_H + 40)
         self.setMaximumHeight(_NODE_H + 50)
@@ -44,7 +45,17 @@ class StageProgressWidget(QWidget):
         """Set the visual state of the stage at *stage_index*."""
         if 0 <= stage_index < len(self._states) and state in _STATE_COLORS:
             self._states[stage_index] = state
+            if state != "running":
+                self._progress_pct = 0
             self.update()
+
+    def set_progress(self, pct: int) -> None:
+        """Accept a progress percentage (0-100) for the currently running stage.
+
+        Finds the first stage in *running* state and updates its label.
+        """
+        self._progress_pct = pct
+        self.update()
 
     def reset_all(self) -> None:
         """Reset every stage to *pending*."""
@@ -93,6 +104,9 @@ class StageProgressWidget(QWidget):
             # label below
             painter.setPen(Qt.GlobalColor.black)
             label_rect = QRectF(rect.x(), rect.bottom() + _LABEL_GAP, _NODE_W, 16)
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._states[i])
+            label = self._states[i]
+            if self._states[i] == "running" and self._progress_pct > 0:
+                label = f"{self._progress_pct}%"
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
 
         painter.end()

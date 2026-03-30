@@ -335,13 +335,14 @@ class MainWindow(QMainWindow):
         """Pre-populate the next panel's input and output selectors."""
         out_dir = output.parent
         if completed == 0:
+            # Stage 0 output (MARC extract) feeds NER and Authority
             self._ner_panel._input_selector.path = output
             self._ner_panel._output_selector.path = out_dir
-            # Stage 0 output is the MARC extract — pre-fill authority panel
-            self._authority_panel._marc_selector.path = output
-        elif completed == 1:
             self._authority_panel._input_selector.path = output
             self._authority_panel._output_selector.path = out_dir
+        elif completed == 1:
+            # Stage 1 output (NER results) feeds Authority as optional enrichment
+            self._authority_panel._ner_selector.path = output
         elif completed == 2:
             self._rdf_panel._input_selector.path = output
             self._rdf_panel._output_selector.path = out_dir
@@ -405,20 +406,20 @@ class MainWindow(QMainWindow):
         self,
         input_path: Path,
         output_path: Path,
-        marc_path: Path,
+        ner_path: Path,
         viaf: bool,
         kima: bool,
         kima_db_path: str,
         mazal_db_path: str,
     ) -> None:
         self._shared_log.append_line(f"Authority resolution: {input_path.name}…")
-        # marc_path is Path("") when no file was selected
-        marc: Path | None = marc_path if marc_path.name else None
+        # ner_path is Path("") when no file was selected
+        ner: Path | None = ner_path if ner_path.name else None
         self._controller.start_stage(
             2,
             input_path=input_path,
             output_dir=output_path,
-            marc_path=marc,
+            ner_path=ner,
             enable_viaf=viaf,
             enable_kima=kima,
             kima_db_path=kima_db_path,

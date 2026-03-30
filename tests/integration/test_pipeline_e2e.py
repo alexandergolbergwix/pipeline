@@ -8,7 +8,8 @@ Stages requiring large ML models (NER) or optional external services
 worker signal/output infrastructure is still exercised.
 
 Stage → test class mapping (used by /run-tests skill):
-  Venv Imports           → TestVenvImports (catches missing deps before app crashes)
+  Venv Imports           → TestVenvImports (catches missing deps, VIAF API, KIMA index)
+  GUI Widgets            → TestGuiWidgetContracts (catches missing method crashes)
   Stage 0 (MARC Parse)   → TestMarcParseWorker
   Stage 1 (NER)          → TestNerWorker
   Stage 2 (Authority)    → TestAuthorityWorker, TestMazalIndexWorker, TestKimaIndexWorker
@@ -16,6 +17,7 @@ Stage → test class mapping (used by /run-tests skill):
   Stage 4 (SHACL)        → TestShaclValidateWorker
   Stage 5 (Wikidata)     → TestWikidataUploadWorker
   Controller             → TestPipelineControllerChain
+  Full GUI Signal Chain  → TestFullGuiProgressChain
 
 CRITICAL: TestVenvImports runs FIRST to catch "tests pass but app crashes" issues.
 These tests verify packages are installed in .venv, not just found via PYTHONPATH.
@@ -90,6 +92,47 @@ class TestVenvImports:
         except ImportError as e:
             pytest.fail(f"Stage 0 imports failed from venv: {e}. Run: uv sync")
 
+    def test_viaf_api_returns_json(self) -> None:
+        """VIAF API must return JSON with Accept header — catches silent HTML fallback.
+
+        The VIAF SRU API changed to require Accept: application/json. Without it,
+        the API returns an HTML page and match_person silently returns None for every name.
+        """
+        import requests  # noqa: PLC0415
+
+        resp = requests.get(
+            "https://viaf.org/viaf/search",
+            params={"query": 'local.personalNames all "Maimonides"', "maximumRecords": "1"},
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        assert resp.status_code == 200, f"VIAF returned status {resp.status_code}"
+        content_type = resp.headers.get("content-type", "")
+        assert "json" in content_type, (
+            f"VIAF returned {content_type!r} instead of JSON — API may have changed again"
+        )
+        data = resp.json()
+        sru = data.get("searchRetrieveResponse", {})
+        assert sru.get("records"), "VIAF returned no records for 'Maimonides'"
+
+    def test_kima_index_exists_and_is_available(self) -> None:
+        """KIMA index DB must exist — matcher silently returns None when missing.
+
+        The matcher's is_available check returns False if the DB doesn't exist,
+        but only logs at DEBUG level. This caused zero KIMA matches with no visible error.
+        """
+        from converter.authority.kima_matcher import KimaMatcher  # noqa: PLC0415
+
+        kima = KimaMatcher()
+        assert kima.is_available, (
+            f"KIMA index not available at {kima.index_path}. "
+            "Rebuild with: build_kima_index('data/kima', 'data/kima/kima_index.db')"
+        )
+        # Verify it can actually match a known place
+        uri = kima.match_place("ירושלים")
+        kima.close()
+        assert uri, "KIMA index exists but failed to match 'ירושלים' — index may be corrupt"
+
 
     def test_stage_0_worker_runs_in_qthread_without_crash(self, qtbot: object, tmp_path: Path) -> None:
         """MarcParseWorker must run in QThread without segfault — real crash was dictiter_iternextitem.
@@ -130,6 +173,92 @@ class TestVenvImports:
         # Verify progress was emitted
         assert progress_values, "No progress signals emitted"
         assert progress_values[-1] == 100, "Progress did not reach 100%"
+
+
+# ── GUI Widget Contract Tests ────────────────────────────────────────────────
+# These tests verify that every panel's stage_progress widget exposes the
+# set_progress(int) method required by MainWindow._on_stage_progress.
+# A missing method causes an unhandled AttributeError inside a Qt slot,
+# which PyQt6 escalates to QMessageLogger::fatal → abort() → SIGABRT.
+# This killed the app on every Stage 1 run on the 897-record TSV file.
+
+
+class TestGuiWidgetContracts:
+    """Verify GUI widgets expose the API that signal handlers expect."""
+
+    def test_all_panels_stage_progress_has_set_progress(self, qtbot: object) -> None:
+        """Every panel.stage_progress must have set_progress(int).
+
+        MainWindow._on_stage_progress calls panel.stage_progress.set_progress(pct)
+        for whichever stage is running. If any panel's widget lacks the method,
+        the app crashes with SIGABRT (PyQt6 fatal on unhandled AttributeError).
+        """
+        from mhm_pipeline.gui.panels.authority_panel import AuthorityPanel
+        from mhm_pipeline.gui.panels.convert_panel import ConvertPanel
+        from mhm_pipeline.gui.panels.ner_panel import NerPanel
+        from mhm_pipeline.gui.panels.rdf_panel import RdfPanel
+        from mhm_pipeline.gui.panels.validate_panel import ValidatePanel
+        from mhm_pipeline.gui.panels.wikidata_panel import WikidataPanel
+
+        panels = [
+            ConvertPanel(),
+            NerPanel(),
+            AuthorityPanel(),
+            RdfPanel(),
+            ValidatePanel(),
+            WikidataPanel(),
+        ]
+
+        for panel in panels:
+            name = type(panel).__name__
+            assert hasattr(panel, "stage_progress"), (
+                f"{name} missing stage_progress property"
+            )
+            widget = panel.stage_progress
+            assert hasattr(widget, "set_progress"), (
+                f"{name}.stage_progress ({type(widget).__name__}) "
+                f"missing set_progress method — this causes SIGABRT"
+            )
+            # Actually call it to verify no runtime error
+            widget.set_progress(50)
+
+    def test_stage_progress_widget_set_progress_accepts_0_to_100(self, qtbot: object) -> None:
+        """StageProgressWidget.set_progress must accept the full 0-100 range."""
+        from mhm_pipeline.gui.widgets.stage_progress import StageProgressWidget
+
+        widget = StageProgressWidget()
+        for pct in (0, 1, 50, 99, 100):
+            widget.set_progress(pct)
+        assert widget._progress_pct == 100
+
+    def test_stage_progress_widget_set_stage_state_resets_progress(self, qtbot: object) -> None:
+        """Setting state to 'done' or 'error' must reset the progress percentage."""
+        from mhm_pipeline.gui.widgets.stage_progress import StageProgressWidget
+
+        widget = StageProgressWidget()
+        widget.set_progress(75)
+        widget.set_stage_state(0, "done")
+        assert widget._progress_pct == 0
+
+    def test_main_window_on_stage_progress_does_not_crash(self, qtbot: object) -> None:
+        """Simulate the exact signal path that caused the SIGABRT crash.
+
+        worker.progress(int) → controller._on_worker_progress → controller.stage_progress
+        → main_window._on_stage_progress → panel.stage_progress.set_progress(pct)
+        """
+        from mhm_pipeline.controller.pipeline_controller import PipelineController
+        from mhm_pipeline.gui.main_window import MainWindow
+        from mhm_pipeline.settings.settings_manager import SettingsManager
+
+        settings = SettingsManager()
+        controller = PipelineController(settings)
+        window = MainWindow(settings, controller)
+
+        # Call _on_stage_progress for every stage index — none should crash
+        for stage_idx in range(6):
+            window._on_stage_progress(stage_idx, 0)
+            window._on_stage_progress(stage_idx, 50)
+            window._on_stage_progress(stage_idx, 100)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -362,19 +491,82 @@ class TestNerWorker:
 
         assert blocker.args[0]
 
+    def test_ner_worker_runs_in_qthread_without_crash(self, qtbot: object, tmp_path: Path) -> None:
+        """NerWorker must run in QThread without crash — catches PyTorch/threading issues.
+
+        Real crashes occur when PyTorch models run in QThread due to:
+        1. Thread-safety issues with model forward passes
+        2. Signal emission during model inference
+        3. Memory issues with model loading/unloading
+
+        This test uses mocked models to verify the threading infrastructure works.
+        """
+        from mhm_pipeline.controller.workers import NerWorker
+
+        input_data = [
+            {"_control_number": "REC001", "notes": ["text one"], "colophon_text": ""},
+            {"_control_number": "REC002", "notes": ["text two"], "colophon_text": ""},
+            {"_control_number": "REC003", "notes": ["text three"], "colophon_text": ""},
+        ]
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(json.dumps(input_data, ensure_ascii=False), encoding="utf-8")
+
+        # Track signals
+        progress_values: list[int] = []
+        log_lines: list[str] = []
+        finished_paths: list[Path] = []
+        error_msgs: list[str] = []
+
+        with patch.dict(sys.modules, self._make_mock_ner_modules()):
+            worker = NerWorker(input_path, tmp_path, self._MODEL_PATH, "cpu", batch_size=4)
+
+            worker.progress.connect(progress_values.append)
+            worker.log_line.connect(log_lines.append)
+            worker.finished.connect(finished_paths.append)
+            worker.error.connect(error_msgs.append)
+
+            # Run in actual QThread
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        # Verify no error was emitted
+        assert not error_msgs, f"NerWorker emitted error: {error_msgs}"
+        assert finished_paths, "NerWorker did not emit finished"
+
+        # Verify output file exists
+        output_path = finished_paths[0]
+        assert output_path.exists(), f"Output file not created: {output_path}"
+
+        # Verify all records processed
+        results = json.loads(output_path.read_text(encoding="utf-8"))
+        assert len(results) == 3, f"Expected 3 records, got {len(results)}"
+
+        # Verify progress reached 100%
+        assert progress_values, "No progress signals emitted"
+        assert progress_values[-1] == 100, "Progress did not reach 100%"
+
 
 # ── Stage 2: Authority Matching ───────────────────────────────────────────────
 
 
 class TestAuthorityWorker:
+    """AuthorityWorker takes MARC extract (stage 0) as primary input and
+    optionally merges NER results (stage 1) before authority matching.
+    """
+
     def test_produces_enriched_json(self, qtbot: object, tmp_path: Path) -> None:
         from mhm_pipeline.controller.workers import AuthorityWorker
 
-        input_path = _ner_json(tmp_path)
+        # MARC extract as primary input, NER as secondary
+        marc_data = [{"_control_number": "990000836520205171"}]
+        marc_path = tmp_path / "marc_extracted.json"
+        marc_path.write_text(json.dumps(marc_data, ensure_ascii=False), encoding="utf-8")
+
+        ner_path = _ner_json(tmp_path)
         worker = AuthorityWorker(
-            input_path=input_path,
+            input_path=marc_path,
             output_dir=tmp_path,
-            marc_path=None,
+            ner_path=ner_path,
             enable_viaf=False,
             enable_kima=False,
         )
@@ -393,17 +585,20 @@ class TestAuthorityWorker:
         """If MazalMatcher returns an ID for a person, it should appear in output."""
         from mhm_pipeline.controller.workers import AuthorityWorker
 
-        input_path = _ner_json(tmp_path)
+        marc_data = [{"_control_number": "990000836520205171"}]
+        marc_path = tmp_path / "marc_extracted.json"
+        marc_path.write_text(json.dumps(marc_data, ensure_ascii=False), encoding="utf-8")
+
+        ner_path = _ner_json(tmp_path)
 
         mock_matcher = MagicMock()
         mock_matcher.match_person.return_value = "NLI12345"
 
-        # Patch the class at its definition site (imported inside run())
         with patch("converter.authority.mazal_matcher.MazalMatcher", return_value=mock_matcher):
             worker = AuthorityWorker(
-                input_path,
+                marc_path,
                 tmp_path,
-                marc_path=None,
+                ner_path=ner_path,
                 enable_viaf=False,
                 enable_kima=False,
             )
@@ -419,25 +614,24 @@ class TestAuthorityWorker:
     def test_empty_entities_still_finishes(self, qtbot: object, tmp_path: Path) -> None:
         from mhm_pipeline.controller.workers import AuthorityWorker
 
-        data = [{"_control_number": "99001", "entities": []}]
-        input_path = tmp_path / "ner_results.json"
+        data = [{"_control_number": "99001"}]
+        input_path = tmp_path / "marc_extracted.json"
         input_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
         worker = AuthorityWorker(
             input_path,
             tmp_path,
-            marc_path=None,
+            ner_path=None,
             enable_viaf=False,
             enable_kima=False,
         )
         with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
             worker.start()
 
-    def test_marc_path_used_for_place_matching(self, qtbot: object, tmp_path: Path) -> None:
-        """Providing a MARC path with related_places triggers KIMA matching."""
+    def test_place_matching_uses_marc_data(self, qtbot: object, tmp_path: Path) -> None:
+        """MARC records with related_places should trigger KIMA matching."""
         from mhm_pipeline.controller.workers import AuthorityWorker
 
-        ner_path = _ner_json(tmp_path)
         marc_data = [
             {
                 "_control_number": "990000836520205171",
@@ -452,9 +646,9 @@ class TestAuthorityWorker:
 
         with patch("converter.authority.kima_matcher.KimaMatcher", return_value=mock_kima):
             worker = AuthorityWorker(
-                ner_path,
+                marc_path,
                 tmp_path,
-                marc_path=marc_path,
+                ner_path=None,
                 enable_viaf=False,
                 enable_kima=True,
             )
@@ -462,7 +656,7 @@ class TestAuthorityWorker:
                 worker.start()
 
         records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
-        assert records[0].get("kima_places") or True  # presence of key is sufficient
+        assert records[0].get("kima_places"), "Expected KIMA place matches"
 
     def test_marc_name_fields_100_110_111_700_710_711_matched(
         self, qtbot: object, tmp_path: Path
@@ -470,9 +664,7 @@ class TestAuthorityWorker:
         """AuthorityWorker should match all MARC name fields: 100, 110, 111, 700, 710, 711."""
         from mhm_pipeline.controller.workers import AuthorityWorker
 
-        ner_path = _ner_json(tmp_path)
-
-        # Create MARC data with all name field types
+        # MARC extract with all name field types as primary input
         marc_data = [
             {
                 "_control_number": "990000836520205171",
@@ -497,9 +689,9 @@ class TestAuthorityWorker:
 
         with patch("converter.authority.mazal_matcher.MazalMatcher", return_value=mock_mazal):
             worker = AuthorityWorker(
-                ner_path,
+                marc_path,
                 tmp_path,
-                marc_path=marc_path,
+                ner_path=None,
                 enable_viaf=False,
                 enable_kima=False,
             )
@@ -887,3 +1079,57 @@ class TestPipelineControllerChain:
         stage_idx, msg = blocker.args
         assert stage_idx == 0
         assert msg
+
+
+# ── Full GUI + QThread Signal Chain ──────────────────────────────────────────
+# This test reproduces the exact crash scenario: Stage 0 worker running in a
+# QThread with the full MainWindow processing progress signals. The crash was
+# SIGABRT in the main thread when _on_stage_progress called set_progress on a
+# widget that lacked the method.
+
+
+class TestFullGuiProgressChain:
+    """Run a real worker in QThread with full GUI receiving progress signals.
+
+    This catches crashes caused by signal dispatch from worker → controller
+    → MainWindow → panel widget. The original crash was:
+      - Worker emits progress(int) from QThread
+      - Main thread receives it, calls panel.stage_progress.set_progress(pct)
+      - StageProgressWidget had no set_progress → AttributeError
+      - PyQt6 escalates to QMessageLogger::fatal → abort() → SIGABRT
+    """
+
+    def test_stage_0_progress_reaches_gui_without_crash(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """Run MarcParseWorker in QThread with full MainWindow — must not SIGABRT."""
+        from mhm_pipeline.controller.pipeline_controller import PipelineController
+        from mhm_pipeline.gui.main_window import MainWindow
+        from mhm_pipeline.settings.settings_manager import SettingsManager
+
+        settings = SettingsManager()
+        settings.output_dir = tmp_path
+        controller = PipelineController(settings)
+        window = MainWindow(settings, controller)
+        window.show()
+
+        finished_stages: list[int] = []
+        error_stages: list[tuple[int, str]] = []
+
+        controller.stage_finished.connect(lambda idx, _: finished_stages.append(idx))
+        controller.stage_error.connect(lambda idx, msg: error_stages.append((idx, msg)))
+
+        # Run Stage 0 on first 10 records — enough to emit many progress signals
+        with qtbot.waitSignal(controller.stage_finished, timeout=60_000):  # type: ignore[attr-defined]
+            controller.start_stage(
+                0, input_path=TSV_FILE, output_dir=tmp_path, start=0, end=10,
+            )
+
+        assert not error_stages, f"Stage 0 error: {error_stages}"
+        assert 0 in finished_stages
+
+        # Verify output is valid
+        output = tmp_path / "marc_extracted.json"
+        assert output.exists()
+        records = json.loads(output.read_text(encoding="utf-8"))
+        assert len(records) == 10

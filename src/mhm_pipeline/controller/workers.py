@@ -77,10 +77,15 @@ class MarcParseWorker(StageWorker):
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
             output_path = self._output_dir / "marc_extracted.json"
-            output_path.write_text(
-                json.dumps(extracted, ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
-            )
+
+            # Defensive: Deep copy to avoid thread-safety issues during JSON serialization
+            # The crash (SIGABRT in escape_unicode) occurred when the list was being
+            # modified while json.dumps was iterating over it
+            import copy
+
+            safe_extracted = copy.deepcopy(extracted)
+            json_text = json.dumps(safe_extracted, ensure_ascii=False, indent=2, default=str)
+            output_path.write_text(json_text, encoding="utf-8")
 
             self.log_line.emit(f"Extracted {total} records")
             self.finished.emit(output_path)
@@ -201,10 +206,13 @@ class NerWorker(StageWorker):
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
             output_path = self._output_dir / "ner_results.json"
-            output_path.write_text(
-                json.dumps(results, ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
-            )
+
+            # Defensive: Deep copy to avoid thread-safety issues during JSON serialization
+            import copy
+
+            safe_results = copy.deepcopy(results)
+            json_text = json.dumps(safe_results, ensure_ascii=False, indent=2, default=str)
+            output_path.write_text(json_text, encoding="utf-8")
 
             self.log_line.emit(f"NER complete — {total} records processed")
             self.finished.emit(output_path)
@@ -229,16 +237,16 @@ class AuthorityWorker(StageWorker):
         self,
         input_path: Path,
         output_dir: Path,
-        marc_path: Path | None,
+        ner_path: Path | None,
         enable_viaf: bool,
         enable_kima: bool,
         kima_db_path: str = "",
         mazal_db_path: str = "",
     ) -> None:
         super().__init__()
-        self._input_path = input_path
+        self._input_path = input_path       # MARC extract (stage 0 output)
         self._output_dir = output_dir
-        self._marc_path = marc_path
+        self._ner_path = ner_path           # NER results (stage 1 output, optional)
         self._enable_viaf = enable_viaf
         self._enable_kima = enable_kima
         self._kima_db_path = kima_db_path or None
@@ -448,20 +456,39 @@ class AuthorityWorker(StageWorker):
 
     # ── Helper methods for initialization ────────────────────────────
 
-    def _load_marc_by_control_number(self) -> dict[str, dict[str, object]]:
-        """Load MARC records indexed by control number."""
-        if not self._marc_path or not self._marc_path.exists():
+    def _load_ner_by_control_number(self) -> dict[str, dict[str, object]]:
+        """Load NER records indexed by control number."""
+        if not self._ner_path or not self._ner_path.exists():
             return {}
 
-        marc_records: list[dict[str, object]] = json.loads(
-            self._marc_path.read_text(encoding="utf-8"),
+        ner_records: list[dict[str, object]] = json.loads(
+            self._ner_path.read_text(encoding="utf-8"),
         )
-        marc_by_cn = {
+        ner_by_cn = {
             str(r.get("_control_number", "")): r
-            for r in marc_records
+            for r in ner_records
         }
-        self.log_line.emit(f"Loaded {len(marc_by_cn)} MARC records for cross-reference")
-        return marc_by_cn
+        self.log_line.emit(f"Loaded {len(ner_by_cn)} NER records for entity merging")
+        return ner_by_cn
+
+    @staticmethod
+    def _merge_ner_into_records(
+        records: list[dict[str, object]],
+        ner_by_cn: dict[str, dict[str, object]],
+    ) -> int:
+        """Merge NER entities into MARC records by control number.
+
+        Adds ``ner_entities`` field to each record that has NER data.
+        Returns the number of records enriched.
+        """
+        enriched = 0
+        for record in records:
+            cn = str(record.get("_control_number", ""))
+            ner_rec = ner_by_cn.get(cn)
+            if ner_rec and ner_rec.get("entities"):
+                record["entities"] = ner_rec["entities"]
+                enriched += 1
+        return enriched
 
     def _init_viaf(self, viaf_matcher_class: type) -> "VIAFMatcher | None":
         """Initialize VIAF matcher if enabled."""
@@ -472,13 +499,10 @@ class AuthorityWorker(StageWorker):
 
     def _init_kima(
         self,
-        marc_by_cn: dict[str, dict[str, object]],
         kima_matcher_class: type,
     ) -> "KimaMatcher | None":
-        """Initialize KIMA matcher if enabled and MARC data is available."""
+        """Initialize KIMA matcher if enabled."""
         if not self._enable_kima:
-            return None
-        if not marc_by_cn:
             return None
         self.log_line.emit("KIMA place matching enabled")
         return kima_matcher_class(index_path=self._kima_db_path)
@@ -489,7 +513,8 @@ class AuthorityWorker(StageWorker):
             from converter.authority.viaf_matcher import VIAFMatcher
             from converter.authority.kima_matcher import KimaMatcher
 
-            # ── load NER results ──────────────────────────────────────
+            # ── load MARC extract (primary input) ────────────────────
+            self.log_line.emit(f"Loading MARC extract from {self._input_path.name}")
             records: list[dict[str, object]] = json.loads(
                 self._input_path.read_text(encoding="utf-8"),
             )
@@ -498,8 +523,16 @@ class AuthorityWorker(StageWorker):
                 self.error.emit("No records to process")
                 return
 
-            # ── load MARC extract for place matching ──────────────────
-            marc_by_cn = self._load_marc_by_control_number()
+            # ── merge NER entities (optional) ────────────────────────
+            ner_by_cn = self._load_ner_by_control_number()
+            if ner_by_cn:
+                enriched = self._merge_ner_into_records(records, ner_by_cn)
+                self.log_line.emit(f"Merged NER entities into {enriched}/{total} records")
+
+            # ── index records by control number (for place matching) ─
+            marc_by_cn: dict[str, dict[str, object]] = {
+                str(r.get("_control_number", "")): r for r in records
+            }
 
             # ── initialise matchers ───────────────────────────────────
             self.log_line.emit("Loading Mazal authority index")
@@ -507,7 +540,7 @@ class AuthorityWorker(StageWorker):
             self.log_line.emit(f"Mazal index available: {mazal.is_available} (path: {mazal.index_path})")
 
             viaf = self._init_viaf(VIAFMatcher)
-            kima = self._init_kima(marc_by_cn, KimaMatcher)
+            kima = self._init_kima(KimaMatcher)
 
             # ── match ─────────────────────────────────────────────────
             total_entities = 0
@@ -516,14 +549,14 @@ class AuthorityWorker(StageWorker):
             for idx, record in enumerate(records):
                 cn = str(record.get("_control_number", ""))
 
-                # --- persons from NER entities ---
+                # --- persons from NER entities (merged from stage 1) ---
                 ner_entities = record.get("entities") or []
                 for entity in ner_entities:
                     result = self._match_ner_entity(entity, mazal, viaf)
                     total_entities += result["counted"]
                     total_matched += result["matched"]
 
-                # --- persons from MARC extract (100, 110, 700, 710 fields) ---
+                # --- persons from MARC name fields (100/110/111/700/710/711) ---
                 marc_matches = self._match_marc_persons(cn, marc_by_cn, mazal, viaf)
                 if marc_matches:
                     record["marc_authority_matches"] = marc_matches
@@ -547,10 +580,13 @@ class AuthorityWorker(StageWorker):
             # ── write output ─────────────────────────────────────────
             self._output_dir.mkdir(parents=True, exist_ok=True)
             output_path = self._output_dir / "authority_enriched.json"
-            output_path.write_text(
-                json.dumps(records, ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
-            )
+
+            # Defensive: Deep copy to avoid thread-safety issues during JSON serialization
+            import copy
+
+            safe_records = copy.deepcopy(records)
+            json_text = json.dumps(safe_records, ensure_ascii=False, indent=2, default=str)
+            output_path.write_text(json_text, encoding="utf-8")
 
             # summary
             n_viaf = sum(
@@ -572,12 +608,14 @@ class AuthorityWorker(StageWorker):
                 if e.get("mazal_id")
             )
             n_kima = sum(1 for r in records if r.get("kima_places"))
+            n_ner = sum(1 for r in records if r.get("entities"))
             n_marc_matched = sum(
                 len(r.get("marc_authority_matches", []))
                 for r in records
             )
             self.log_line.emit(
                 f"Authority matching complete — {total} records | "
+                f"NER enriched: {n_ner} | "
                 f"Mazal: {n_mazal} | VIAF: {n_viaf} | KIMA: {n_kima} | "
                 f"MARC name fields matched: {n_marc_matched}"
             )

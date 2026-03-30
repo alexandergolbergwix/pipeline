@@ -29,9 +29,10 @@ from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 class AuthorityPanel(QWidget):
     """Panel for Stage 3: authority record reconciliation.
 
-    Signal args: (input_path, output_dir, marc_path, enable_viaf,
+    Signal args: (input_path, output_dir, ner_path, enable_viaf,
                   enable_kima, kima_db_path, mazal_db_path)
-    marc_path is Path("") when no MARC extract is selected.
+    input_path is the MARC extract (stage 0 output).
+    ner_path is Path("") when no NER results are selected.
     """
 
     run_requested = pyqtSignal(Path, Path, Path, bool, bool, str, str)
@@ -50,20 +51,25 @@ class AuthorityPanel(QWidget):
 
         # ── I/O selectors ─────────────────────────────────────────────
         self._input_selector = FileSelector(
-            "NER Results:", mode="open", filter="JSON files (*.json)"
+            "MARC Extract:", mode="open", filter="JSON files (*.json)"
+        )
+        self._input_selector.setToolTip(
+            "JSON output from Stage 1 (MARC parse). Contains original name "
+            "fields (100/110/111/700/710/711) and place data."
         )
         self._output_selector = FileSelector("Output Dir:", mode="directory")
         layout.addWidget(self._input_selector)
         layout.addWidget(self._output_selector)
 
-        # ── MARC extract (optional, for place matching) ────────────────
-        self._marc_selector = FileSelector(
-            "MARC Extract (optional):", mode="open", filter="JSON files (*.json)"
+        # ── NER results (optional, for NER entity matching) ──────────
+        self._ner_selector = FileSelector(
+            "NER Results (optional):", mode="open", filter="JSON files (*.json)"
         )
-        self._marc_selector.setToolTip(
-            "JSON output from Stage 1 (MARC parse). Used for KIMA place matching."
+        self._ner_selector.setToolTip(
+            "JSON output from Stage 2 (NER). Entities are merged into the "
+            "MARC records before authority matching."
         )
-        layout.addWidget(self._marc_selector)
+        layout.addWidget(self._ner_selector)
 
         # ── Authority sources button ─────────────────────────────────
         sources_btn_layout = QHBoxLayout()
@@ -249,7 +255,7 @@ class AuthorityPanel(QWidget):
     def _on_run(self) -> None:
         input_path = self._input_selector.path
         if input_path is None:
-            self._log_viewer.append_line("Error: select a NER results JSON file first.")
+            self._log_viewer.append_line("Error: select a MARC extract JSON file first.")
             return
 
         output_path = self._output_selector.path
@@ -257,14 +263,14 @@ class AuthorityPanel(QWidget):
             output_path = input_path.parent
             self._output_selector.path = output_path
 
-        marc_path = self._marc_selector.path or Path("")
+        ner_path = self._ner_selector.path or Path("")
         kima_db_path = str(self._kima_db_selector.path or "") if self._kima_enabled else ""
         mazal_db_path = str(self._mazal_db_selector.path or "") if self._mazal_enabled else ""
 
         self.run_requested.emit(
             input_path,
             output_path,
-            marc_path,
+            ner_path,
             self._viaf_enabled,
             self._kima_enabled,
             kima_db_path,

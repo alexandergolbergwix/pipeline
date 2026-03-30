@@ -180,6 +180,8 @@ class AuthorityMatcherView(QWidget):
             conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
             # Color code confidence: green ≥90%, yellow ≥70%, red <70%
+            # Always set dark foreground — light backgrounds are unreadable with white text
+            conf_item.setForeground(QColor("#1f2937"))
             if authority.confidence >= self._HIGH_CONFIDENCE:
                 conf_item.setBackground(self._COLOR_HIGH_CONFIDENCE)
                 conf_item.setToolTip("High confidence match (≥90%)")
@@ -192,6 +194,7 @@ class AuthorityMatcherView(QWidget):
         else:
             conf_item = QTableWidgetItem("—")
             conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            conf_item.setForeground(QColor("#6b7280"))
             conf_item.setToolTip("No confidence score (no match)")
 
         self._table.setItem(row, 4, conf_item)

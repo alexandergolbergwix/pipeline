@@ -9,9 +9,12 @@ from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -19,12 +22,19 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from mhm_pipeline.gui.widgets.entity_highlighter import Entity, EntityHighlighter
+from mhm_pipeline.gui.widgets.entity_highlighter import (
+    Entity,
+    EntityHighlighter,
+    build_entity_display_text,
+    get_entity_colors,
+    get_entity_icon,
+)
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 
 _DEFAULT_MODEL = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
+_PREVIEW_MAX_ENTITIES = 8
 
 
 class NerPanel(QWidget):
@@ -85,25 +95,109 @@ class NerPanel(QWidget):
         self._progress = PercentProgressWidget()
         layout.addWidget(self._progress)
 
-        # Entity highlighter
-        self._entity_highlighter = EntityHighlighter()
-        layout.addWidget(self._entity_highlighter, stretch=2)
-
-        # Role filter section
-        self._setup_role_filter()
-        layout.addLayout(self._role_filter_layout)
-
-        # Results header with expand button
-        results_header = QHBoxLayout()
-        results_header.addWidget(QWidget())  # Spacer
-        self._view_full_btn = QPushButton("View Full Results →")
-        self._view_full_btn.clicked.connect(self._on_view_full_results)
-        results_header.addWidget(self._view_full_btn)
-        layout.addLayout(results_header)
+        # ── Compact results preview ──────────────────────────────────
+        self._build_results_preview(layout)
 
         # log viewer
         self._log_viewer = LogViewer()
         layout.addWidget(self._log_viewer, stretch=1)
+
+    def _build_results_preview(self, parent_layout: QVBoxLayout) -> None:
+        """Build the compact entity results preview section."""
+        preview_frame = QFrame()
+        preview_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        preview_frame.setStyleSheet(
+            "QFrame { border: 1px solid #d1d5db; border-radius: 6px; }"
+        )
+        preview_layout = QVBoxLayout(preview_frame)
+        preview_layout.setContentsMargins(10, 8, 10, 8)
+        preview_layout.setSpacing(6)
+
+        # Header row: title + "View All" button
+        header = QHBoxLayout()
+        self._preview_header = QLabel("No NER results loaded")
+        self._preview_header.setStyleSheet("font-weight: bold; font-size: 13px; border: none;")
+        header.addWidget(self._preview_header)
+        header.addStretch()
+
+        self._view_full_btn = QPushButton("View All Results")
+        self._view_full_btn.setStyleSheet(
+            "QPushButton { background-color: #3b82f6; color: white; "
+            "padding: 5px 16px; border-radius: 4px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #2563eb; }"
+            "QPushButton:disabled { background-color: #9ca3af; }"
+        )
+        self._view_full_btn.setEnabled(False)
+        self._view_full_btn.clicked.connect(self._on_view_full_results)
+        header.addWidget(self._view_full_btn)
+        preview_layout.addLayout(header)
+
+        # Small entity list preview (capped height)
+        self._preview_list = QListWidget()
+        self._preview_list.setMaximumHeight(140)
+        self._preview_list.setAlternatingRowColors(True)
+        self._preview_list.setStyleSheet("border: none;")
+        preview_layout.addWidget(self._preview_list)
+
+        # "...and N more" label
+        self._more_label = QLabel("")
+        self._more_label.setStyleSheet(
+            "color: #6b7280; font-style: italic; font-size: 11px; border: none;"
+        )
+        self._more_label.hide()
+        preview_layout.addWidget(self._more_label)
+
+        # Role filter section (inside the preview frame)
+        self._setup_role_filter()
+        preview_layout.addLayout(self._role_filter_layout)
+
+        parent_layout.addWidget(preview_frame)
+
+        # Hidden full highlighter — only used inside the popup
+        self._entity_highlighter = EntityHighlighter()
+        self._entity_highlighter.hide()
+
+    def _update_preview(self) -> None:
+        """Refresh the compact preview list with current entities."""
+        entities = getattr(self, "_current_entities", [])
+        records = getattr(self, "_current_records", [])
+
+        self._preview_list.clear()
+
+        if not entities:
+            self._preview_header.setText("No NER results loaded")
+            self._view_full_btn.setEnabled(False)
+            self._more_label.hide()
+            return
+
+        n_records = len(records) if records else 0
+        n_entities = len(entities)
+        header = f"Entities Found ({n_records} records, {n_entities} entities)" if n_records else f"Entities Found ({n_entities} entities)"
+        self._preview_header.setText(header)
+        self._view_full_btn.setEnabled(True)
+
+        # Show first N entities as preview
+        from PyQt6.QtGui import QColor
+
+        shown = entities[:_PREVIEW_MAX_ENTITIES]
+        for entity in shown:
+            icon = get_entity_icon(
+                entity, EntityHighlighter.ROLE_ICONS, EntityHighlighter.DEFAULT_ICON,
+            )
+            display_text = f"{icon} {build_entity_display_text(entity)}"
+            bg_color, _ = get_entity_colors(
+                entity, EntityHighlighter.ROLE_COLORS, EntityHighlighter.ENTITY_COLORS,
+            )
+            item = QListWidgetItem(display_text)
+            item.setBackground(QColor(bg_color))
+            self._preview_list.addItem(item)
+
+        remaining = n_entities - len(shown)
+        if remaining > 0:
+            self._more_label.setText(f"  ...and {remaining} more entities")
+            self._more_label.show()
+        else:
+            self._more_label.hide()
 
     # ── Accessors ─────────────────────────────────────────────────────
 
@@ -240,32 +334,39 @@ class NerPanel(QWidget):
             with open(path, encoding="utf-8") as f:
                 results = json.load(f)
 
-            # Handle both list and dict formats
-            if isinstance(results, list):
-                records = results
-            elif isinstance(results, dict) and "records" in results:
-                records = results["records"]
-            else:
-                records = [results]
-
-            # Store the full records list
-            self._current_records = records
-
-            # Use display_records for all cases (handles single and multiple records)
-            self._entity_highlighter.display_records(records)
-            # Get entities from highlighter for View Full Results
-            self._current_entities = self._entity_highlighter.get_entities()
-            # Update role filter checkboxes based on loaded entities
-            self._update_role_filter_checkboxes()
-            total_entities = sum(len(r.get("entities", [])) for r in records if isinstance(r, dict))
-            self._log_viewer.append_line(f"Loaded {len(records)} records with {total_entities} entities from {path}")
+            self._store_results(results)
+            total_entities = len(self._current_entities)
+            n_records = len(self._current_records)
+            self._log_viewer.append_line(
+                f"Loaded {n_records} records with {total_entities} entities from {path}"
+            )
 
         except Exception as e:
             self._log_viewer.append_line(f"Error loading results: {e}")
             QMessageBox.critical(self, "Load Error", str(e))
 
-    def display_entities(self, text: str, entities: list[Entity], records: list[dict] | None = None) -> None:
-        """Display extracted entities in the highlighter.
+    def _store_results(self, results: object) -> None:
+        """Parse raw JSON results, store them, and refresh the preview."""
+        if isinstance(results, list):
+            records = results
+        elif isinstance(results, dict) and "records" in results:
+            records = results["records"]
+        else:
+            records = [results]
+
+        self._current_records = records
+
+        # Feed through the (hidden) highlighter to extract Entity objects
+        self._entity_highlighter.display_records(records)
+        self._current_entities = self._entity_highlighter.get_entities()
+
+        self._update_preview()
+        self._update_role_filter_checkboxes()
+
+    def display_entities(
+        self, text: str, entities: list[Entity], records: list[dict] | None = None,
+    ) -> None:
+        """Display extracted entities in the preview.
 
         Args:
             text: The original note text.
@@ -274,41 +375,77 @@ class NerPanel(QWidget):
         """
         if records:
             self._entity_highlighter.display_records(records)
-            # Get entities from highlighter after display_records
             self._current_entities = self._entity_highlighter.get_entities()
         else:
             self._entity_highlighter.load_entities(text, entities)
             self._current_entities = entities
         self._current_text = text
         self._current_records = records if records else []
-        # Update role filter checkboxes
+        self._update_preview()
         self._update_role_filter_checkboxes()
 
     def _on_view_full_results(self) -> None:
-        if not hasattr(self, "_current_entities") or not self._current_entities:
-            QMessageBox.information(self, "No Results", "No NER results to display. Run Stage 2 or load results first.")
+        """Open a full-screen dialog showing all NER results."""
+        if not getattr(self, "_current_entities", None):
+            QMessageBox.information(
+                self, "No Results",
+                "No NER results to display. Run Stage 2 or load results first.",
+            )
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("NER Results")
-        dialog.setMinimumSize(1000, 700)
+        dialog.setWindowTitle(
+            f"NER Results — {len(self._current_records)} records, "
+            f"{len(self._current_entities)} entities"
+        )
 
-        layout = QVBoxLayout(dialog)
+        # Full-screen dialog
+        screen = self.screen()
+        if screen:
+            geom = screen.availableGeometry()
+            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
+        else:
+            dialog.resize(1200, 800)
 
-        # Create larger entity highlighter
-        from mhm_pipeline.gui.widgets.entity_highlighter import EntityHighlighter
+        dlg_layout = QVBoxLayout(dialog)
+
+        # Full entity highlighter
         full_view = EntityHighlighter()
-
-        # Use display_records if we have records, otherwise fall back to load_entities
-        if hasattr(self, "_current_records") and self._current_records:
+        if self._current_records:
             full_view.display_records(self._current_records)
         else:
-            full_view.load_entities(self._current_text, self._current_entities)
-        layout.addWidget(full_view)
+            full_view.load_entities(
+                getattr(self, "_current_text", ""), self._current_entities,
+            )
+        dlg_layout.addWidget(full_view, stretch=1)
+
+        # Role filter inside popup
+        filter_layout = QHBoxLayout()
+        filter_label = QLabel("Filter by role:")
+        filter_label.setStyleSheet("font-weight: bold;")
+        filter_layout.addWidget(filter_label)
+        popup_checkboxes: dict[str, QCheckBox] = {}
+        for role in full_view.get_all_roles():
+            cb = QCheckBox(role.title())
+            cb.setChecked(True)
+            popup_checkboxes[role] = cb
+            filter_layout.addWidget(cb)
+        filter_layout.addStretch()
+
+        def _apply_popup_filter() -> None:
+            selected = {r for r, cb in popup_checkboxes.items() if cb.isChecked()}
+            full_view.filter_by_roles(selected)
+
+        for cb in popup_checkboxes.values():
+            cb.stateChanged.connect(_apply_popup_filter)
+        dlg_layout.addLayout(filter_layout)
 
         # Close button
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(
+            "QPushButton { padding: 6px 24px; font-size: 13px; }"
+        )
         close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn)
+        dlg_layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         dialog.exec()

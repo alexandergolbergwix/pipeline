@@ -6,6 +6,8 @@ Run tests for the MHM pipeline.
 |-------|-----------|------------|
 | Pre-flight | Dependencies | `TestVenvImports` — verifies pymarc, rdflib, pyshacl, PyQt6 in venv |
 | Pre-flight | Threading | `test_stage_0_worker_runs_in_qthread_without_crash` — catches QThread segfaults |
+| GUI Widgets | `gui/widgets/`, `gui/panels/` | `TestGuiWidgetContracts` — verifies all panel widgets expose `set_progress` |
+| Full GUI Chain | `main_window.py`, `workers.py`, `pipeline_controller.py` | `TestFullGuiProgressChain` — runs worker in QThread with full MainWindow |
 | 0 — MARC Parse | `converter/parser/`, `converter/transformer/field_handlers.py`, `workers.py MarcParseWorker` | `TestMarcParseWorker` |
 | 1 — NER | `ner/`, `workers.py NerWorker`, `ner_panel.py` | `TestNerWorker` |
 | 2 — Authority | `converter/authority/`, `workers.py AuthorityWorker`, `authority_panel.py` | `TestAuthorityWorker`, `TestMazalIndexWorker`, `TestKimaIndexWorker` |
@@ -19,9 +21,35 @@ Run tests for the MHM pipeline.
 **Purpose:** Catch "tests pass but app crashes" issues before they happen.
 
 1. **Dependency tests** — Verify packages are installed in `.venv`, not just found via `PYTHONPATH`
-2. **QThread test** — Runs `MarcParseWorker` in actual QThread to catch segfaults (like `dictiter_iternextitem` crash)
+2. **QThread tests** — Run workers in actual QThreads to catch segfaults:
+   - `test_stage_0_worker_runs_in_qthread_without_crash` — Catches `dictiter_iternextitem` crash
+   - `test_ner_worker_runs_in_qthread_without_crash` — Catches PyTorch/threading issues
 
-The crash reports showed `SIGABRT` in `dictiter_iternextitem` from `MarcParseWorker` thread. The new `test_stage_0_worker_runs_in_qthread_without_crash` test runs the worker in a real QThread to catch this class of threading bugs.
+### Fixed: JSON Serialization Crash
+
+A `SIGABRT` crash was occurring in `escape_unicode` → `list_extend` during `json.dumps()` in worker threads. The fix adds `copy.deepcopy()` before JSON serialization in all workers to prevent thread-safety issues.
+
+### Fixed: StageProgressWidget Missing set_progress Crash
+
+A `SIGABRT` crash occurred when `MainWindow._on_stage_progress` called `panel.stage_progress.set_progress(pct)` but `StageProgressWidget` had no `set_progress` method. The unhandled `AttributeError` inside a Qt slot caused `pyqt6_err_print()` → `QMessageLogger::fatal()` → `abort()`. This killed the app on every Stage 1 run. Fixed by adding `set_progress()` to `StageProgressWidget`. Guarded by `TestGuiWidgetContracts` and `TestFullGuiProgressChain`.
+
+### Fixed: VIAF API Returns HTML Instead of JSON
+
+The VIAF SRU API changed — it no longer returns JSON via the `recordSchema` query param. It now requires an `Accept: application/json` HTTP header. The JSON structure also changed: `records` → `records.record`, `recordData.viafID` → `recordData.ns2:VIAFCluster.ns2:viafID`. Fixed in `converter/authority/viaf_matcher.py`. Rate limit set to 2 req/s (0.5s between requests).
+
+### Fixed: KIMA Index Never Built
+
+The KIMA matcher silently returned `None` for every lookup because `data/kima/kima_index.db` was never compiled from the TSV source files. The matcher's `is_available` check returned `False`, but only logged at DEBUG level. Fixed by building the index. If the DB is missing after a fresh clone, rebuild it via the "Rebuild KIMA Index" button in the Authority panel or run:
+```bash
+PYTHONPATH=src:. .venv/bin/python -c "
+from converter.authority.kima_index import build_kima_index
+build_kima_index('data/kima', 'data/kima/kima_index.db', verbose=True)
+"
+```
+
+### Fixed: Authority Stage Data Flow
+
+AuthorityWorker now takes MARC extract (stage 0) as primary input and NER results (stage 1) as optional enrichment. Previously NER was primary and MARC was optional, which meant MARC name fields (100/110/111/700/710/711) were only matched when the user manually selected the MARC file. Now MARC names are always matched, and NER entities are merged in by `_control_number` when available.
 
 ## Quick Commands
 
@@ -70,6 +98,9 @@ Before running tests after code changes:
 | `QLabel` import missing | Import error in panel | Add `QLabel` to Qt imports |
 | Test timeout | Worker taking too long | Check for infinite loops or missing mock |
 | Import loop | Circular import | Move import inside function (lazy import) |
+| VIAF returns 0 matches | API returns HTML, not JSON | Ensure `Accept: application/json` header in `viaf_matcher.py` |
+| KIMA returns 0 matches | `kima_index.db` missing | Rebuild: "Rebuild KIMA Index" button or `build_kima_index()` |
+| Authority ignores MARC names | `input_path` is NER, not MARC | `input_path` must be stage 0 output; NER goes to `ner_path` |
 
 ## After Any Code Change
 
@@ -84,8 +115,17 @@ PYTHONPATH=src:. .venv/bin/python -m pytest tests/ -v \
 PYTHONPATH=src:. .venv/bin/python -m pytest tests/ -q --tb=short 2>&1 | tail -60
 ```
 
+## After Any Widget or Panel Change
+
+Always run the GUI widget contract tests to catch missing-method SIGABRT crashes:
+
+```bash
+PYTHONPATH=src:. .venv/bin/python -m pytest tests/ -v \
+  -k "TestGuiWidgetContracts or TestFullGuiProgressChain" 2>&1
+```
+
 ## Expected Baseline
 
-- Full suite: 40+ tests pass
+- Full suite: 50+ tests pass
 - Unit tests: Fast (< 1 min)
 - Integration tests: Slower (2-5 min) due to file I/O

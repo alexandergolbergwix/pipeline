@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _VIAF_SEARCH = "https://viaf.org/viaf/search"
 _TIMEOUT = 8          # seconds per request
-_RATE_LIMIT = 0.3     # seconds between requests (≈3 req/s)
+_RATE_LIMIT = 0.5     # seconds between requests (2 req/s — VIAF rate limit)
 
 
 class VIAFMatcher:
@@ -71,31 +71,39 @@ class VIAFMatcher:
         params = {
             "query": f'{cql_field} all "{name}"',
             "maximumRecords": "3",
-            "recordSchema": "info:srw/schema/1/JSON",
         }
         try:
-            resp = requests.get(_VIAF_SEARCH, params=params, timeout=_TIMEOUT)
+            resp = requests.get(
+                _VIAF_SEARCH,
+                params=params,
+                headers={"Accept": "application/json"},
+                timeout=_TIMEOUT,
+            )
             self._last_request = time.monotonic()
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
-            logger.debug("VIAF request failed for %r: %s", name, exc)
+            logger.warning("VIAF request failed for %r: %s", name, exc)
             self._last_request = time.monotonic()
             return None
 
-        records = (
-            data.get("searchRetrieveResponse", {})
-            .get("records") or []
-        )
-        if not records:
+        sru = data.get("searchRetrieveResponse", {})
+        records_wrapper = sru.get("records")
+        if not records_wrapper:
             return None
 
-        # records may be a list or a single dict when only one result
-        first = records[0] if isinstance(records, list) else records
+        # records_wrapper is {"record": [...]} or {"record": {...}}
+        record_list = records_wrapper.get("record") if isinstance(records_wrapper, dict) else records_wrapper
+        if not record_list:
+            return None
+
+        first = record_list[0] if isinstance(record_list, list) else record_list
+
+        # viafID lives at recordData.ns2:VIAFCluster.ns2:viafID
+        record_data = first.get("recordData", {})
         viaf_id = (
-            first.get("record", {})
-            .get("recordData", {})
-            .get("viafID")
+            record_data.get("ns2:VIAFCluster", {}).get("ns2:viafID")
+            or record_data.get("viafID")
         )
         if not viaf_id:
             return None
