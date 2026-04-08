@@ -186,6 +186,7 @@ class MainWindow(QMainWindow):
         self._controller.stage_error.connect(self._on_stage_error)
         self._controller.stage_progress.connect(self._on_stage_progress)
         self._controller.pipeline_finished.connect(self._on_pipeline_finished)
+        self._controller.entity_status.connect(self._wikidata_panel.update_entity_status)
 
         # Stage panels → controller
         self._convert_panel.run_requested.connect(self._on_run_convert)
@@ -439,10 +440,15 @@ class MainWindow(QMainWindow):
         self._shared_log.append_line(f"Validating {ttl_path.name}…")
         self._controller.start_stage(4, input_path=ttl_path, shapes_path=shapes_path)
 
-    def _on_run_wikidata(self, ttl_path: Path, token: str, dry_run: bool) -> None:
-        self._shared_log.append_line(f"Uploading {ttl_path.name} to Wikidata…")
+    def _on_run_wikidata(
+        self, input_path: Path, output_dir: Path,
+        token: str, dry_run: bool, batch_mode: bool,
+    ) -> None:
+        mode = "dry run" if dry_run else "live upload"
+        self._shared_log.append_line(f"Wikidata {mode} from {input_path.name}…")
         self._controller.start_stage(
-            5, input_path=ttl_path, token=token, dry_run=dry_run,
+            5, input_path=input_path, output_dir=output_dir,
+            token=token, dry_run=dry_run, batch_mode=batch_mode,
         )
 
     def _on_open_marc(self) -> None:

@@ -978,24 +978,167 @@ class ShaclValidateWorker(StageWorker):
 
 
 class WikidataUploadWorker(StageWorker):
-    """Upload RDF data to Wikidata (not yet implemented)."""
+    """Build Wikidata items from authority-enriched JSON, reconcile, and upload.
+
+    Three-phase pipeline:
+    1. Build WikidataItem objects from authority_enriched.json
+    2. Reconcile against existing Wikidata entities (SPARQL)
+    3. Upload to Wikidata (live) or export QuickStatements (dry run)
+    """
+
+    entity_status = pyqtSignal(str, str, str, str)  # (local_id, status, qid, message)
 
     def __init__(
         self,
-        ttl_path: Path,
-        token: str,
-        dry_run: bool,
+        input_path: Path,
+        output_dir: Path,
+        token: str = "",
+        dry_run: bool = True,
+        batch_mode: bool = False,
     ) -> None:
         super().__init__()
-        self._ttl_path = ttl_path
+        self._input_path = input_path
+        self._output_dir = output_dir
         self._token = token
         self._dry_run = dry_run
+        self._batch_mode = batch_mode
 
-    def run(self) -> None:
+    def run(self) -> None:  # noqa: C901
         try:
-            self.log_line.emit("Wikidata upload not yet implemented")
-            self.progress.emit(100)
-            self.finished.emit(self._ttl_path)
+            from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
+            from converter.wikidata.quickstatements import QuickStatementsExporter  # noqa: PLC0415
+            from converter.wikidata.reconciler import WikidataReconciler  # noqa: PLC0415
+
+            records: list[dict[str, object]] = json.loads(
+                self._input_path.read_text(encoding="utf-8"),
+            )
+            total = len(records)
+            if total == 0:
+                self.error.emit("No records to process")
+                return
+
+            # Phase 1: Build Wikidata items
+            self.log_line.emit(f"Phase 1/3: Building items from {total} records...")
+            builder = WikidataItemBuilder()
+            items = builder.build_all(
+                records,
+                progress_cb=lambda i, t: self.progress.emit(int(i / t * 30)),
+            )
+            self.log_line.emit(
+                f"Built {len(items)} items ({builder.person_count} persons, "
+                f"{len(items) - builder.person_count} manuscripts)"
+            )
+
+            # Phase 2: Reconcile against Wikidata
+            self.log_line.emit("Phase 2/3: Reconciling against Wikidata...")
+            reconciler = WikidataReconciler()
+            reconciled: dict[str, str | None] = {}
+            for i, item in enumerate(items):
+                if item.entity_type == "person":
+                    # Check VIAF/NLI IDs
+                    for stmt in item.statements:
+                        if stmt.property_id == "P214":  # VIAF
+                            qid = reconciler.reconcile_person_by_viaf(str(stmt.value))
+                            if qid:
+                                reconciled[item.local_id] = qid
+                                break
+                        elif stmt.property_id == "P8189":  # NLI
+                            qid = reconciler.reconcile_person_by_nli_id(str(stmt.value))
+                            if qid:
+                                reconciled[item.local_id] = qid
+                                break
+                elif item.entity_type == "manuscript":
+                    for stmt in item.statements:
+                        if stmt.property_id == "P8189":
+                            qid = reconciler.reconcile_manuscript_by_nli_id(str(stmt.value))
+                            if qid:
+                                reconciled[item.local_id] = qid
+                                break
+                if (i + 1) % 20 == 0:
+                    self.progress.emit(30 + int((i + 1) / len(items) * 30))
+
+            builder.apply_reconciliation(reconciled)
+            n_found = sum(1 for v in reconciled.values() if v)
+            self.log_line.emit(f"Reconciled: {n_found}/{len(items)} already on Wikidata")
+            self.progress.emit(60)
+
+            # Phase 3: Upload or export
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+
+            if self._dry_run:
+                self.log_line.emit("Phase 3/3: Exporting QuickStatements (dry run)...")
+                exporter = QuickStatementsExporter()
+                output_path = self._output_dir / "quickstatements.txt"
+                exporter.export_to_file(items, output_path)
+
+                # Also save item summary as JSON
+                summary_path = self._output_dir / "wikidata_items.json"
+                summary = []
+                for item in items:
+                    summary.append({
+                        "local_id": item.local_id,
+                        "entity_type": item.entity_type,
+                        "labels": item.labels,
+                        "existing_qid": item.existing_qid,
+                        "statements_count": len(item.statements),
+                    })
+                summary_path.write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                self.log_line.emit(
+                    f"Dry run complete — {len(items)} items exported to {output_path.name}"
+                )
+                self.progress.emit(100)
+                self.finished.emit(output_path)
+            else:
+                # Live upload
+                self.log_line.emit("Phase 3/3: Uploading to Wikidata...")
+                from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
+
+                uploader = WikidataUploader(bot_password=self._token)
+                batch_size = 45 if self._batch_mode else 0
+
+                def _entity_cb(
+                    local_id: str, status: str, qid: str | None, msg: str,
+                ) -> None:
+                    self.entity_status.emit(local_id, status, qid or "", msg)
+
+                results = uploader.upload_all(
+                    items,
+                    progress_cb=lambda i, t, msg: self.progress.emit(
+                        60 + int(i / t * 40),
+                    ),
+                    entity_cb=_entity_cb,
+                    batch_size=batch_size,
+                )
+
+                success = sum(1 for r in results if r.status in ("success", "exists"))
+                failed = sum(1 for r in results if r.status == "failed")
+
+                # Save results
+                output_path = self._output_dir / "upload_results.json"
+                result_data = [
+                    {
+                        "local_id": r.local_id,
+                        "status": r.status,
+                        "qid": r.qid,
+                        "message": r.message,
+                    }
+                    for r in results
+                ]
+                output_path.write_text(
+                    json.dumps(result_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                self.log_line.emit(
+                    f"Upload complete — {success} succeeded, {failed} failed"
+                )
+                self.progress.emit(100)
+                self.finished.emit(output_path)
+
         except Exception as exc:
             logger.error("Wikidata upload failed: %s", exc, exc_info=True)
             self.error.emit(str(exc))

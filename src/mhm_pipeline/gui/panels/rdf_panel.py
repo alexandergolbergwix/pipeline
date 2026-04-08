@@ -150,8 +150,18 @@ class RdfPanel(QWidget):
 
         dlg_layout = QVBoxLayout(dialog)
 
+        # Reuse the existing SQLite store via its DB path (avoids re-parsing TTL)
+        from mhm_pipeline.gui.widgets.graph_store import GraphStore  # noqa: PLC0415
         full_graph = KnowledgeGraphView()
-        full_graph.load_from_file(self._current_ttl_path)
+        existing_store = getattr(self._graph_view, '_store', None)
+        if existing_store is not None:
+            # Open a read-only connection to the same SQLite DB
+            full_graph._store = GraphStore(existing_store.db_path)
+            full_graph._ensure_web_view()
+            if full_graph._web_view is not None:
+                full_graph._render_summary()
+        else:
+            full_graph.load_from_file(self._current_ttl_path)
         dlg_layout.addWidget(full_graph, stretch=1)
 
         close_btn = QPushButton("Close")

@@ -45,6 +45,7 @@ class PipelineController(QObject):
     stage_finished = pyqtSignal(int, Path)
     stage_error = pyqtSignal(int, str)
     stage_progress = pyqtSignal(int, int)
+    entity_status = pyqtSignal(str, str, str, str)  # Wikidata per-entity status
     pipeline_finished = pyqtSignal()
 
     def __init__(self, settings: SettingsManager) -> None:
@@ -63,6 +64,10 @@ class PipelineController(QObject):
         worker.finished.connect(partial(self._on_worker_finished, stage_index))
         worker.error.connect(partial(self._on_worker_error, stage_index))
         worker.progress.connect(partial(self._on_worker_progress, stage_index))
+
+        # Forward entity_status from WikidataUploadWorker
+        if hasattr(worker, "entity_status"):
+            worker.entity_status.connect(self.entity_status)
 
         name = _STAGE_NAMES.get(stage_index, f"Stage {stage_index}")
         logger.info("Starting stage %d (%s)", stage_index, name)
@@ -172,11 +177,14 @@ class PipelineController(QObject):
             )
 
         if stage_index == 5:
-            token = str(kwargs.get("token", self._settings.wikidata_token))
+            token = str(kwargs.get("token", ""))
+            output_dir = Path(str(kwargs.get("output_dir", self._settings.output_dir)))
             return WikidataUploadWorker(
-                ttl_path=self._resolve_input(3, kwargs),
+                input_path=self._resolve_input(2, kwargs),
+                output_dir=output_dir,
                 token=token,
                 dry_run=bool(kwargs.get("dry_run", True)),
+                batch_mode=bool(kwargs.get("batch_mode", False)),
             )
 
         raise ValueError(f"Unknown stage index: {stage_index}")
