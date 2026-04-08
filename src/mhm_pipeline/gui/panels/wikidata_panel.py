@@ -19,11 +19,13 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -44,7 +46,14 @@ class WikidataPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
-        layout = QVBoxLayout(self)
+        # Outer layout with scroll area so nothing is ever cut off
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
 
         # Input file selector (authority_enriched.json)
         self._input_selector = FileSelector(
@@ -85,7 +94,7 @@ class WikidataPanel(QWidget):
         token_layout.addWidget(QLabel("Bot Password:"))
         self._token_edit = QLineEdit()
         self._token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._token_edit.setPlaceholderText("username@botname:password")
+        self._token_edit.setPlaceholderText("consumer_key|consumer_secret (OAuth 2.0)")
         token_layout.addWidget(self._token_edit)
         layout.addWidget(self._token_row)
         self._token_row.setVisible(False)
@@ -116,32 +125,29 @@ class WikidataPanel(QWidget):
         self._progress = PercentProgressWidget()
         layout.addWidget(self._progress)
 
-        # Stats preview
+        # Stats preview (compact)
         self._stats_label = QLabel("")
         self._stats_label.setStyleSheet(
             "background-color: #f0f9ff; border: 1px solid #bae6fd; "
-            "border-radius: 6px; padding: 8px; font-size: 12px;"
+            "border-radius: 6px; padding: 4px 8px; font-size: 11px;"
         )
         self._stats_label.setWordWrap(True)
+        self._stats_label.setMaximumHeight(60)
         self._stats_label.hide()
         layout.addWidget(self._stats_label)
 
-        # Upload progress view
+        # Upload progress view — gets most of the space
         self._upload_view = UploadProgressView()
-        layout.addWidget(self._upload_view, stretch=2)
+        layout.addWidget(self._upload_view, stretch=4)
 
-        # Export buttons
-        export_layout = QHBoxLayout()
-        export_layout.addStretch()
-        self._export_qs_btn = QPushButton("Export QuickStatements")
-        self._export_qs_btn.setEnabled(False)
-        self._export_qs_btn.setStyleSheet("color: #d97706;")
-        export_layout.addWidget(self._export_qs_btn)
-        layout.addLayout(export_layout)
-
-        # log viewer
+        # log viewer — compact
         self._log_viewer = LogViewer()
-        layout.addWidget(self._log_viewer, stretch=1)
+        self._log_viewer.setMaximumHeight(100)
+        layout.addWidget(self._log_viewer)
+
+        # Close scroll area
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
     # ── Accessors ─────────────────────────────────────────────────────
 
@@ -182,8 +188,15 @@ class WikidataPanel(QWidget):
 
         token = QLineEdit(self._token_edit.text())
         token.setEchoMode(QLineEdit.EchoMode.Password)
-        token.setPlaceholderText("username@botname:password")
-        form.addRow("Bot Password:", token)
+        token.setPlaceholderText("consumer_key|consumer_secret")
+        form.addRow("Auth Token:", token)
+
+        auth_help = QLabel(
+            "<small>Formats: <b>OAuth 2.0</b>: consumer_key|consumer_secret<br>"
+            "<b>Bot password</b>: Username@BotName:password</small>"
+        )
+        auth_help.setStyleSheet("color: #6b7280;")
+        form.addRow(auth_help)
 
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("OK")

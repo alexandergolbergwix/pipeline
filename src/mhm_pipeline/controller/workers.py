@@ -1097,7 +1097,7 @@ class WikidataUploadWorker(StageWorker):
                 self.log_line.emit("Phase 3/3: Uploading to Wikidata...")
                 from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
 
-                uploader = WikidataUploader(bot_password=self._token)
+                uploader = WikidataUploader(token=self._token)
                 batch_size = 45 if self._batch_mode else 0
 
                 def _entity_cb(
