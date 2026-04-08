@@ -7,6 +7,7 @@ from pathlib import Path
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -52,10 +53,17 @@ class ValidatePanel(QWidget):
         filter_layout.addStretch()
         layout.addLayout(filter_layout)
 
-        # run button
+        # buttons
+        btn_layout = QHBoxLayout()
         self._run_btn = QPushButton("Validate SHACL")
         self._run_btn.clicked.connect(self._on_run)
-        layout.addWidget(self._run_btn)
+        btn_layout.addWidget(self._run_btn)
+
+        self._fullscreen_btn = QPushButton("Open in Full Window")
+        self._fullscreen_btn.clicked.connect(self._on_fullscreen)
+        self._fullscreen_btn.setEnabled(False)
+        btn_layout.addWidget(self._fullscreen_btn)
+        layout.addLayout(btn_layout)
 
         # Progress bar
         self._progress = PercentProgressWidget()
@@ -145,9 +153,24 @@ class ValidatePanel(QWidget):
         self.run_requested.emit(ttl_path, shapes_path)
 
     def load_validation_results(self, result: dict) -> None:
-        """Load validation results into the view.
-
-        Args:
-            result: Dictionary with validation results from pyshacl.
-        """
+        """Load validation results into the view."""
         self._validation_view.load_results(result)
+        self._fullscreen_btn.setEnabled(True)
+
+    def _on_fullscreen(self) -> None:
+        """Open validation results in a full-screen dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("SHACL Validation Results")
+        screen = self.screen()
+        if screen:
+            geom = screen.availableGeometry()
+            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
+        else:
+            dialog.resize(1200, 800)
+        dlg_layout = QVBoxLayout(dialog)
+        full_view = ValidationResultView()
+        dlg_layout.addWidget(full_view, stretch=1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        dlg_layout.addWidget(close_btn)
+        dialog.exec()

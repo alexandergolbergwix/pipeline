@@ -117,7 +117,7 @@ class AuthorityMatcherView(QWidget):
 
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
-        self._table.setMinimumHeight(200)
+        self._table.setMinimumHeight(100)
 
         layout.addWidget(self._table)
 

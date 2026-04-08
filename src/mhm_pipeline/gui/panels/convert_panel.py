@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
+    QDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -63,10 +64,17 @@ class ConvertPanel(QWidget):
         range_layout.addStretch()
         layout.addWidget(range_group)
 
-        # run button
+        # buttons row
+        btn_layout = QHBoxLayout()
         self._run_btn = QPushButton("Parse MARC Records")
         self._run_btn.clicked.connect(self._on_run)
-        layout.addWidget(self._run_btn)
+        btn_layout.addWidget(self._run_btn)
+
+        self._fullscreen_btn = QPushButton("Open in Full Window")
+        self._fullscreen_btn.clicked.connect(self._on_fullscreen)
+        self._fullscreen_btn.setEnabled(False)
+        btn_layout.addWidget(self._fullscreen_btn)
+        layout.addLayout(btn_layout)
 
         # progress
         self._progress = StageProgressWidget()
@@ -107,9 +115,25 @@ class ConvertPanel(QWidget):
         )
 
     def display_extracted_data(self, data: ExtractedData) -> None:
-        """Display extracted MARC data in the visualizer.
-
-        Args:
-            data: The ExtractedData containing parsed MARC fields.
-        """
+        """Display extracted MARC data in the visualizer."""
         self._field_visualizer.load_from_extracted_data(data)
+        self._fullscreen_btn.setEnabled(True)
+
+    def _on_fullscreen(self) -> None:
+        """Open MARC field visualizer in a full-screen dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("MARC Field Visualizer")
+        screen = self.screen()
+        if screen:
+            geom = screen.availableGeometry()
+            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
+        else:
+            dialog.resize(1200, 800)
+        dlg_layout = QVBoxLayout(dialog)
+        full_viz = MarcFieldVisualizer()
+        # Copy data from the panel's visualizer if possible
+        dlg_layout.addWidget(full_viz, stretch=1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        dlg_layout.addWidget(close_btn)
+        dialog.exec()

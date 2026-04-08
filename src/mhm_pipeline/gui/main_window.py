@@ -121,7 +121,8 @@ class MainWindow(QMainWindow):
 
         # sidebar
         self._sidebar = QListWidget()
-        self._sidebar.setFixedWidth(160)
+        self._sidebar.setMinimumWidth(120)
+        self._sidebar.setMaximumWidth(200)
         for label in _STAGE_LABELS:
             item = QListWidgetItem(f"{_STATE_ICONS['pending']}  {label}")
             self._sidebar.addItem(item)
@@ -153,6 +154,9 @@ class MainWindow(QMainWindow):
         for panel in self._panels:
             self._stack.addWidget(panel)
         splitter.addWidget(self._stack)
+        splitter.setCollapsible(0, True)  # Sidebar can collapse
+        splitter.setStretchFactor(0, 0)   # Sidebar doesn't stretch
+        splitter.setStretchFactor(1, 1)   # Panels get all extra space
 
         main_layout.addWidget(splitter, stretch=3)
 

@@ -461,7 +461,7 @@ class EntityHighlighter(QWidget):
         # QTextEdit for displaying highlighted text
         self._text_edit = QTextEdit()
         self._text_edit.setReadOnly(True)
-        self._text_edit.setMinimumHeight(100)
+        self._text_edit.setMinimumHeight(60)
         self._text_edit.setPlaceholderText("No text loaded...")
         text_section.addWidget(self._text_edit)
 
@@ -481,7 +481,7 @@ class EntityHighlighter(QWidget):
 
         # QListWidget for entity list
         self._entity_list = QListWidget()
-        self._entity_list.setMinimumHeight(120)
+        self._entity_list.setMinimumHeight(60)
         self._entity_list.setAlternatingRowColors(True)
         entity_section.addWidget(self._entity_list)
 

@@ -374,7 +374,12 @@ class AuthorityPanel(QWidget):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Authority Match Results")
-        dialog.setMinimumSize(900, 600)
+        screen = self.screen()
+        if screen:
+            geom = screen.availableGeometry()
+            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
+        else:
+            dialog.resize(1200, 800)
 
         layout = QVBoxLayout(dialog)
 

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden; height: 100vh; width: 100vw;
+  }
+  #cy { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+  .panel {
+    position: absolute; border-radius: 8px; padding: 8px 12px;
+    font-size: 11px; z-index: 10; opacity: 0.92;
+    border: 1px solid transparent;
+  }
+  #legend { bottom: 12px; left: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+  #stats  { top: 12px; right: 12px; }
+  #hint   { top: 12px; left: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+</style>
+<!-- JS_CYTOSCAPE -->
+<!-- JS_DAGRE -->
+<!-- JS_CYTOSCAPE_DAGRE -->
+<!-- JS_QWEBCHANNEL -->
+</head>
+<body>
+<div id="cy"></div>
+<div id="legend" class="panel"></div>
+<div id="stats" class="panel"></div>
+<div id="hint" class="panel">Double-click a cluster to explore</div>
+<script>
+var DARK = /* IS_DARK_MODE */ false;
+
+var THEME = {
+  bg:          DARK ? '#1e1e2e' : '#ffffff',
+  text:        DARK ? '#cdd6f4' : '#1f2937',
+  panelBg:     DARK ? '#313244' : '#f9fafb',
+  panelBorder: DARK ? '#585b70' : '#d1d5db',
+  edge:        DARK ? '#6c7086' : '#9ca3af',
+  edgeHover:   DARK ? '#bac2de' : '#374151',
+  edgeLabel:   DARK ? '#a6adc8' : '#4b5563',
+  highlight:   '#fbbf24',
+  nodeText:    '#1f2937'
+};
+
+document.body.style.background = THEME.bg;
+document.body.style.color = THEME.text;
+document.querySelectorAll('.panel').forEach(function(el) {
+  el.style.background = THEME.panelBg;
+  el.style.borderColor = THEME.panelBorder;
+  el.style.color = THEME.text;
+});
+
+var TYPE_COLORS = /* TYPE_COLORS_JSON */ {
+  manuscript:         { bg: '#dbeafe', border: '#3b82f6' },
+  person:             { bg: '#fce7f3', border: '#ec4899' },
+  work:               { bg: '#dcfce7', border: '#22c55e' },
+  expression:         { bg: '#ccfbf1', border: '#14b8a6' },
+  place:              { bg: '#fef3c7', border: '#eab308' },
+  codicological_unit: { bg: '#ffedd5', border: '#f97316' },
+  event:              { bg: '#ede9fe', border: '#8b5cf6' },
+  organization:       { bg: '#e0e7ff', border: '#6366f1' },
+  default:            { bg: '#f3f4f6', border: '#6b7280' }
+};
+
+var graphData = /* GRAPH_DATA_JSON */ { nodes: [], edges: [] };
+
+// Legend
+var legendEl = document.getElementById('legend');
+var typesInGraph = {};
+graphData.nodes.forEach(function(n) {
+  var t = n.data.nodeType || 'default';
+  typesInGraph[t] = (typesInGraph[t] || 0) + 1;
+});
+Object.keys(typesInGraph).sort().forEach(function(t) {
+  var c = TYPE_COLORS[t] || TYPE_COLORS['default'];
+  var item = document.createElement('span');
+  item.className = 'legend-item';
+  item.innerHTML = '<span class="legend-dot" style="background:' + c.border + '"></span>' +
+    t.replace(/_/g, ' ') + ' (' + typesInGraph[t] + ')';
+  legendEl.appendChild(item);
+});
+
+document.getElementById('stats').textContent =
+  graphData.nodes.length + ' nodes, ' + graphData.edges.length + ' edges';
+
+// Cytoscape
+var cy = window.cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: graphData.nodes.concat(graphData.edges),
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'label': 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': '8px',
+        'color': THEME.nodeText,
+        'text-outline-width': 1,
+        'text-outline-color': 'data(bgColor)',
+        'background-color': 'data(bgColor)',
+        'border-color': 'data(borderColor)',
+        'border-width': 2,
+        'padding': '5px',
+        'shape': 'ellipse',
+        'text-max-width': '100px',
+        'text-wrap': 'wrap',
+        'min-zoomed-font-size': 5
+      }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'label': 'data(label)',
+        'width': 1.2,
+        'line-color': THEME.edge,
+        'target-arrow-color': THEME.edge,
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'arrow-scale': 0.7,
+        'font-size': '7px',
+        'color': THEME.edgeLabel,
+        'text-rotation': 'autorotate',
+        'text-outline-width': 2,
+        'text-outline-color': THEME.bg,
+        'text-background-color': THEME.bg,
+        'text-background-opacity': 0.8,
+        'text-background-padding': '1px',
+        'text-background-shape': 'roundrectangle',
+        'text-max-width': '80px',
+        'text-wrap': 'ellipsis',
+        'text-margin-y': -6,
+        'min-zoomed-font-size': 4
+      }
+    },
+    {
+      selector: 'node:selected',
+      style: {
+        'border-width': 3,
+        'border-color': THEME.highlight,
+        'overlay-opacity': 0.1
+      }
+    },
+    {
+      selector: '.highlighted',
+      style: {
+        'border-width': 3,
+        'border-color': THEME.highlight,
+        'z-index': 999
+      }
+    },
+    {
+      selector: '.faded',
+      style: { 'opacity': 0.12 }
+    }
+  ],
+  layout: { name: 'cose', animate: false, nodeRepulsion: 10000, idealEdgeLength: 100, nodeDimensionsIncludeLabels: true },
+  minZoom: 0.05,
+  maxZoom: 4,
+  wheelSensitivity: 0.2,
+  hideEdgesOnViewport: true,
+  textureOnViewport: true,
+  pixelRatio: window.devicePixelRatio || 2
+});
+
+// Size nodes by degree
+cy.nodes().forEach(function(n) {
+  var d = n.degree();
+  var size = Math.max(25, Math.min(80, 20 + d * 4));
+  n.style({ 'width': size, 'height': size });
+});
+
+// Edge hover highlight (labels are always visible, but emphasize on hover)
+cy.on('mouseover', 'edge', function(e) {
+  e.target.style({ 'line-color': THEME.edgeHover, 'width': 2.5,
+                    'font-size': '9px', 'text-background-opacity': 1 });
+});
+cy.on('mouseout', 'edge', function(e) {
+  e.target.style({ 'line-color': THEME.edge, 'width': 1.2,
+                    'font-size': '7px', 'text-background-opacity': 0.8 });
+});
+
+// QWebChannel bridge
+if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {
+  new QWebChannel(qt.webChannelTransport, function(channel) {
+    window.bridge = channel.objects.bridge;
+    cy.on('tap', 'node', function(evt) {
+      var node = evt.target;
+      if (window.bridge) window.bridge.onNodeSelected(node.id(), JSON.stringify(node.data('properties') || {}));
+    });
+    cy.on('tap', 'edge', function(evt) {
+      var edge = evt.target;
+      if (window.bridge) window.bridge.onEdgeSelected(edge.id(), JSON.stringify({source: edge.data('source'), target: edge.data('target'), label: edge.data('label')}));
+    });
+    cy.on('dblclick', 'node', function(evt) {
+      var node = evt.target;
+      if (node.data('isCluster') && window.bridge) window.bridge.onClusterExpand(node.data('nodeType'));
+    });
+  });
+}
+
+// Functions callable from Python
+window.setLayout = function(name) {
+  var opts = { name: name, animate: true, animationDuration: 600, nodeDimensionsIncludeLabels: true };
+  if (name === 'cose') { opts.nodeRepulsion = 10000; opts.idealEdgeLength = 100; }
+  else if (name === 'dagre') { opts.rankDir = 'TB'; opts.nodeSep = 50; opts.rankSep = 70; }
+  else if (name === 'concentric') { opts.concentric = function(n) { return n.degree(); }; opts.levelWidth = function() { return 2; }; }
+  cy.layout(opts).run();
+};
+window.filterByTypes = function(visibleTypesJson) {
+  var v = JSON.parse(visibleTypesJson);
+  cy.batch(function() {
+    cy.nodes().forEach(function(n) { n[v.length === 0 || v.indexOf(n.data('nodeType') || 'default') >= 0 ? 'removeClass' : 'addClass']('faded'); });
+    cy.edges().forEach(function(e) { e[e.source().hasClass('faded') || e.target().hasClass('faded') ? 'addClass' : 'removeClass']('faded'); });
+  });
+};
+window.searchNode = function(q) {
+  cy.nodes().removeClass('highlighted');
+  if (!q) return;
+  var matches = cy.nodes().filter(function(n) { return (n.data('label') || '').toLowerCase().indexOf(q.toLowerCase()) >= 0; });
+  matches.addClass('highlighted');
+  if (matches.length > 0) cy.animate({ fit: { eles: matches, padding: 80 }, duration: 500 });
+};
+window.highlightNodes = function(urisJson) {
+  cy.nodes().removeClass('highlighted faded');
+  cy.edges().removeClass('faded');
+  var uris = JSON.parse(urisJson);
+  if (!uris || uris.length === 0) return 0;
+  var uriSet = {};
+  uris.forEach(function(u) { uriSet[u] = true; });
+  var matches = cy.nodes().filter(function(n) { return uriSet[n.id()] === true; });
+  var nonMatches = cy.nodes().filter(function(n) { return uriSet[n.id()] !== true; });
+  matches.addClass('highlighted');
+  nonMatches.addClass('faded');
+  cy.edges().filter(function(e) {
+    return uriSet[e.source().id()] !== true && uriSet[e.target().id()] !== true;
+  }).addClass('faded');
+  if (matches.length > 0) cy.animate({ fit: { eles: matches, padding: 80 }, duration: 500 });
+  return matches.length;
+};
+window.resetView = function() {
+  cy.nodes().removeClass('highlighted faded');
+  cy.edges().removeClass('faded');
+  cy.animate({ fit: { padding: 40 }, duration: 300 });
+};
+window.toggleEdgeLabels = function(show) {
+  cy.edges().style('text-opacity', show ? 1 : 0);
+};
+window.navigateToNode = function(uri) {
+  var node = cy.getElementById(uri);
+  if (node.length > 0) {
+    cy.nodes().unselect();
+    node.select();
+    cy.animate({ center: { eles: node }, zoom: 1.5, duration: 500 });
+  }
+};
+</script>
+</body>
+</html>

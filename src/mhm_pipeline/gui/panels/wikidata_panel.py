@@ -106,6 +106,10 @@ class WikidataPanel(QWidget):
         self._load_btn.clicked.connect(self._on_load_results)
         btn_layout.addWidget(self._load_btn)
 
+        self._fullscreen_btn = QPushButton("Open in Full Window")
+        self._fullscreen_btn.clicked.connect(self._on_fullscreen)
+        btn_layout.addWidget(self._fullscreen_btn)
+
         layout.addLayout(btn_layout)
 
         # Progress bar
@@ -284,3 +288,21 @@ class WikidataPanel(QWidget):
         except Exception as e:
             self._log_viewer.append_line(f"Error loading results: {e}")
             QMessageBox.critical(self, "Load Error", str(e))
+
+    def _on_fullscreen(self) -> None:
+        """Open upload progress in a full-screen dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Wikidata Upload Progress")
+        screen = self.screen()
+        if screen:
+            geom = screen.availableGeometry()
+            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
+        else:
+            dialog.resize(1200, 800)
+        dlg_layout = QVBoxLayout(dialog)
+        full_view = UploadProgressView()
+        dlg_layout.addWidget(full_view, stretch=1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        dlg_layout.addWidget(close_btn)
+        dialog.exec()

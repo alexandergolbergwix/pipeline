@@ -197,7 +197,7 @@ class NerPanel(QWidget):
 
         # Small entity list preview (capped height)
         self._preview_list = QListWidget()
-        self._preview_list.setMaximumHeight(140)
+        self._preview_list.setMaximumHeight(200)
         self._preview_list.setAlternatingRowColors(True)
         self._preview_list.setStyleSheet("border: none;")
         preview_layout.addWidget(self._preview_list)
