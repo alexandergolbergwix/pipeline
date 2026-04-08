@@ -62,7 +62,7 @@
   {\LARGE\bfseries Mapping Hebrew Manuscripts (MHM)}\\[0.5cm]
   {\LARGE\bfseries Cross-Platform Desktop Application}\\[0.5cm]
   {\Large System Design Document}\\[1cm]
-  {\large Version 1.5}
+  {\large Version 1.6}
 }
 \author{
   Alexander Goldberg\\
@@ -74,7 +74,7 @@
   \href{mailto:gila.prebor@biu.ac.il}{gila.prebor@biu.ac.il}\\
   \href{https://orcid.org/0000-0001-6458-0831}{ORCID: 0000-0001-6458-0831}
 }
-\date{March 2026}
+\date{April 2026}
 
 \begin{document}
 \maketitle
@@ -114,7 +114,7 @@ Three requirements drive every decision in this document:
 
 \begin{description}[style=nextline, leftmargin=3cm]
 \item[GUI framework] \textbf{PyQt6} --- already adopted in \filepath{converter/gui/main\_window.py}, GPL-compatible, richest widget set for pipeline UIs, Apple Silicon arm64 wheels available on PyPI.
-\item[Distribution] \textbf{uv bootstrap + native OS installers} --- the installer ships a small launcher ($<$20\,MB) that invokes a \code{uv}-based bootstrap script to install Python~3.12 and all dependencies into an isolated virtual environment. The joint NER model ($\approx$2.2\,GB) is downloaded on first launch via a PyQt6 wizard using \code{huggingface\_hub}.
+\item[Distribution] \textbf{uv bootstrap + native OS installers} --- the installer ships a small launcher ($<$20\,MB) that invokes a \code{uv}-based bootstrap script to install Python~3.12 and all dependencies into an isolated virtual environment. Three NER models (person $\approx$2.2\,GB, provenance $\approx$704\,MB, contents $\approx$704\,MB) are either bundled in the \code{.app}/\code{.dmg} or downloaded on first launch via a PyQt6 wizard using \code{huggingface\_hub}. The macOS \code{.app} bundle is $\approx$14\,GB; the compressed DMG is $\approx$9.4\,GB.
 \item[Build toolchain] \textbf{pkgbuild / productbuild} (macOS, included in Xcode Command Line Tools) and \textbf{Inno Setup 6} (Windows, free). Both are invoked automatically by a GitHub Actions release workflow triggered on version tags.
 \item[Project config] A single \code{pyproject.toml} at the repository root replaces all per-module \code{requirements.txt} files and centralises \code{ruff}, \code{mypy}, and \code{pytest} configuration.
 \end{description}
@@ -352,9 +352,11 @@ On the first launch after installation, the application detects that the NER mod
 
 \begin{description}[style=nextline, leftmargin=2.5cm]
 \item[Page 1 --- Welcome] Displays hardware detection results: GPU type (Apple MPS / NVIDIA CUDA / CPU-only), available disk space, and estimated download size. Warns the user if less than 10\,GB of free disk space is available.
-\item[Page 2 --- Model Profile] Displays the single joint NER model that will be downloaded:
+\item[Page 2 --- Model Profile] Displays the three NER models that will be downloaded:
   \begin{itemize}
-    \item \textbf{Joint model} (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, $\approx$2.2\,GB): DictaBERT-based multi-task model that performs PERSON entity detection (NER F1 0.9080) and role classification (AUTHOR / COPYIST / OTHER) in a single forward pass; runs on MPS, CUDA, or CPU.
+    \item \textbf{Person NER model} (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, $\approx$2.2\,GB): DictaBERT-based model that performs PERSON entity detection (NER F1 85.7\%) with keyword-based role classification (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR); runs on MPS, CUDA, or CPU.
+    \item \textbf{Provenance NER model} (\filepath{ner/provenance\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 561 provenance fields; extracts OWNER, DATE, and COLLECTION entities (93.96\% F1).
+    \item \textbf{Contents NER model} (\filepath{ner/contents\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 505 contents fields; extracts WORK, FOLIO, and WORK\_AUTHOR entities (99.99\% F1).
   \end{itemize}
 \item[Page 3 --- Download] A \code{QThread} worker calls \code{huggingface\_hub.snapshot\_download()} for each required model repository. A \code{QProgressBar} per model and an overall progress bar are updated via Qt signals. The download is resumable: if the wizard is closed and re-opened, already-downloaded shards are skipped.
 \item[Page 4 --- Complete] Writes \code{config.json} to the application data directory (see Section~\ref{sec:crossplatform}) recording \code{HF\_HOME}, selected device, and installed model versions. Sets \code{HF\_HUB\_OFFLINE=1} in the runtime environment so subsequent launches do not attempt network access.
@@ -390,7 +392,7 @@ The application is organised into four horizontal layers. Each layer depends onl
 \node[layer, fill=green!10] (core) at (0,-4.0)
   {\textbf{Core Pipeline Layer (existing, unchanged)}\\
    \code{UnifiedReader} \quad \code{MarcToRdfMapper} \quad \code{JointNERPipeline} \quad
-   \code{GraphBuilder} \quad \code{ShaclValidator}};
+   \code{NERInferencePipeline} \quad \code{GraphBuilder} \quad \code{ShaclValidator}};
 
 \node[layer, fill=purple!8] (data) at (0,-6.0)
   {\textbf{Data / External Services Layer}\\
@@ -432,7 +434,9 @@ The application is organised into four horizontal layers. Each layer depends onl
 \hline
 \code{SettingsManager} & Reads/writes \code{QSettings}; exposes typed accessors & Main & All components \\
 \hline
-\code{AuthorityWorker} & Matches NER entities against Mazal (SQLite) + VIAF (REST); matches MARC places against KIMA (SQLite) & Worker & Core authority module \\
+\code{NerWorker} & Runs 3 NER pipelines sequentially (person, provenance, contents); accepts \code{provenance\_model\_path} and \code{contents\_model\_path} constructor params; uses \code{\_split\_provenance\_text()} for provenance preprocessing; provenance and contents models share DictaBERT base via \code{NERInferencePipeline.from\_shared\_base()} & Worker & Core NER modules \\
+\hline
+\code{AuthorityWorker} & Matches NER entities (persons, OWNER, WORK\_AUTHOR) against Mazal (SQLite) + VIAF (REST); matches MARC places against KIMA (SQLite) & Worker & Core authority module \\
 \hline
 \code{MazalIndexWorker} & Re-parses all \code{NLIAUT*.xml} files and rebuilds the Mazal SQLite authority index & Worker & \code{MazalIndex} (core) \\
 \hline
@@ -490,7 +494,11 @@ mhm-pipeline/
 |       |       |-- file_selector.py
 |       |       |-- log_viewer.py
 |       |       |-- stage_progress.py
-|       |       `-- ttl_preview.py
+|       |       |-- ttl_preview.py
+|       |       |-- knowledge_graph_view.py  # Cytoscape.js interactive graph
+|       |       |-- extraction_editor.py     # expert entity correction
+|       |       |-- triple_graph_view.py     # legacy static graph
+|       |       `-- graph_store.py           # RDF graph store for Cytoscape.js
 |       |-- controller/
 |       |   |-- pipeline_controller.py
 |       |   `-- workers.py
@@ -507,6 +515,7 @@ mhm-pipeline/
 |   |-- macos/
 |   |   |-- build_pkg.sh
 |   |   |-- install.sh
+|   |   |-- launcher.m         # Obj-C launcher, sets NER model env vars
 |   |   `-- MHMPipeline.pkgproj
 |   `-- windows/
 |       |-- build_installer.iss  # Inno Setup script
@@ -645,12 +654,12 @@ The main window consists of four regions: a menu bar, a left sidebar showing pip
 \draw[fill=blue!5] (0,0) rectangle (3,8.3);
 \node[label] at (1.5, 8.1) {STAGES};
 \foreach \y/\name/\col in {
-  7.3/1. Parse MARC/gray!30,
-  6.5/2. NER/gray!30,
-  5.7/3. Authority/gray!30,
-  4.9/4. Build RDF/gray!30,
-  4.1/5. Validate/gray!30,
-  3.3/6. Wikidata/gray!30} {
+  7.3/MARC Parsing/gray!30,
+  6.5/NER Extraction/gray!30,
+  5.7/Authority Matching/gray!30,
+  4.9/RDF Graph/gray!30,
+  4.1/SHACL Validation/gray!30,
+  3.3/Wikidata Upload/gray!30} {
   \draw[fill=\col, rounded corners=2pt] (0.2,\y-0.3) rectangle (2.8,\y+0.3);
   \node[font=\scriptsize] at (1.5,\y) {\name};
 }
@@ -695,17 +704,17 @@ Each of the six pipeline stages has a dedicated panel. All panels share the same
 \endhead
 \hline
 \endfoot
-\code{ConvertPanel} & MARC file picker, output dir picker, record range spin boxes, Run button & \code{progress} $\to$ progress bar; \code{log\_line} $\to$ log viewer \\
+\code{ConvertPanel} & MARC file picker, output dir picker, record range spin boxes, ``Parse MARC Records'' button & \code{progress} $\to$ progress bar; \code{log\_line} $\to$ log viewer \\
 \hline
-\code{NerPanel} & Input JSON selector, output dir selector, model ID text field (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}), batch size spin box, ``Load Results'' button for viewing previously generated NER JSON & \code{progress} $\to$ per-record bar; \code{log\_line} $\to$ log; \code{finished} $\to$ \code{display\_entities()} \\
+\code{NerPanel} & Input JSON selector, output dir selector, 3 model checkboxes (Person NER, Provenance NER, Contents NER) with path fields, batch size spin box, ``Extract Named Entities'' button, tabbed View + Edit Entities panes with \code{ExtractionEditor} for expert entity correction, ``Load Results'' button & \code{run\_requested(Path, Path, str, int, str, str)} with 6 params (input, output, model, batch, prov\_model, cont\_model) $\to$ controller; \code{finished} $\to$ \code{display\_entities()} \\
 \hline
-\code{AuthorityPanel} & NER results selector, output dir, MARC extract selector, VIAF/KIMA checkboxes, Mazal DB + XML dir selectors, KIMA DB + TSV dir selectors, ``Rebuild Mazal Index\ldots'' and ``Rebuild KIMA Index\ldots'' buttons & \code{run\_requested(Path,Path,Path,bool,bool,str,str)} $\to$ controller; rebuild buttons launch \code{MazalIndexWorker}/\code{KimaIndexWorker} in-panel \\
+\code{AuthorityPanel} & NER results selector, output dir, MARC extract selector, VIAF/KIMA checkboxes, Mazal DB + XML dir selectors, KIMA DB + TSV dir selectors, ``Match Authorities'' button, ``Rebuild Mazal Index\ldots'' and ``Rebuild KIMA Index\ldots'' buttons & \code{run\_requested(Path,Path,Path,bool,bool,str,str)} $\to$ controller; rebuild buttons launch \code{MazalIndexWorker}/\code{KimaIndexWorker} in-panel \\
 \hline
-\code{RdfPanel} & Namespace prefix editor, URI template fields, serialisation format combo & \code{progress} $\to$ bar; \code{finished} $\to$ open TTL in preview widget \\
+\code{RdfPanel} & Input selector, output dir, ``Build RDF Graph'' button, tabbed results: ``TTL Preview'' (\code{QPlainTextEdit}) + ``Interactive Graph'' (\code{KnowledgeGraphView} with Cytoscape.js), ``Load Results'' and ``Open in Full Window'' buttons & \code{progress} $\to$ bar; \code{finished} $\to$ load TTL and render interactive graph \\
 \hline
-\code{ValidatePanel} & SHACL shapes file selector, severity filter combo, violations table view & \code{finished} $\to$ populate \code{QTableWidget} with SHACL report \\
+\code{ValidatePanel} & SHACL shapes file selector, severity filter combo, violations table view, ``Validate SHACL'' button & \code{finished} $\to$ populate \code{QTableWidget} with SHACL report \\
 \hline
-\code{WikidataPanel} & OAuth token field (masked), dry-run checkbox, entity reconciliation options & \code{log\_line} $\to$ log; \code{progress} $\to$ upload bar \\
+\code{WikidataPanel} & OAuth token field (masked), dry-run checkbox, entity reconciliation options, ``Upload to Wikidata'' button & \code{log\_line} $\to$ log; \code{progress} $\to$ upload bar \\
 \hline
 \end{longtable}
 
@@ -731,7 +740,8 @@ The GUI supports automatic dark mode detection and adaptation via the \code{is\_
 \item \textbf{BaseVisualizationWidget} --- placeholder text uses palette colours instead of \code{\#6b7280}
 \item \textbf{PipelineFlowWidget} --- default, completed, and active animation colours have dark variants (e.g., \code{\_DEFAULT\_BG\_DARK = "\#374151"})
 \item \textbf{ValidationResultView} --- summary bar uses \code{palette(base)} instead of \code{\#f3f4f6}
-\item \textbf{TripleGraphView} --- transparent background inherits palette; edges use \code{palette(mid)}
+\item \textbf{KnowledgeGraphView} --- Cytoscape.js-based interactive graph; transparent background inherits palette; edges use \code{palette(mid)}
+\item \textbf{TripleGraphView} --- legacy static graph; transparent background inherits palette
 \item \textbf{MarcFieldVisualizer} --- field colour backgrounds are pre-calculated with sufficient contrast for both modes
 \item \textbf{EntityHighlighter} --- legend uses inline styles with explicit text colours
 \end{itemize}
@@ -807,7 +817,7 @@ Temp dir & \code{/tmp} & \code{\%TEMP\%} & \code{tempfile.mkdtemp()} \\
 \hline
 GPU acceleration & Apple MPS (\code{torch.backends.mps}) & NVIDIA CUDA (\code{torch.cuda}) & \code{gpu.py} cascade \\
 \hline
-Launcher & \code{.app} bundle + shell script & \code{.exe} + \code{.bat} & Installer-generated \\
+Launcher & \code{.app} bundle + Objective-C \code{launcher.m} & \code{.exe} + \code{.bat} & Installer-generated; macOS launcher sets \code{MHM\_BUNDLED\_NER\_MODEL}, \code{MHM\_BUNDLED\_PROVENANCE\_MODEL}, \code{MHM\_BUNDLED\_CONTENTS\_MODEL} env vars \\
 \hline
 Hebrew RTL text & Cocoa native & Uniscribe native & Qt handles both \\
 \hline
@@ -1249,6 +1259,8 @@ v1.0 & Public release & Documentation site; \code{CONTRIBUTING.md}; all stages i
 v1.4 & Epistemological metadata & Certainty levels, attribution sources, cataloging-view and philological-view paradigm bridge & Mar 2026 \\
 \hline
 v1.5 & Ontology coverage & 12 new MARC field handlers; 10 new \code{GraphBuilder} methods; coverage target $\geq$85\% of mappable terms; 33 e2e integration tests & Mar 2026 \\
+\hline
+v1.6 & Multi-model NER + GUI polish & 3-model NER system (person + provenance + contents); descriptive stage labels and button names; \code{KnowledgeGraphView} (Cytoscape.js) replacing \code{TripleGraphView}; \code{ExtractionEditor} for expert entity correction; keyword-based role classification; macOS app bundles all 3 NER models ($\sim$14\,GB total, $\sim$9.4\,GB DMG) & Apr 2026 \\
 \hline
 \end{longtable}
 
