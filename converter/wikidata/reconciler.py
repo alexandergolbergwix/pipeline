@@ -1,0 +1,420 @@
+"""Reconcile pipeline entities against existing Wikidata items via SPARQL.
+
+Checks whether manuscripts, persons, and places already exist on Wikidata
+before creating new items. Uses the Wikidata Query Service SPARQL endpoint.
+
+Rate-limited to 1 query/second per Wikidata API policy.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+import requests
+
+from converter.wikidata.property_mapping import (
+    Q_MANUSCRIPT,
+    Q_NLI,
+    extract_viaf_id,
+    extract_wikidata_qid,
+)
+
+logger = logging.getLogger(__name__)
+
+_SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
+_RATE_LIMIT_SECONDS = 1.0
+_TIMEOUT_SECONDS = 15
+_USER_AGENT = "MHMPipeline/0.1 (https://github.com/alexgoldberg/mhm-pipeline; alexander.goldberg@biu.ac.il)"
+
+
+@dataclass
+class ReconciliationResult:
+    """Result of reconciling a single entity."""
+
+    entity_type: str  # "manuscript" | "person" | "place"
+    local_id: str
+    label: str
+    existing_qid: str | None = None
+    action: str = "create"  # "create" | "update" | "skip"
+
+
+@dataclass
+class ReconciliationReport:
+    """Aggregated reconciliation results."""
+
+    results: list[ReconciliationResult] = field(default_factory=list)
+    manuscripts_found: int = 0
+    manuscripts_new: int = 0
+    persons_found: int = 0
+    persons_new: int = 0
+    places_found: int = 0
+    places_new: int = 0
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to a JSON-compatible dict."""
+        return {
+            "manuscripts_found": self.manuscripts_found,
+            "manuscripts_new": self.manuscripts_new,
+            "persons_found": self.persons_found,
+            "persons_new": self.persons_new,
+            "places_found": self.places_found,
+            "places_new": self.places_new,
+            "total_results": len(self.results),
+            "results": [
+                {
+                    "entity_type": r.entity_type,
+                    "local_id": r.local_id,
+                    "label": r.label,
+                    "existing_qid": r.existing_qid,
+                    "action": r.action,
+                }
+                for r in self.results
+            ],
+        }
+
+
+class WikidataReconciler:
+    """Reconcile pipeline entities against Wikidata via SPARQL.
+
+    Usage::
+
+        reconciler = WikidataReconciler()
+        report = reconciler.reconcile_all(records)
+        print(f"Found {report.manuscripts_found} existing manuscripts")
+    """
+
+    def __init__(self, sparql_endpoint: str = _SPARQL_ENDPOINT) -> None:
+        self._endpoint = sparql_endpoint
+        self._cache: dict[str, str | None] = {}
+        self._last_request_time: float = 0.0
+        self._session = requests.Session()
+        self._session.headers.update({
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/sparql-results+json",
+        })
+
+    def _rate_limit(self) -> None:
+        """Enforce rate limiting between SPARQL requests."""
+        elapsed = time.time() - self._last_request_time
+        if elapsed < _RATE_LIMIT_SECONDS:
+            time.sleep(_RATE_LIMIT_SECONDS - elapsed)
+        self._last_request_time = time.time()
+
+    def _query(self, sparql: str) -> list[dict[str, object]]:
+        """Execute a SPARQL query and return results bindings.
+
+        Args:
+            sparql: The SPARQL query string.
+
+        Returns:
+            List of result binding dicts.
+        """
+        self._rate_limit()
+        try:
+            resp = self._session.get(
+                self._endpoint,
+                params={"query": sparql, "format": "json"},
+                timeout=_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("results", {}).get("bindings", [])
+        except requests.RequestException as exc:
+            logger.warning("SPARQL query failed: %s", exc)
+            return []
+
+    def reconcile_manuscript_by_nli_id(self, control_number: str) -> str | None:
+        """Check if a manuscript item exists via P8189 (NLI J9U ID).
+
+        Args:
+            control_number: NLI system number.
+
+        Returns:
+            QID if found, None otherwise.
+        """
+        cache_key = f"ms:nli:{control_number}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sparql = f"""
+        SELECT ?item WHERE {{
+          ?item wdt:P8189 "{control_number}" .
+          ?item wdt:P31 wd:{Q_MANUSCRIPT} .
+        }} LIMIT 1
+        """
+        results = self._query(sparql)
+        qid = None
+        if results:
+            uri = results[0].get("item", {}).get("value", "")
+            qid = extract_wikidata_qid(uri)
+
+        self._cache[cache_key] = qid
+        return qid
+
+    def reconcile_manuscript_by_shelfmark(
+        self, shelfmark: str, collection_qid: str = Q_NLI,
+    ) -> str | None:
+        """Check if a manuscript item exists via P195 (collection) + P217 (shelfmark).
+
+        Args:
+            shelfmark: The inventory/shelf mark string.
+            collection_qid: QID of the holding institution.
+
+        Returns:
+            QID if found, None otherwise.
+        """
+        cache_key = f"ms:shelf:{collection_qid}:{shelfmark}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        safe_shelfmark = shelfmark.replace('"', '\\"')
+        sparql = f"""
+        SELECT ?item WHERE {{
+          ?item wdt:P195 wd:{collection_qid} .
+          ?item wdt:P217 "{safe_shelfmark}" .
+        }} LIMIT 1
+        """
+        results = self._query(sparql)
+        qid = None
+        if results:
+            uri = results[0].get("item", {}).get("value", "")
+            qid = extract_wikidata_qid(uri)
+
+        self._cache[cache_key] = qid
+        return qid
+
+    def reconcile_person_by_viaf(self, viaf_id: str) -> str | None:
+        """Check if a person item exists via P214 (VIAF ID).
+
+        Args:
+            viaf_id: Numeric VIAF cluster ID.
+
+        Returns:
+            QID if found, None otherwise.
+        """
+        cache_key = f"person:viaf:{viaf_id}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sparql = f"""
+        SELECT ?item WHERE {{
+          ?item wdt:P214 "{viaf_id}" .
+        }} LIMIT 1
+        """
+        results = self._query(sparql)
+        qid = None
+        if results:
+            uri = results[0].get("item", {}).get("value", "")
+            qid = extract_wikidata_qid(uri)
+
+        self._cache[cache_key] = qid
+        return qid
+
+    def reconcile_person_by_nli_id(self, nli_id: str) -> str | None:
+        """Check if a person item exists via P8189 (NLI J9U ID).
+
+        Args:
+            nli_id: NLI authority ID (Mazal ID).
+
+        Returns:
+            QID if found, None otherwise.
+        """
+        cache_key = f"person:nli:{nli_id}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sparql = f"""
+        SELECT ?item WHERE {{
+          ?item wdt:P8189 "{nli_id}" .
+        }} LIMIT 1
+        """
+        results = self._query(sparql)
+        qid = None
+        if results:
+            uri = results[0].get("item", {}).get("value", "")
+            qid = extract_wikidata_qid(uri)
+
+        self._cache[cache_key] = qid
+        return qid
+
+    def reconcile_place(self, wikidata_uri: str) -> str | None:
+        """Validate that a KIMA-provided Wikidata QID exists.
+
+        Args:
+            wikidata_uri: Full Wikidata URI from KIMA data.
+
+        Returns:
+            QID if valid and exists, None otherwise.
+        """
+        qid = extract_wikidata_qid(wikidata_uri)
+        if not qid:
+            return None
+
+        cache_key = f"place:{qid}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # KIMA QIDs are already validated; just confirm format
+        self._cache[cache_key] = qid
+        return qid
+
+    def reconcile_manuscript(
+        self, control_number: str, shelfmark: str | None,
+    ) -> str | None:
+        """Reconcile a manuscript by NLI ID first, then shelfmark fallback.
+
+        Args:
+            control_number: NLI system number.
+            shelfmark: Optional inventory number.
+
+        Returns:
+            QID if found, None otherwise.
+        """
+        qid = self.reconcile_manuscript_by_nli_id(control_number)
+        if qid:
+            return qid
+
+        if shelfmark:
+            return self.reconcile_manuscript_by_shelfmark(shelfmark)
+
+        return None
+
+    def reconcile_person(
+        self, name: str, viaf_uri: str | None, nli_id: str | None,
+    ) -> str | None:
+        """Reconcile a person by VIAF first, then NLI ID.
+
+        Args:
+            name: Person name (used for logging only).
+            viaf_uri: VIAF URI if available.
+            nli_id: NLI/Mazal authority ID if available.
+
+        Returns:
+            QID if found, None otherwise.
+        """
+        if viaf_uri:
+            viaf_id = extract_viaf_id(viaf_uri)
+            if viaf_id:
+                qid = self.reconcile_person_by_viaf(viaf_id)
+                if qid:
+                    return qid
+
+        if nli_id:
+            qid = self.reconcile_person_by_nli_id(nli_id)
+            if qid:
+                return qid
+
+        return None
+
+    def reconcile_all(
+        self,
+        records: list[dict[str, object]],
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> ReconciliationReport:
+        """Reconcile all entities across all records.
+
+        Args:
+            records: List of record dicts from authority_enriched.json.
+            progress_cb: Optional callback called with (current, total).
+
+        Returns:
+            A ReconciliationReport with per-entity results and aggregate counts.
+        """
+        report = ReconciliationReport()
+        total = len(records)
+
+        # Collect unique persons to avoid redundant queries
+        persons_seen: dict[str, ReconciliationResult] = {}
+
+        for idx, record in enumerate(records):
+            control_number = str(record.get("_control_number", ""))
+            title = str(record.get("title", ""))
+            shelfmark = record.get("shelfmark")
+
+            # Reconcile manuscript
+            ms_qid = self.reconcile_manuscript(
+                control_number, str(shelfmark) if shelfmark else None,
+            )
+            ms_result = ReconciliationResult(
+                entity_type="manuscript",
+                local_id=control_number,
+                label=title[:80] if title else control_number,
+                existing_qid=ms_qid,
+                action="update" if ms_qid else "create",
+            )
+            report.results.append(ms_result)
+            if ms_qid:
+                report.manuscripts_found += 1
+            else:
+                report.manuscripts_new += 1
+
+            # Reconcile persons from MARC authority matches
+            for match in (record.get("marc_authority_matches") or []):
+                name = str(match.get("name", ""))
+                viaf_uri = match.get("viaf_uri")
+                mazal_id = match.get("mazal_id")
+                person_key = f"{name}:{viaf_uri}:{mazal_id}"
+
+                if person_key in persons_seen:
+                    continue
+
+                person_qid = self.reconcile_person(name, viaf_uri, mazal_id)
+                person_result = ReconciliationResult(
+                    entity_type="person",
+                    local_id=person_key,
+                    label=name[:80],
+                    existing_qid=person_qid,
+                    action="skip" if person_qid else "create",
+                )
+                persons_seen[person_key] = person_result
+                report.results.append(person_result)
+                if person_qid:
+                    report.persons_found += 1
+                else:
+                    report.persons_new += 1
+
+            # Reconcile NER entities
+            for entity in (record.get("entities") or []):
+                name = str(entity.get("person", ""))
+                viaf_uri = entity.get("viaf_uri")
+                mazal_id = entity.get("mazal_id")
+                person_key = f"{name}:{viaf_uri}:{mazal_id}"
+
+                if person_key in persons_seen:
+                    continue
+
+                person_qid = self.reconcile_person(name, viaf_uri, mazal_id)
+                person_result = ReconciliationResult(
+                    entity_type="person",
+                    local_id=person_key,
+                    label=name[:80],
+                    existing_qid=person_qid,
+                    action="skip" if person_qid else "create",
+                )
+                persons_seen[person_key] = person_result
+                report.results.append(person_result)
+                if person_qid:
+                    report.persons_found += 1
+                else:
+                    report.persons_new += 1
+
+            # Reconcile KIMA places (already have Wikidata QIDs)
+            for place_name, wikidata_uri in (record.get("kima_places") or {}).items():
+                qid = self.reconcile_place(str(wikidata_uri))
+                if qid:
+                    report.places_found += 1
+
+            if progress_cb:
+                progress_cb(idx + 1, total)
+
+        logger.info(
+            "Reconciliation complete: %d MS found / %d new, "
+            "%d persons found / %d new, %d places validated",
+            report.manuscripts_found, report.manuscripts_new,
+            report.persons_found, report.persons_new,
+            report.places_found,
+        )
+        return report

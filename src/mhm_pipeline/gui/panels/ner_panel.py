@@ -1,4 +1,8 @@
-"""Stage 2 — Named Entity Recognition panel."""
+"""Stage 2 — Named Entity Recognition panel.
+
+Runs up to 3 NER models: Person (notes/colophon), Provenance (MARC 561),
+Contents (MARC 505). Results displayed in View + Edit tabs.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +34,7 @@ from mhm_pipeline.gui.widgets.entity_highlighter import (
     get_entity_colors,
     get_entity_icon,
 )
+from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
@@ -40,11 +46,12 @@ _PREVIEW_MAX_ENTITIES = 8
 class NerPanel(QWidget):
     """Panel for Stage 2: NER extraction from parsed JSON."""
 
-    # (input_path, output_dir, model_path, batch_size)
-    run_requested = pyqtSignal(Path, Path, str, int)
+    # (input_path, output_dir, model_path, batch_size, prov_model_path, cont_model_path)
+    run_requested = pyqtSignal(Path, Path, str, int, str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        import os  # noqa: PLC0415
 
         layout = QVBoxLayout(self)
 
@@ -56,16 +63,60 @@ class NerPanel(QWidget):
         layout.addWidget(self._input_selector)
         layout.addWidget(self._output_selector)
 
-        # model identifier (HuggingFace repo ID or local path)
-        model_layout = QHBoxLayout()
-        model_layout.addWidget(QLabel("Model:"))
-        self._model_edit = QLineEdit(_DEFAULT_MODEL)
-        self._model_edit.setToolTip(
-            "HuggingFace model ID (e.g. alexgoldberg/hebrew-manuscript-joint-ner-v2) "
-            "or absolute path to a local model directory."
+        # ── NER Models section ──────────────────────────────────────
+        models_frame = QFrame()
+        models_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        models_frame.setStyleSheet(
+            "QFrame { border: 1px solid #d1d5db; border-radius: 6px; }"
         )
-        model_layout.addWidget(self._model_edit)
-        layout.addLayout(model_layout)
+        models_layout = QVBoxLayout(models_frame)
+        models_layout.setContentsMargins(10, 8, 10, 8)
+        models_layout.setSpacing(4)
+
+        models_header = QLabel("NER Models")
+        models_header.setStyleSheet("font-weight: bold; font-size: 13px; border: none;")
+        models_layout.addWidget(models_header)
+
+        # Model 1: Person NER
+        person_row = QHBoxLayout()
+        self._person_check = QCheckBox("Person NER")
+        self._person_check.setChecked(True)
+        self._person_check.setToolTip("Extract persons + roles from notes and colophon")
+        self._person_check.setStyleSheet("border: none;")
+        person_row.addWidget(self._person_check)
+        person_default = os.environ.get("MHM_BUNDLED_NER_MODEL", "")
+        self._person_model_edit = QLineEdit(person_default if person_default else _DEFAULT_MODEL)
+        self._person_model_edit.setStyleSheet("border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;")
+        person_row.addWidget(self._person_model_edit)
+        models_layout.addLayout(person_row)
+
+        # Model 2: Provenance NER
+        prov_row = QHBoxLayout()
+        self._prov_check = QCheckBox("Provenance NER")
+        self._prov_check.setChecked(True)
+        self._prov_check.setToolTip("Extract OWNER, DATE, COLLECTION from MARC 561 (93.96% F1)")
+        self._prov_check.setStyleSheet("border: none;")
+        prov_row.addWidget(self._prov_check)
+        prov_default = os.environ.get("MHM_BUNDLED_PROVENANCE_MODEL", "")
+        self._prov_model_edit = QLineEdit(prov_default if prov_default else "(auto-detect)")
+        self._prov_model_edit.setStyleSheet("border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;")
+        prov_row.addWidget(self._prov_model_edit)
+        models_layout.addLayout(prov_row)
+
+        # Model 3: Contents NER
+        cont_row = QHBoxLayout()
+        self._cont_check = QCheckBox("Contents NER")
+        self._cont_check.setChecked(True)
+        self._cont_check.setToolTip("Extract WORK, FOLIO, WORK_AUTHOR from MARC 505 (99.99% F1)")
+        self._cont_check.setStyleSheet("border: none;")
+        cont_row.addWidget(self._cont_check)
+        cont_default = os.environ.get("MHM_BUNDLED_CONTENTS_MODEL", "")
+        self._cont_model_edit = QLineEdit(cont_default if cont_default else "(auto-detect)")
+        self._cont_model_edit.setStyleSheet("border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;")
+        cont_row.addWidget(self._cont_model_edit)
+        models_layout.addLayout(cont_row)
+
+        layout.addWidget(models_frame)
 
         # batch size
         batch_layout = QHBoxLayout()
@@ -78,7 +129,7 @@ class NerPanel(QWidget):
         layout.addLayout(batch_layout)
 
         # run button
-        self._run_btn = QPushButton("Run Stage 2")
+        self._run_btn = QPushButton("Extract Named Entities")
         self._run_btn.clicked.connect(self._on_run)
 
         # load results button
@@ -95,8 +146,20 @@ class NerPanel(QWidget):
         self._progress = PercentProgressWidget()
         layout.addWidget(self._progress)
 
-        # ── Compact results preview ──────────────────────────────────
-        self._build_results_preview(layout)
+        # ── Results area: View tab + Edit tab ─────────────────────────
+        self._results_tabs = QTabWidget()
+        self._results_tabs.setDocumentMode(True)
+
+        view_tab = QWidget()
+        view_layout = QVBoxLayout(view_tab)
+        view_layout.setContentsMargins(0, 4, 0, 0)
+        self._build_results_preview(view_layout)
+        self._results_tabs.addTab(view_tab, "View")
+
+        self._extraction_editor = ExtractionEditor()
+        self._results_tabs.addTab(self._extraction_editor, "Edit Entities")
+
+        layout.addWidget(self._results_tabs, stretch=2)
 
         # log viewer
         self._log_viewer = LogViewer()
@@ -302,19 +365,42 @@ class NerPanel(QWidget):
     def _on_run(self) -> None:
         input_path = self._input_selector.path
         output_path = self._output_selector.path
-        model_path = self._model_edit.text().strip()
 
         if input_path is None:
             self._log_viewer.append_line("Error: select an input JSON file first.")
-            return
-        if not model_path:
-            self._log_viewer.append_line("Error: enter a model ID or local path.")
             return
         if output_path is None:
             output_path = input_path.parent
             self._output_selector.path = output_path
 
-        self.run_requested.emit(input_path, output_path, model_path, self._batch_spin.value())
+        person_model = self._person_model_edit.text().strip() if self._person_check.isChecked() else ""
+        if self._person_check.isChecked() and not person_model:
+            self._log_viewer.append_line("Error: Person NER model path is empty.")
+            return
+
+        prov_model = ""
+        if self._prov_check.isChecked():
+            prov_text = self._prov_model_edit.text().strip()
+            prov_model = "" if prov_text == "(auto-detect)" else prov_text
+
+        cont_model = ""
+        if self._cont_check.isChecked():
+            cont_text = self._cont_model_edit.text().strip()
+            cont_model = "" if cont_text == "(auto-detect)" else cont_text
+
+        enabled = []
+        if self._person_check.isChecked():
+            enabled.append("Person")
+        if self._prov_check.isChecked():
+            enabled.append("Provenance")
+        if self._cont_check.isChecked():
+            enabled.append("Contents")
+        self._log_viewer.append_line(f"Running NER models: {', '.join(enabled)}")
+
+        self.run_requested.emit(
+            input_path, output_path, person_model,
+            self._batch_spin.value(), prov_model, cont_model,
+        )
 
     def _on_load_results(self) -> None:
         """Load and display previously generated NER results."""
@@ -334,7 +420,7 @@ class NerPanel(QWidget):
             with open(path, encoding="utf-8") as f:
                 results = json.load(f)
 
-            self._store_results(results)
+            self._store_results(results, output_path=path)
             total_entities = len(self._current_entities)
             n_records = len(self._current_records)
             self._log_viewer.append_line(
@@ -345,8 +431,8 @@ class NerPanel(QWidget):
             self._log_viewer.append_line(f"Error loading results: {e}")
             QMessageBox.critical(self, "Load Error", str(e))
 
-    def _store_results(self, results: object) -> None:
-        """Parse raw JSON results, store them, and refresh the preview."""
+    def _store_results(self, results: object, output_path: Path | None = None) -> None:
+        """Parse raw JSON results, store them, and refresh both tabs."""
         if isinstance(results, list):
             records = results
         elif isinstance(results, dict) and "records" in results:
@@ -356,9 +442,12 @@ class NerPanel(QWidget):
 
         self._current_records = records
 
-        # Feed through the (hidden) highlighter to extract Entity objects
+        # View tab
         self._entity_highlighter.display_records(records)
         self._current_entities = self._entity_highlighter.get_entities()
+
+        # Edit tab
+        self._extraction_editor.load_records(records, output_path)
 
         self._update_preview()
         self._update_role_filter_checkboxes()

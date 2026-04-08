@@ -35,7 +35,7 @@ Update `ProjectDefinitionDocument.tex` whenever:
 MHM (Mapping Hebrew Manuscripts) is an end-to-end MARC-to-RDF conversion pipeline:
 
 1. **Stage 1** — MARC Input Parsing (`UnifiedReader` + `field_handlers.py`)
-2. **Stage 2** — NER Extraction (HalleluBERT + NeoDictaBERT)
+2. **Stage 2** — NER Extraction (3 models: Person + Provenance + Contents)
 3. **Stage 3** — Authority Resolution (Mazal/NLI, VIAF, KIMA)
 4. **Stage 4** — RDF Graph Construction (`MarcToRdfMapper`, HMO ontology)
 5. **Stage 5** — SHACL Validation (`pyshacl`)
@@ -44,7 +44,11 @@ MHM (Mapping Hebrew Manuscripts) is an end-to-end MARC-to-RDF conversion pipelin
 Key paths:
 - GUI entry point: `src/mhm_pipeline/app.py`
 - Main window: `src/mhm_pipeline/gui/main_window.py`
-- NER inference: `ner/inference_pipeline.py` (`JointNERPipeline`, model: `alexgoldberg/hebrew-manuscript-joint-ner-v2`)
+- NER inference (persons): `ner/inference_pipeline.py` (`JointNERPipeline`, model: `alexgoldberg/hebrew-manuscript-joint-ner-v2`)
+- NER inference (provenance + contents): `ner/ner_inference_pipeline.py` (`NERInferencePipeline`, supports shared DictaBERT base)
+- NER models: `ner/provenance_ner_model.pt` (93.96% F1, OWNER/DATE/COLLECTION), `ner/contents_ner_model.pt` (99.99% F1, WORK/FOLIO/WORK_AUTHOR)
+- NER training: `ner/train_ner_model_kfold.py` (generic DictaBERT + token-classification head, 5-fold CV)
+- Editable entity results: `src/mhm_pipeline/gui/widgets/extraction_editor.py` (`ExtractionEditor`, `EditableEntityModel`)
 - RDF mapper: `converter/transformer/mapper.py` (`MarcToRdfMapper`)
 - Mazal authority DB: `converter/authority/mazal_index.db`
 - KIMA authority DB: `data/kima/kima_index.db` (built from TSVs in `data/kima/`)

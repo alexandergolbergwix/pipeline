@@ -242,18 +242,24 @@ def filter_entities_by_roles(
 def create_entity_from_record(ent: dict) -> Entity | None:
     """Create an Entity from a raw dictionary extracted from a record.
 
+    Supports both person NER format (``person`` key) and provenance/contents
+    NER format (``text`` + ``type`` keys).
+
     Args:
-        ent: Dictionary containing entity data (person/text, start, end, role, etc.)
+        ent: Dictionary containing entity data.
 
     Returns:
-        Entity object or None if input is not a dict
+        Entity object or None if input is not a dict.
     """
     if not isinstance(ent, dict):
         return None
 
+    text = ent.get("person", ent.get("text", ""))
+    entity_type = ent.get("type", "PERSON")
+
     return Entity(
-        text=ent.get("person", ent.get("text", "")),
-        type="PERSON",
+        text=text,
+        type=entity_type,
         start=ent.get("start", 0),
         end=ent.get("end", 0),
         role=ent.get("role"),
@@ -392,6 +398,10 @@ class EntityHighlighter(QWidget):
         "PLACE": ("#bbf7d0", "#166534"),  # Light green
         "WORK": ("#fecaca", "#991b1b"),  # Light red
         "ORG": ("#e5e7eb", "#374151"),  # Light gray
+        "OWNER": ("#bbf7d0", "#166534"),  # Green (ownership)
+        "COLLECTION": ("#dbeafe", "#1e40af"),  # Blue (institutional)
+        "FOLIO": ("#fef3c7", "#92400e"),  # Yellow (reference)
+        "WORK_AUTHOR": ("#e9d5ff", "#6b21a8"),  # Purple (authorship)
     }
 
     # Color mapping for entity roles: (background_color, text_color)

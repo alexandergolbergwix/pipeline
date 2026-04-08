@@ -1,1 +1,26 @@
+# Model weights (too large for GitHub — bundled in .app instead)
 ner/joint_entity_role_model/best_model.pt
+ner/provenance_ner_model.pt
+ner/contents_ner_model.pt
+ner/provenance_ner_head.pt
+ner/contents_ner_head.pt
+ner/provenance_model_kfold/
+ner/contents_model_kfold/
+
+# Build artifacts
+dist/
+*.dmg
+
+# Python bytecache
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+.coverage
+
+# macOS
+.DS_Store
+
+# Data files (large)
+data/kima/kima_index.db

@@ -394,12 +394,15 @@ class MainWindow(QMainWindow):
         )
 
     def _on_run_ner(
-        self, input_path: Path, output_path: Path, model_path: str, batch_size: int
+        self, input_path: Path, output_path: Path, model_path: str,
+        batch_size: int, provenance_model_path: str, contents_model_path: str,
     ) -> None:
         self._shared_log.append_line(f"Running NER on {input_path.name}…")
         self._controller.start_stage(
             1, input_path=input_path, output_dir=output_path,
             model_path=model_path, batch_size=batch_size,
+            provenance_model_path=provenance_model_path,
+            contents_model_path=contents_model_path,
         )
 
     def _on_run_authority(

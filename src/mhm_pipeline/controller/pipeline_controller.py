@@ -124,6 +124,8 @@ class PipelineController(QObject):
                 model_path=str(kwargs.get("model_path", "alexgoldberg/hebrew-manuscript-joint-ner-v2")),
                 device=self._settings.gpu_device,
                 batch_size=int(kwargs.get("batch_size", self._settings.batch_size)),
+                provenance_model_path=str(kwargs.get("provenance_model_path", "")),
+                contents_model_path=str(kwargs.get("contents_model_path", "")),
             )
 
         if stage_index == 2:

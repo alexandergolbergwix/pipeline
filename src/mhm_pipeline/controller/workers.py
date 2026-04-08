@@ -97,6 +97,36 @@ class MarcParseWorker(StageWorker):
 # ── Stage 1: NER ─────────────────────────────────────────────────────
 
 
+def _split_provenance_text(text: str) -> list[str]:
+    """Split MARC 561 provenance text into single-entity segments.
+
+    The provenance NER model was trained on single-entity samples, so we
+    split aggressively at: pipes, commas before quotes, colons before
+    quotes, and parenthetical boundaries.
+    """
+    import re  # noqa: PLC0415
+    segments: list[str] = []
+    for pipe_seg in text.split("|"):
+        pipe_seg = pipe_seg.strip()
+        if not pipe_seg:
+            continue
+        colon_parts = re.split(r':\s*(?=")', pipe_seg, maxsplit=1)
+        if len(colon_parts) == 2:
+            prefix = colon_parts[0].strip()
+            rest = colon_parts[1].strip()
+            name_segments = re.split(r',\s*(?=")', rest)
+            for ns in name_segments:
+                ns = ns.strip()
+                if ns:
+                    segments.append(ns)
+            if prefix and not any(prefix in s for s in segments):
+                segments.append(prefix)
+        else:
+            sub_segments = re.split(r',\s*(?=")', pipe_seg)
+            segments.extend(s.strip() for s in sub_segments if s.strip())
+    return segments
+
+
 def _extract_texts_from_record(record: dict) -> list[str]:
     """Extract non-empty text segments from notes and colophon."""
     texts: list[str] = []
@@ -143,7 +173,13 @@ def _process_text_segment(
 
 
 class NerWorker(StageWorker):
-    """Run NER inference on extracted MARC data."""
+    """Run NER inference on extracted MARC data.
+
+    Runs up to three NER pipelines:
+    1. Person NER (JointNERPipeline) on notes + colophon
+    2. Provenance NER (NERInferencePipeline) on MARC 561
+    3. Contents NER (NERInferencePipeline) on MARC 505
+    """
 
     def __init__(
         self,
@@ -152,6 +188,8 @@ class NerWorker(StageWorker):
         model_path: str,
         device: str,
         batch_size: int,
+        provenance_model_path: str = "",
+        contents_model_path: str = "",
     ) -> None:
         super().__init__()
         self._input_path = input_path
@@ -159,18 +197,34 @@ class NerWorker(StageWorker):
         self._model_path = model_path
         self._device = device
         self._batch_size = batch_size
+        self._provenance_model_path = provenance_model_path
+        self._contents_model_path = contents_model_path
 
-    def run(self) -> None:
+    @staticmethod
+    def _resolve_model_path(explicit: str, env_var: str, fallback: str) -> str:
+        """Resolve model path from explicit arg, env var, or fallback."""
+        import os  # noqa: PLC0415
+        if explicit:
+            return explicit
+        from_env = os.environ.get(env_var, "")
+        if from_env and Path(from_env).exists():
+            return from_env
+        if Path(fallback).exists():
+            return fallback
+        return ""
+
+    def run(self) -> None:  # noqa: C901
         try:
-            import sys as _sys
-            from pathlib import Path as _Path
+            import copy  # noqa: PLC0415
+            import sys as _sys  # noqa: PLC0415
+            from pathlib import Path as _Path  # noqa: PLC0415
 
             _ner_dir = str(_Path(__file__).parents[3] / "ner")
             if _ner_dir not in _sys.path:
                 _sys.path.insert(0, _ner_dir)
-            from ner.inference_pipeline import JointNERPipeline
+            from ner.inference_pipeline import JointNERPipeline  # noqa: PLC0415
 
-            self.log_line.emit("Loading NER model")
+            self.log_line.emit("Loading NER models...")
 
             records: list[dict[str, object]] = json.loads(
                 self._input_path.read_text(encoding="utf-8"),
@@ -180,41 +234,124 @@ class NerWorker(StageWorker):
                 self.error.emit("No records to process")
                 return
 
-            pipeline = JointNERPipeline(
+            # 1. Person NER (always loaded)
+            person_pipeline = JointNERPipeline(
                 model_path=self._model_path,
                 device=self._device,
             )
 
-            self.log_line.emit(f"Processing {total} records")
+            # 2. Provenance NER (optional — independent load to avoid weight corruption)
+            provenance_pipeline = None
+            prov_path = self._resolve_model_path(
+                self._provenance_model_path,
+                "MHM_BUNDLED_PROVENANCE_MODEL",
+                str(_Path(__file__).parents[3] / "ner" / "provenance_ner_model.pt"),
+            )
+            if prov_path:
+                from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+                self.log_line.emit("Loading provenance NER model...")
+                provenance_pipeline = NERInferencePipeline(
+                    model_path=prov_path, device=self._device,
+                )
+
+            # 3. Contents NER (optional)
+            contents_pipeline = None
+            cont_path = self._resolve_model_path(
+                self._contents_model_path,
+                "MHM_BUNDLED_CONTENTS_MODEL",
+                str(_Path(__file__).parents[3] / "ner" / "contents_ner_model.pt"),
+            )
+            if cont_path:
+                from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+                self.log_line.emit("Loading contents NER model...")
+                contents_pipeline = NERInferencePipeline(
+                    model_path=cont_path, device=self._device,
+                )
+
+            models_loaded = 1 + (1 if provenance_pipeline else 0) + (1 if contents_pipeline else 0)
+            self.log_line.emit(f"Processing {total} records with {models_loaded} NER model(s)")
+
             results: list[dict[str, object]] = []
             for idx, record in enumerate(records):
-                texts = _extract_texts_from_record(record)
-                full_text = "\n".join(texts)
+                all_entities: list[dict[str, object]] = []
 
-                ner_entities: list[dict[str, object]] = []
+                # Person NER on notes + colophon
+                texts = _extract_texts_from_record(record)
                 for i, text in enumerate(texts):
                     offset = _calculate_segment_offset(texts, i)
-                    segment_entities = _process_text_segment(pipeline, text, offset)
-                    ner_entities.extend(segment_entities)
+                    segment_entities = _process_text_segment(person_pipeline, text, offset)
+                    for ent in segment_entities:
+                        ent["source"] = "person_ner"
+                    all_entities.extend(segment_entities)
+
+                # Provenance NER on MARC 561
+                if provenance_pipeline:
+                    provenance_text = record.get("provenance") or ""
+                    if isinstance(provenance_text, str) and provenance_text.strip():
+                        clean_prov = str(provenance_text).replace('""', '"')
+                        segments = _split_provenance_text(clean_prov)
+                        for segment in segments:
+                            if len(segment) >= 3:
+                                try:
+                                    prov_entities = provenance_pipeline.process_text(segment)
+                                    for ent in prov_entities:
+                                        ent["source"] = "provenance_ner"
+                                    all_entities.extend(prov_entities)
+                                except Exception as prov_exc:
+                                    logger.warning("Provenance NER error: %s", prov_exc)
+
+                # Contents NER on MARC 505
+                if contents_pipeline:
+                    for content in (record.get("contents") or []):
+                        if isinstance(content, dict):
+                            parts = []
+                            if content.get("folio_range"):
+                                parts.append(f"דף {content['folio_range']}:")
+                            if content.get("responsibility"):
+                                parts.append(f"{content['responsibility']}:")
+                            if content.get("title"):
+                                parts.append(str(content["title"]))
+                            text_505 = " ".join(parts)
+                        elif isinstance(content, str):
+                            text_505 = content
+                        else:
+                            continue
+                        if text_505.strip() and len(text_505) >= 5:
+                            try:
+                                cont_entities = contents_pipeline.process_text(text_505)
+                                for ent in cont_entities:
+                                    ent["source"] = "contents_ner"
+                                all_entities.extend(cont_entities)
+                            except Exception as cont_exc:
+                                logger.warning("Contents NER error: %s", cont_exc)
 
                 results.append({
                     "_control_number": record.get("_control_number"),
-                    "text": full_text,
-                    "entities": ner_entities,
+                    "text": "\n".join(texts),
+                    "entities": all_entities,
                 })
                 self.progress.emit(int((idx + 1) / total * 100))
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
             output_path = self._output_dir / "ner_results.json"
 
-            # Defensive: Deep copy to avoid thread-safety issues during JSON serialization
-            import copy
-
             safe_results = copy.deepcopy(results)
             json_text = json.dumps(safe_results, ensure_ascii=False, indent=2, default=str)
             output_path.write_text(json_text, encoding="utf-8")
 
-            self.log_line.emit(f"NER complete — {total} records processed")
+            person_count = sum(
+                1 for r in results for e in r["entities"] if e.get("source") == "person_ner"
+            )
+            prov_count = sum(
+                1 for r in results for e in r["entities"] if e.get("source") == "provenance_ner"
+            )
+            cont_count = sum(
+                1 for r in results for e in r["entities"] if e.get("source") == "contents_ner"
+            )
+            self.log_line.emit(
+                f"NER complete — {total} records, "
+                f"{person_count} person + {prov_count} provenance + {cont_count} contents entities"
+            )
             self.finished.emit(output_path)
         except Exception as exc:
             logger.error("NER failed: %s", exc, exc_info=True)
@@ -330,11 +467,14 @@ class AuthorityWorker(StageWorker):
         Updates entity dict in place with authority IDs.
         Returns dict with counted/matched flags for statistics.
         """
-        # Guard clause: skip entities without valid names
-        if not self._has_valid_name(entity, "person"):
+        # Person entities from JointNER
+        if self._has_valid_name(entity, "person"):
+            name = str(entity.get("person", "")).strip()
+        # OWNER and WORK_AUTHOR entities from provenance/contents NER
+        elif entity.get("type") in ("OWNER", "WORK_AUTHOR") and self._has_valid_name(entity, "text"):
+            name = str(entity.get("text", "")).strip()
+        else:
             return {"counted": 0, "matched": 0}
-
-        name = str(entity.get("person", "")).strip()
         mazal_id, viaf_uri = self._match_against_authorities(name, mazal, viaf)
 
         if mazal_id:
