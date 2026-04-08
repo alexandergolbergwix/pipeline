@@ -54,6 +54,7 @@ from converter.wikidata.property_mapping import (
     P_PART_OF,
     P_SCRIPT_STYLE,
     P_SOURCING_CIRCUMSTANCES,
+    P_START_TIME,
     P_TITLE,
     P_TRANSCRIBED_BY,
     P_VIAF_ID,
