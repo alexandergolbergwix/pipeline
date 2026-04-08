@@ -64,7 +64,7 @@ class ConvertPanel(QWidget):
         layout.addWidget(range_group)
 
         # run button
-        self._run_btn = QPushButton("Run Stage 1")
+        self._run_btn = QPushButton("Parse MARC Records")
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 

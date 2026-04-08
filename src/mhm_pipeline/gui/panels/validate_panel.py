@@ -53,7 +53,7 @@ class ValidatePanel(QWidget):
         layout.addLayout(filter_layout)
 
         # run button
-        self._run_btn = QPushButton("Run Stage 5")
+        self._run_btn = QPushButton("Validate SHACL")
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 

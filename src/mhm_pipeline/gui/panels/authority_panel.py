@@ -147,7 +147,7 @@ class AuthorityPanel(QWidget):
         layout.addWidget(self._kima_group)
 
         # ── Run button ─────────────────────────────────────────────────
-        self._run_btn = QPushButton("Run Stage 3")
+        self._run_btn = QPushButton("Match Authorities")
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
@@ -368,7 +368,7 @@ class AuthorityPanel(QWidget):
             QMessageBox.information(
                 self,
                 "No Results",
-                "No authority matches to display. Run Stage 3 first.",
+                "No authority matches to display. Match Authorities first.",
             )
             return
 

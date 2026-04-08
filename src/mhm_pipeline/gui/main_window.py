@@ -34,12 +34,12 @@ from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.settings.settings_manager import SettingsManager
 
 _STAGE_LABELS: list[str] = [
-    "1. Parse",
-    "2. NER",
-    "3. Authority",
-    "4. RDF",
-    "5. Validate",
-    "6. Wikidata",
+    "MARC Parsing",
+    "NER Extraction",
+    "Authority Matching",
+    "RDF Graph",
+    "SHACL Validation",
+    "Wikidata Upload",
 ]
 
 _STATE_ICONS: dict[str, str] = {

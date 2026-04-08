@@ -478,7 +478,7 @@ class NerPanel(QWidget):
         if not getattr(self, "_current_entities", None):
             QMessageBox.information(
                 self, "No Results",
-                "No NER results to display. Run Stage 2 or load results first.",
+                "No NER results to display. run NER Extraction or load results first.",
             )
             return
 

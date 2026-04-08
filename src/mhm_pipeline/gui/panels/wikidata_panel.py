@@ -57,7 +57,7 @@ class WikidataPanel(QWidget):
         layout.addWidget(warning)
 
         # run button
-        self._run_btn = QPushButton("Run Stage 6")
+        self._run_btn = QPushButton("Upload to Wikidata")
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
