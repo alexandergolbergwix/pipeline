@@ -1097,8 +1097,10 @@ class WikidataUploadWorker(StageWorker):
                 self.log_line.emit("Phase 3/3: Uploading to Wikidata...")
                 from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
 
-                uploader = WikidataUploader(token=self._token)
-                batch_size = 45 if self._batch_mode else 0
+                uploader = WikidataUploader(
+                    token=self._token,
+                    batch_mode=self._batch_mode,
+                )
 
                 def _entity_cb(
                     local_id: str, status: str, qid: str | None, msg: str,
@@ -1111,7 +1113,6 @@ class WikidataUploadWorker(StageWorker):
                         60 + int(i / t * 40),
                     ),
                     entity_cb=_entity_cb,
-                    batch_size=batch_size,
                 )
 
                 success = sum(1 for r in results if r.status in ("success", "exists"))
