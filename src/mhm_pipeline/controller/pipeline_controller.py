@@ -95,11 +95,16 @@ class PipelineController(QObject):
 
     def _on_worker_finished(self, stage_index: int, output_path: Path) -> None:
         self._stage_outputs[stage_index] = output_path
+        # Wait for QThread to fully stop before dropping reference (prevents SIGABRT)
+        if self._current_worker is not None:
+            self._current_worker.wait()
         self._current_worker = None
         logger.info("Stage %d finished: %s", stage_index, output_path)
         self.stage_finished.emit(stage_index, output_path)
 
     def _on_worker_error(self, stage_index: int, msg: str) -> None:
+        if self._current_worker is not None:
+            self._current_worker.wait()
         self._current_worker = None
         logger.error("Stage %d error: %s", stage_index, msg)
         self.stage_error.emit(stage_index, msg)

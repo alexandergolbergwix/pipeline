@@ -1029,37 +1029,10 @@ class WikidataUploadWorker(StageWorker):
                 f"{len(items) - builder.person_count} manuscripts)"
             )
 
-            # Phase 2: Reconcile against Wikidata
-            self.log_line.emit("Phase 2/3: Reconciling against Wikidata...")
-            reconciler = WikidataReconciler()
-            reconciled: dict[str, str | None] = {}
-            for i, item in enumerate(items):
-                if item.entity_type == "person":
-                    # Check VIAF/NLI IDs
-                    for stmt in item.statements:
-                        if stmt.property_id == "P214":  # VIAF
-                            qid = reconciler.reconcile_person_by_viaf(str(stmt.value))
-                            if qid:
-                                reconciled[item.local_id] = qid
-                                break
-                        elif stmt.property_id == "P8189":  # NLI
-                            qid = reconciler.reconcile_person_by_nli_id(str(stmt.value))
-                            if qid:
-                                reconciled[item.local_id] = qid
-                                break
-                elif item.entity_type == "manuscript":
-                    for stmt in item.statements:
-                        if stmt.property_id == "P8189":
-                            qid = reconciler.reconcile_manuscript_by_nli_id(str(stmt.value))
-                            if qid:
-                                reconciled[item.local_id] = qid
-                                break
-                if (i + 1) % 20 == 0:
-                    self.progress.emit(30 + int((i + 1) / len(items) * 30))
-
-            builder.apply_reconciliation(reconciled)
-            n_found = sum(1 for v in reconciled.values() if v)
-            self.log_line.emit(f"Reconciled: {n_found}/{len(items)} already on Wikidata")
+            # Phase 2: Skip SPARQL reconciliation (too slow and unreliable)
+            # Items with existing_qid from authority matching will be updated;
+            # items without will be created as new entities.
+            self.log_line.emit("Phase 2/3: Skipping SPARQL reconciliation (using authority IDs)")
             self.progress.emit(60)
 
             # Phase 3: Upload or export
@@ -1093,7 +1066,7 @@ class WikidataUploadWorker(StageWorker):
                 self.progress.emit(100)
                 self.finished.emit(output_path)
             else:
-                # Live upload
+                # Live upload directly in QThread
                 self.log_line.emit("Phase 3/3: Uploading to Wikidata...")
                 from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
 
@@ -1103,9 +1076,14 @@ class WikidataUploadWorker(StageWorker):
                 )
 
                 def _entity_cb(
-                    local_id: str, status: str, qid: str | None, msg: str,
+                    local_id: str, status: str, qid: str | None, msg: str | None,
                 ) -> None:
-                    self.entity_status.emit(local_id, status, qid or "", msg)
+                    self.entity_status.emit(
+                        str(local_id or ""),
+                        str(status or ""),
+                        str(qid or ""),
+                        str(msg or ""),
+                    )
 
                 results = uploader.upload_all(
                     items,
@@ -1118,7 +1096,6 @@ class WikidataUploadWorker(StageWorker):
                 success = sum(1 for r in results if r.status in ("success", "exists"))
                 failed = sum(1 for r in results if r.status == "failed")
 
-                # Save results
                 output_path = self._output_dir / "upload_results.json"
                 result_data = [
                     {

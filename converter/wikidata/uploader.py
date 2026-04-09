@@ -31,7 +31,7 @@ _TEST_URL = "https://test.wikidata.org"
 
 _MAX_RETRIES = 3
 _RETRY_DELAY_SECONDS = 5.0
-_EDIT_DELAY_SECONDS = 3.0  # ~20 edits/minute
+_EDIT_DELAY_SECONDS = 1.5  # ~40 edits/minute (safe for OAuth with 5000 req/hr)
 
 
 @dataclass
@@ -102,18 +102,58 @@ class WikidataUploader:
             wbi_config["SPARQL_ENDPOINT_URL"] = _WIKIDATA_SPARQL
             wbi_config["WIKIBASE_URL"] = _WIKIDATA_URL
 
-        # Support both bot passwords and OAuth tokens
-        # Bot password format: "Username@BotName:password"
-        if ":" in self._token and "@" in self._token.split(":")[0]:
+        # Limit retries to avoid infinite waits during server load
+        wbi_config["MAXLAG"] = 5
+        wbi_config["BACKOFF_MAX_TRIES"] = 3       # Max 3 retries (default 5)
+        wbi_config["BACKOFF_MAX_VALUE"] = 30       # Max 30s backoff (default 3600!)
+
+        # Support three authentication methods:
+        # 1. Bot password: "Username@BotName:password"
+        # 2. OAuth 2.0: "consumer_key|consumer_secret"
+        # 3. OAuth 1.0a: "consumer_key|consumer_secret|access_token|access_secret"
+        api_url = wbi_config["MEDIAWIKI_API_URL"]
+        user_agent = "MHMPipeline/1.0 (shvedbook@gmail.com)"
+
+        if "|" in self._token:
+            parts = self._token.split("|")
+            if len(parts) == 2:
+                # OAuth 2.0: consumer_key|consumer_secret
+                login = wbi_login.OAuth2(
+                    consumer_token=parts[0].strip(),
+                    consumer_secret=parts[1].strip(),
+                    mediawiki_api_url=api_url,
+                    user_agent=user_agent,
+                )
+            elif len(parts) >= 4:
+                # OAuth 1.0a: consumer_key|consumer_secret|access_token|access_secret
+                login = wbi_login.OAuth1(
+                    consumer_token=parts[0].strip(),
+                    consumer_secret=parts[1].strip(),
+                    access_token=parts[2].strip(),
+                    access_secret=parts[3].strip(),
+                    mediawiki_api_url=api_url,
+                    user_agent=user_agent,
+                )
+            else:
+                raise ValueError(
+                    "Invalid OAuth token format. Use:\n"
+                    "  OAuth 2.0: consumer_key|consumer_secret\n"
+                    "  OAuth 1.0a: consumer_key|consumer_secret|access_token|access_secret"
+                )
+        elif ":" in self._token and "@" in self._token.split(":")[0]:
+            # Bot password: "Username@BotName:password"
             parts = self._token.split(":", 1)
-            bot_user = parts[0]  # e.g., "Alexander Goldberg IL@MHMPipeline"
-            bot_pass = parts[1]  # the bot password
             login = wbi_login.Login(
-                user=bot_user, password=bot_pass,
-                mediawiki_api_url=wbi_config["MEDIAWIKI_API_URL"],
+                user=parts[0], password=parts[1],
+                mediawiki_api_url=api_url,
+                user_agent=user_agent,
             )
         else:
-            login = wbi_login.Login(token=self._token)
+            raise ValueError(
+                "Invalid authentication format. Use one of:\n"
+                "  Bot password: Username@BotName:password\n"
+                "  OAuth 2.0: consumer_key|consumer_secret"
+            )
 
         self._wbi = WikibaseIntegrator(login=login)
         return self._wbi
@@ -365,11 +405,11 @@ class WikidataUploader:
             if batch_size > 0 and batch_count >= batch_size and idx + 1 < total:
                 batch_num = (idx + 1) // batch_size
                 total_batches = (total + batch_size - 1) // batch_size
-                msg = f"Batch {batch_num}/{total_batches} complete. Pausing 60s..."
+                msg = f"Batch {batch_num}/{total_batches} complete. Pausing 30s..."
                 logger.info(msg)
                 if progress_cb:
                     progress_cb(idx + 1, total, msg)
-                time.sleep(60)
+                time.sleep(30)
                 batch_count = 0
 
         success = sum(1 for r in results if r.status in ("success", "exists"))

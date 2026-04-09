@@ -75,8 +75,9 @@ class WikidataPanel(QWidget):
         )
         config_layout.addWidget(self._dry_run_cb)
 
-        self._batch_cb = QCheckBox("Batch mode (45 items + 60s pause)")
-        self._batch_cb.setToolTip("Rate-limits uploads to avoid Wikidata throttling")
+        self._batch_cb = QCheckBox("Batch mode (45 items + 30s pause)")
+        self._batch_cb.setChecked(True)
+        self._batch_cb.setToolTip("Pause every 45 items to avoid Wikidata rate limiting (recommended)")
         config_layout.addWidget(self._batch_cb)
 
         config_layout.addStretch()
@@ -167,7 +168,22 @@ class WikidataPanel(QWidget):
         self, local_id: str, status: str, qid: str, message: str,
     ) -> None:
         """Update per-entity progress from the upload worker."""
-        self._upload_view.update_entity(local_id, status, qid, message)
+        try:
+            from mhm_pipeline.gui.widgets.upload_progress_view import WikidataEntity  # noqa: PLC0415
+
+            widget = self._upload_view.get_entity_widget(local_id)
+            if widget is None:
+                entity = WikidataEntity(
+                    local_id=local_id,
+                    label=local_id[:40],
+                    entity_type="item",
+                )
+                widget = self._upload_view.add_entity(entity)
+
+            widget.set_status(status=status, qid=qid, message=message)
+        except Exception as e:
+            import logging  # noqa: PLC0415
+            logging.getLogger(__name__).warning("Entity status update error: %s", e)
 
     # ── Slots ─────────────────────────────────────────────────────────
 
