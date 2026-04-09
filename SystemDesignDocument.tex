@@ -62,7 +62,7 @@
   {\LARGE\bfseries Mapping Hebrew Manuscripts (MHM)}\\[0.5cm]
   {\LARGE\bfseries Cross-Platform Desktop Application}\\[0.5cm]
   {\Large System Design Document}\\[1cm]
-  {\large Version 1.6}
+  {\large Version 1.7}
 }
 \author{
   Alexander Goldberg\\
@@ -355,7 +355,7 @@ On the first launch after installation, the application detects that the NER mod
 \item[Page 2 --- Model Profile] Displays the three NER models that will be downloaded:
   \begin{itemize}
     \item \textbf{Person NER model} (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, $\approx$2.2\,GB): DictaBERT-based model that performs PERSON entity detection (NER F1 85.7\%) with keyword-based role classification (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR); runs on MPS, CUDA, or CPU.
-    \item \textbf{Provenance NER model} (\filepath{ner/provenance\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 561 provenance fields; extracts OWNER, DATE, and COLLECTION entities (93.96\% F1).
+    \item \textbf{Provenance NER model} (\filepath{ner/provenance\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 561 provenance fields; extracts OWNER, DATE, and COLLECTION entities (95.91\% F1, v2 multi-entity augmented).
     \item \textbf{Contents NER model} (\filepath{ner/contents\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 505 contents fields; extracts WORK, FOLIO, and WORK\_AUTHOR entities (99.99\% F1).
   \end{itemize}
 \item[Page 3 --- Download] A \code{QThread} worker calls \code{huggingface\_hub.snapshot\_download()} for each required model repository. A \code{QProgressBar} per model and an overall progress bar are updated via Qt signals. The download is resumable: if the wizard is closed and re-opened, already-downloaded shards are skipped.
@@ -442,6 +442,8 @@ The application is organised into four horizontal layers. Each layer depends onl
 \hline
 \code{KimaIndexWorker} & Parses three KIMA TSV files and builds a SQLite place authority index for Hebrew historical place names & Worker & \code{KimaIndex} (core) \\
 \hline
+\code{WikidataUploadWorker} & Two-phase upload pipeline: (1)~build \code{WikidataItem} objects from authority-enriched JSON via \code{WikidataItemBuilder}, (2)~upload to Wikidata via \code{WikidataUploader} (live, with OAuth~2.0 / bot password) or export QuickStatements (dry run). SPARQL reconciliation is skipped; items with \code{existing\_qid} from authority matching are updated, others are created. Emits \code{entity\_status(str,str,str,str)} per item. & Worker & \code{WikidataUploader}, \code{WikidataItemBuilder}, \code{QuickStatementsExporter} \\
+\hline
 \end{longtable}
 
 \subsection{Threading Model}
@@ -457,6 +459,7 @@ All computation that could block the GUI --- NER inference, RDF graph constructi
   \code{finished(Path)} --- path to stage output file on success
 \item The \code{PipelineController} connects these signals to the appropriate panel slots in the main thread.
 \item Only one stage runs at a time; the controller starts the next \code{StageWorker} in the \code{finished} slot of the previous one.
+\item The controller calls \code{worker.wait()} in both \code{\_on\_worker\_finished} and \code{\_on\_worker\_error} before dropping the worker reference, preventing SIGABRT from Qt's QThread destructor.
 \end{itemize}
 
 
@@ -552,6 +555,8 @@ dependencies = [
     "pandas>=2.2",
     # GUI
     "PyQt6>=6.7",
+    # Wikidata upload
+    "wikibaseintegrator>=0.12",
     # Platform utilities
     "platformdirs>=4.2",
 ]
@@ -714,7 +719,7 @@ Each of the six pipeline stages has a dedicated panel. All panels share the same
 \hline
 \code{ValidatePanel} & SHACL shapes file selector, severity filter combo, violations table view, ``Validate SHACL'' button & \code{finished} $\to$ populate \code{QTableWidget} with SHACL report \\
 \hline
-\code{WikidataPanel} & OAuth token field (masked), dry-run checkbox, entity reconciliation options, ``Upload to Wikidata'' button & \code{log\_line} $\to$ log; \code{progress} $\to$ upload bar \\
+\code{WikidataPanel} & OAuth token field (masked; supports bot password \code{User@Bot:pass}, OAuth~2.0 \code{key|secret}, and OAuth~1.0a \code{key|secret|token|secret}), dry-run checkbox, batch mode checkbox (ON by default, 45~items + 30s pause), ``Upload to Wikidata'' button, per-entity status view via \code{entity\_status} signal & \code{log\_line} $\to$ log; \code{progress} $\to$ upload bar; \code{entity\_status} $\to$ per-entity progress view \\
 \hline
 \end{longtable}
 
@@ -1189,7 +1194,7 @@ Windows & 10 64-bit & 11 64-bit & PowerShell 5.1+ \\
 \hline
 Disk (app) & 3\,GB & 5\,GB & App + CPU PyTorch \\
 \hline
-Disk (models) & 2.2\,GB & 2.2\,GB & Single joint NER model downloaded at first run \\
+Disk (models) & 3.6\,GB & 3.6\,GB & 3 NER models: person ($\sim$2.2\,GB), provenance ($\sim$704\,MB), contents ($\sim$704\,MB) \\
 \hline
 RAM & 16\,GB & 32\,GB & For NER batch inference \\
 \hline
@@ -1261,6 +1266,8 @@ v1.4 & Epistemological metadata & Certainty levels, attribution sources, catalog
 v1.5 & Ontology coverage & 12 new MARC field handlers; 10 new \code{GraphBuilder} methods; coverage target $\geq$85\% of mappable terms; 33 e2e integration tests & Mar 2026 \\
 \hline
 v1.6 & Multi-model NER + GUI polish & 3-model NER system (person + provenance + contents); descriptive stage labels and button names; \code{KnowledgeGraphView} (Cytoscape.js) replacing \code{TripleGraphView}; \code{ExtractionEditor} for expert entity correction; keyword-based role classification; macOS app bundles all 3 NER models ($\sim$14\,GB total, $\sim$9.4\,GB DMG) & Apr 2026 \\
+\hline
+v1.7 & Wikidata upload hardening & OAuth~2.0 support (\code{consumer\_key|consumer\_secret}); SPARQL reconciliation removed (uses authority IDs instead); rate limiting: 1.5s edit delay + 30s batch pause every 45 items; batch mode ON by default; null-safe \code{entity\_status} signal; \code{worker.wait()} before QThread GC; provenance NER v2 model (95.91\% F1, multi-entity augmented) & Apr 2026 \\
 \hline
 \end{longtable}
 

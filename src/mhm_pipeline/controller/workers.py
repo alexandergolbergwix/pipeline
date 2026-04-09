@@ -978,12 +978,15 @@ class ShaclValidateWorker(StageWorker):
 
 
 class WikidataUploadWorker(StageWorker):
-    """Build Wikidata items from authority-enriched JSON, reconcile, and upload.
+    """Build Wikidata items from authority-enriched JSON and upload.
 
-    Three-phase pipeline:
+    Two-phase pipeline:
     1. Build WikidataItem objects from authority_enriched.json
-    2. Reconcile against existing Wikidata entities (SPARQL)
-    3. Upload to Wikidata (live) or export QuickStatements (dry run)
+    2. Upload to Wikidata (live, with OAuth 2.0 / bot password) or
+       export QuickStatements (dry run)
+
+    SPARQL reconciliation is skipped; items with existing_qid from
+    authority matching (VIAF/NLI IDs) are updated, others are created.
     """
 
     entity_status = pyqtSignal(str, str, str, str)  # (local_id, status, qid, message)
@@ -1007,7 +1010,6 @@ class WikidataUploadWorker(StageWorker):
         try:
             from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
             from converter.wikidata.quickstatements import QuickStatementsExporter  # noqa: PLC0415
-            from converter.wikidata.reconciler import WikidataReconciler  # noqa: PLC0415
 
             records: list[dict[str, object]] = json.loads(
                 self._input_path.read_text(encoding="utf-8"),
@@ -1018,28 +1020,24 @@ class WikidataUploadWorker(StageWorker):
                 return
 
             # Phase 1: Build Wikidata items
-            self.log_line.emit(f"Phase 1/3: Building items from {total} records...")
+            self.log_line.emit(f"Phase 1/2: Building items from {total} records...")
             builder = WikidataItemBuilder()
             items = builder.build_all(
                 records,
-                progress_cb=lambda i, t: self.progress.emit(int(i / t * 30)),
+                progress_cb=lambda i, t: self.progress.emit(int(i / t * 40)),
             )
             self.log_line.emit(
                 f"Built {len(items)} items ({builder.person_count} persons, "
                 f"{len(items) - builder.person_count} manuscripts)"
             )
 
-            # Phase 2: Skip SPARQL reconciliation (too slow and unreliable)
-            # Items with existing_qid from authority matching will be updated;
-            # items without will be created as new entities.
-            self.log_line.emit("Phase 2/3: Skipping SPARQL reconciliation (using authority IDs)")
-            self.progress.emit(60)
-
-            # Phase 3: Upload or export
+            # Phase 2: Upload or export
+            # SPARQL reconciliation removed — items with existing_qid from
+            # authority matching (VIAF/NLI IDs) are updated; others are created.
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
             if self._dry_run:
-                self.log_line.emit("Phase 3/3: Exporting QuickStatements (dry run)...")
+                self.log_line.emit("Phase 2/2: Exporting QuickStatements (dry run)...")
                 exporter = QuickStatementsExporter()
                 output_path = self._output_dir / "quickstatements.txt"
                 exporter.export_to_file(items, output_path)
@@ -1067,7 +1065,7 @@ class WikidataUploadWorker(StageWorker):
                 self.finished.emit(output_path)
             else:
                 # Live upload directly in QThread
-                self.log_line.emit("Phase 3/3: Uploading to Wikidata...")
+                self.log_line.emit("Phase 2/2: Uploading to Wikidata...")
                 from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
 
                 uploader = WikidataUploader(
@@ -1088,7 +1086,7 @@ class WikidataUploadWorker(StageWorker):
                 results = uploader.upload_all(
                     items,
                     progress_cb=lambda i, t, msg: self.progress.emit(
-                        60 + int(i / t * 40),
+                        40 + int(i / t * 60),
                     ),
                     entity_cb=_entity_cb,
                 )

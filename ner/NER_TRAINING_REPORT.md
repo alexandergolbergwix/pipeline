@@ -314,8 +314,8 @@ This raised multi-entity proportion from 13.3% to 28.4% (12,100 total samples).
 The original person NER paper showed +2.15% F1 improvement from 7.1% multi-entity;
 with 28.4% we expected stronger gains.
 
-**Result:** Provenance v2 model — see Section 4.2 for results. Preliminary Fold 1
-shows 94.96% F1, exceeding v1's 94.13%.
+**Result:** Provenance v2 model achieved 95.91% mean F1 (+1.95% over v1).
+Best fold: 96.17% (Fold 3). See Section 4.2 for full results.
 
 **Key insight:** Contrary to conventional wisdom suggesting that mixed single-entity
 and multi-entity data might hurt performance through task interference, the multi-entity

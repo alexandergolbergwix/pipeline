@@ -1681,41 +1681,27 @@ Production event & qualifier on manuscript & P571 (inception), P1071 (location o
 
 \subsection{Upload Methods}
 
-Two primary upload methods will be used:
+Two upload methods are implemented:
 
-\subsubsection{Wikidata API (wbsetclaim, wbeditentity)}
+\subsubsection{Live Upload via WikibaseIntegrator}
 
-For programmatic upload, the Wikidata API provides endpoints for creating and editing items:
+For programmatic upload, the pipeline uses the \code{wikibaseintegrator} library, which wraps the Wikidata API with proper session management, retry logic, and rate limiting. The \code{WikidataUploader} class supports three authentication methods:
 
-\begin{lstlisting}[language=Python, caption={Wikidata API upload concept}]
-import requests
+\begin{description}[style=nextline, leftmargin=2.5cm]
+\item[Bot password] \code{Username@BotName:password} --- uses \code{wbi\_login.Login}.
+\item[OAuth 2.0] \code{consumer\_key|consumer\_secret} (pipe-separated) --- uses \code{wbi\_login.OAuth2}. This is the recommended method for registered Wikidata applications.
+\item[OAuth 1.0a] \code{consumer\_key|consumer\_secret|access\_token|access\_secret} (four pipe-separated parts) --- uses \code{wbi\_login.OAuth1}.
+\end{description}
 
-def create_manuscript_item(manuscript_data, session):
-    """Create a Wikidata item for a manuscript."""
-    data = {
-        "labels": {"en": {"language": "en", 
-                          "value": manuscript_data['title']}},
-        "descriptions": {"en": {"language": "en",
-                                "value": "Hebrew manuscript"}},
-        "claims": {
-            "P31": [{"mainsnak": {"property": "P31",
-                                   "datavalue": {"type": "wikibase-entityid",
-                                                 "value": {"id": "Q87167"}}}}],
-            "P195": [{"mainsnak": {"property": "P195",
-                                    "datavalue": {"type": "wikibase-entityid",
-                                                  "value": {"id": collection_qid}}}}]
-        }
-    }
-    response = session.post(api_url, data={
-        "action": "wbeditentity", "new": "item",
-        "data": json.dumps(data), "token": csrf_token
-    })
-    return response.json()
-\end{lstlisting}
+Rate limiting is enforced at two levels:
+\begin{itemize}
+\item \textbf{Per-edit delay:} 1.5 seconds between API writes ($\sim$40 edits/minute), safe for OAuth applications with a 5,000 requests/hour quota.
+\item \textbf{Batch pause:} When batch mode is enabled (default for live uploads), the uploader pauses 30 seconds every 45 items to avoid Wikidata server throttling. WikibaseIntegrator's internal backoff is capped at 30 seconds (overriding the default 3,600-second maximum).
+\end{itemize}
 
-\subsubsection{QuickStatements}
+\subsubsection{QuickStatements (Dry Run)}
 
-For batch upload, QuickStatements provides a tabular format:
+For batch review before upload, the dry-run mode exports a QuickStatements-format text file:
 
 \begin{lstlisting}[basicstyle=\ttfamily\small, frame=single]
 CREATE
@@ -1731,9 +1717,10 @@ LAST  P8189  "990000623390205171"
 \subsection{Upload Strategy}
 
 \begin{enumerate}
-\item \textbf{Entity reconciliation:} Before creating new items, check whether entities already exist on Wikidata using \code{wbsearchentities} and reconciliation APIs.
-\item \textbf{Incremental upload:} Start with the six pilot manuscripts, then expand to the full catalog.
+\item \textbf{Authority-based reconciliation:} Instead of SPARQL reconciliation (which proved too slow and unreliable at scale), items with existing QIDs from authority matching (VIAF P214, NLI P8189) are updated; items without authority-linked QIDs are created as new entities.
+\item \textbf{Two-phase pipeline:} Phase~1 builds \code{WikidataItem} objects from authority-enriched JSON via \code{WikidataItemBuilder} (persons first, then manuscripts that reference them). Phase~2 uploads to Wikidata or exports QuickStatements.
 \item \textbf{Source statements:} Every claim includes a reference (P248 = stated in, P854 = reference URL) pointing to the NLI catalog.
+\item \textbf{Incremental upload:} Start with pilot manuscripts, then expand to the full catalog.
 \item \textbf{Bot approval:} For large-scale upload, obtain a Wikidata bot flag through the community process.
 \item \textbf{Quality monitoring:} Track upload statistics and community edits post-upload.
 \end{enumerate}
@@ -1741,10 +1728,11 @@ LAST  P8189  "990000623390205171"
 \subsection{Challenges}
 
 \begin{itemize}
-\item \textbf{Duplicate detection:} Some Hebrew manuscripts may already have Wikidata items; robust reconciliation is essential.
+\item \textbf{Duplicate detection:} Some Hebrew manuscripts may already have Wikidata items; authority-based reconciliation via VIAF and NLI identifiers is the primary deduplication method.
 \item \textbf{Hebrew labels:} Wikidata supports multilingual labels; both Hebrew and English labels should be provided.
 \item \textbf{Complex structures:} Wikidata's data model does not natively support the BU-CU-PU hierarchy; creative use of qualifiers and item relationships will be needed.
 \item \textbf{Community standards:} Upload must conform to Wikidata's notability guidelines and data quality expectations.
+\item \textbf{Rate limiting:} The Wikidata API enforces strict rate limits; the pipeline uses per-edit delays and batch pauses to stay within limits.
 \end{itemize}
 
 
@@ -1787,9 +1775,11 @@ LAST  P8189  "990000623390205171"
 \subsection{Phase 4: Wikidata Upload (In Progress)}
 
 \begin{itemize}
-\item Wikidata upload module implemented (API + QuickStatements)
-\item \code{WikidataReconciler}, \code{WikidataItemBuilder}, \code{QuickStatementsExporter}, \code{WikidataUploader} classes
-\item Reconcile against existing Wikidata items (implemented)
+\item Wikidata upload module implemented: \code{WikidataItemBuilder}, \code{QuickStatementsExporter}, \code{WikidataUploader} classes
+\item OAuth~2.0 and bot password authentication via \code{wikibaseintegrator}
+\item Rate limiting: 1.5s per-edit delay, 30s batch pause every 45 items (batch mode ON by default)
+\item Authority-based reconciliation replaces SPARQL reconciliation (uses VIAF/NLI IDs from authority matching)
+\item Null-safe signal handling and QThread lifecycle management (prevents SIGABRT crashes)
 \item Upload pilot manuscripts (6 items)
 \item Obtain bot approval for batch upload
 \item Upload full catalog with source references
@@ -1862,6 +1852,8 @@ LAST  P8189  "990000623390205171"
 \hline
 \code{requests} & Authority, Wikidata & HTTP API clients \\
 \hline
+\code{wikibaseintegrator} & Wikidata & Wikidata API client with OAuth~2.0/1.0a login, retry, and rate limiting \\
+\hline
 \code{PyQt6} (optional) & GUI & Desktop application interface \\
 \hline
 \end{longtable}
@@ -1908,7 +1900,7 @@ Library of Congress & \code{id.loc.gov/} & None (public) \\
 \hline
 KIMA & local SQLite index & None (offline) \\
 \hline
-Wikidata API & \code{www.wikidata.org/w/api.php} & OAuth for editing \\
+Wikidata API & \code{www.wikidata.org/w/api.php} & OAuth~2.0 (\code{consumer\_key|consumer\_secret}) or bot password \\
 \hline
 Wikidata SPARQL & \code{query.wikidata.org/sparql} & None (public) \\
 \hline

@@ -39,14 +39,14 @@ MHM (Mapping Hebrew Manuscripts) is an end-to-end MARC-to-RDF conversion pipelin
 3. **Stage 3** — Authority Resolution (Mazal/NLI, VIAF, KIMA)
 4. **Stage 4** — RDF Graph Construction (`MarcToRdfMapper`, HMO ontology)
 5. **Stage 5** — SHACL Validation (`pyshacl`)
-6. **Stage 6** — Wikidata Upload (API + QuickStatements)
+6. **Stage 6** — Wikidata Upload (API via WikibaseIntegrator + QuickStatements dry-run)
 
 Key paths:
 - GUI entry point: `src/mhm_pipeline/app.py`
 - Main window: `src/mhm_pipeline/gui/main_window.py`
 - NER inference (persons): `ner/inference_pipeline.py` (`JointNERPipeline`, model: `alexgoldberg/hebrew-manuscript-joint-ner-v2`)
 - NER inference (provenance + contents): `ner/ner_inference_pipeline.py` (`NERInferencePipeline`, supports shared DictaBERT base)
-- NER models: `ner/provenance_ner_model.pt` (93.96% F1, OWNER/DATE/COLLECTION), `ner/contents_ner_model.pt` (99.99% F1, WORK/FOLIO/WORK_AUTHOR)
+- NER models: `ner/provenance_ner_model.pt` (95.91% F1 v2 multi-entity, OWNER/DATE/COLLECTION), `ner/contents_ner_model.pt` (99.99% F1, WORK/FOLIO/WORK_AUTHOR)
 - NER training: `ner/train_ner_model_kfold.py` (generic DictaBERT + token-classification head, 5-fold CV)
 - Editable entity results: `src/mhm_pipeline/gui/widgets/extraction_editor.py` (`ExtractionEditor`, `EditableEntityModel`)
 - RDF mapper: `converter/transformer/mapper.py` (`MarcToRdfMapper`)
@@ -236,3 +236,58 @@ AuthorityWorker(input_path=ner_results, marc_path=marc_extract, ...)
 # CORRECT — current API
 AuthorityWorker(input_path=marc_extract, ner_path=ner_results, ...)
 ```
+
+### 14. Wikidata upload: OAuth 2.0 format, batch mode, and no SPARQL reconciliation
+
+The `WikidataUploader` supports three authentication methods. The token format determines which method is used:
+
+- **Bot password:** `Username@BotName:password`
+- **OAuth 2.0:** `consumer_key|consumer_secret` (2 pipe-separated parts)
+- **OAuth 1.0a:** `consumer_key|consumer_secret|access_token|access_secret` (4 pipe-separated parts)
+
+SPARQL reconciliation has been removed from the upload pipeline — it was too slow and unreliable. Instead, items with `existing_qid` from authority matching (VIAF/NLI IDs) are updated; items without are created as new entities.
+
+Rate limiting: 1.5s between edits (~40 edits/minute), with batch mode pausing 30s every 45 items. Batch mode is ON by default for live uploads. WikibaseIntegrator backoff is capped at 30s (not the default 3600s).
+
+```python
+# WRONG — old token kwarg (removed)
+WikidataUploader(token="bearer-token-string")
+
+# CORRECT — OAuth 2.0
+WikidataUploader(token="consumer_key|consumer_secret", batch_mode=True)
+
+# CORRECT — Bot password
+WikidataUploader(token="User@Bot:password", batch_mode=True)
+```
+
+### 15. WikidataPanel entity_status signal must be null-safe
+
+The `entity_status` signal emits `(str, str, str, str)`. The callback wraps every argument with `str(... or "")` because `None` values cause SIGABRT when passed through Qt signal marshalling. The panel uses `add_entity()` + `set_status()` instead of the removed `update_entity()` method.
+
+### 16. Always call worker.wait() before dropping QThread reference
+
+Dropping a `QThread` reference while the thread is still running causes SIGABRT from Qt's destructor. Both `_on_worker_finished` and `_on_worker_error` in `PipelineController` must call `worker.wait()` before setting `self._current_worker = None`.
+
+```python
+# WRONG — GC crash
+def _on_worker_finished(self, stage_index, output_path):
+    self._current_worker = None  # QThread still running → SIGABRT
+
+# CORRECT — wait for thread to stop
+def _on_worker_finished(self, stage_index, output_path):
+    if self._current_worker is not None:
+        self._current_worker.wait()
+    self._current_worker = None
+```
+
+### 17. NER model files and F1 scores (current)
+
+The pipeline uses three NER models. Keep these F1 scores current:
+
+| Model | File | F1 | Entity types |
+|---|---|---|---|
+| Person NER | `alexgoldberg/hebrew-manuscript-joint-ner-v2` (HuggingFace) | 85.70% | PERSON (with roles) |
+| Provenance NER v2 | `ner/provenance_ner_model.pt` (704 MB) | 95.91% (best fold 96.17%) | OWNER, DATE, COLLECTION |
+| Contents NER | `ner/contents_ner_model.pt` (704 MB) | 99.99% | WORK, FOLIO, WORK_AUTHOR |
+
+Provenance v2 was trained on 12,100 samples (28.4% multi-entity augmented) with `max_length=128`. The v1 model (93.96% F1, `max_length=64`) is superseded.
