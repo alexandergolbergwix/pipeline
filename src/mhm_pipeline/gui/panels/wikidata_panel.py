@@ -174,13 +174,16 @@ class WikidataPanel(QWidget):
         self, local_id: str, status: str, qid: str, message: str,
     ) -> None:
         """Update per-entity progress from the upload worker."""
+        # Handle special "__total__" signal to set overall progress bar
+        if local_id == "__total__" and status == "total":
+            try:
+                self.set_total_items(int(qid))
+            except (ValueError, TypeError):
+                pass
+            return
+
         try:
             from mhm_pipeline.gui.widgets.upload_progress_view import WikidataEntity  # noqa: PLC0415
-
-            # Handle special "__total__" signal to set overall progress bar
-            if local_id == "__total__" and status == "total":
-                self.set_total_items(int(qid))
-                return
 
             widget = self._upload_view.get_entity_widget(local_id)
             if widget is None:
@@ -193,14 +196,13 @@ class WikidataPanel(QWidget):
 
             widget.set_status(status=status, qid=qid, message=message)
 
-            # Update overall progress for non-"uploading" statuses (actual completions)
+            # Update overall progress for completed items
             if status in ("success", "exists", "failed", "skipped"):
                 self._completed_items = getattr(self, "_completed_items", 0) + 1
                 total = getattr(self, "_total_items", self._completed_items)
                 self._upload_view.update_overall_progress(self._completed_items, total)
-        except Exception as e:
-            import logging  # noqa: PLC0415
-            logging.getLogger(__name__).warning("Entity status update error: %s", e)
+        except Exception:
+            pass  # Swallow to prevent SIGABRT from Qt slot exceptions
 
     # ── Slots ─────────────────────────────────────────────────────────
 
