@@ -1036,6 +1036,9 @@ class WikidataUploadWorker(StageWorker):
             # authority matching (VIAF/NLI IDs) are updated; others are created.
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
+            # Emit total count so the panel sets the overall progress bar
+            self.entity_status.emit("__total__", "total", str(len(items)), "")
+
             if self._dry_run:
                 self.log_line.emit("Phase 2/2: Exporting QuickStatements (dry run)...")
                 exporter = QuickStatementsExporter()
@@ -1067,9 +1070,6 @@ class WikidataUploadWorker(StageWorker):
                 # Live upload directly in QThread
                 self.log_line.emit(f"Phase 2/2: Uploading {len(items)} items to Wikidata...")
                 from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
-
-                # Emit total count so the panel can set up the overall progress bar
-                self.entity_status.emit("__total__", "total", str(len(items)), "")
 
                 uploader = WikidataUploader(
                     token=self._token,
