@@ -1065,8 +1065,11 @@ class WikidataUploadWorker(StageWorker):
                 self.finished.emit(output_path)
             else:
                 # Live upload directly in QThread
-                self.log_line.emit("Phase 2/2: Uploading to Wikidata...")
+                self.log_line.emit(f"Phase 2/2: Uploading {len(items)} items to Wikidata...")
                 from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
+
+                # Emit total count so the panel can set up the overall progress bar
+                self.entity_status.emit("__total__", "total", str(len(items)), "")
 
                 uploader = WikidataUploader(
                     token=self._token,
