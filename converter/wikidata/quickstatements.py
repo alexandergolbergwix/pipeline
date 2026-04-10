@@ -40,6 +40,9 @@ def _format_value(stmt: WikidataStatement) -> str:
     if stmt.value_type == "string":
         return f'"{_escape_qs(str(stmt.value))}"'
 
+    if stmt.value_type == "external-id":
+        return f'"{_escape_qs(str(stmt.value))}"'
+
     if stmt.value_type == "time":
         precision = stmt.precision
         return f"{stmt.value}/{precision}"
