@@ -250,6 +250,11 @@ class WikidataUploader:
                     prop_nr=stmt.property_id, value=str(value),
                     references=refs, qualifiers=qualifiers,
                 )
+            if stmt.value_type == "external-id":
+                return datatypes.ExternalID(
+                    prop_nr=stmt.property_id, value=str(value),
+                    references=refs, qualifiers=qualifiers,
+                )
             if stmt.value_type == "time":
                 return datatypes.Time(
                     prop_nr=stmt.property_id, time=str(value),

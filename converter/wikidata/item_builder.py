@@ -202,7 +202,7 @@ class WikidataItemBuilder:
         if control_number:
             item.statements.append(WikidataStatement(
                 property_id=P_NLI_J9U_ID, value=nli_j9u_id(control_number),
-                value_type="string", references=ref,
+                value_type="external-id", references=ref,
             ))
         if title:
             item.statements.append(WikidataStatement(
@@ -293,11 +293,9 @@ class WikidataItemBuilder:
             ))
 
         # ── Condition ────────────────────────────────────────────
-        for note in (record.get("condition_notes") or []):
-            item.statements.append(WikidataStatement(
-                property_id=P_CONDITION, value=str(note),
-                value_type="string", references=ref,
-            ))
+        # P5816 (state of conservation) expects item QIDs, not strings.
+        # Free-text condition notes are skipped — would need QID mapping
+        # (e.g., Q56557591 "good condition", Q106379705 "damaged").
 
         # ── Catalog references ───────────────────────────────────
         for cat_ref in (record.get("catalog_references") or []):
@@ -594,15 +592,9 @@ class WikidataItemBuilder:
             if not coll_name or coll_name in seen_colls:
                 continue
             seen_colls.add(coll_name)
-            item.statements.append(WikidataStatement(
-                property_id=P_COLLECTION, value=coll_name,
-                value_type="string",
-                qualifiers=[{
-                    "property": P_OBJECT_NAMED_AS,
-                    "value": coll_name, "type": "string",
-                }],
-                references=ref,
-            ))
+            # P195 (collection) expects item QIDs, not strings.
+            # NER-extracted collection names are skipped — would need
+            # reconciliation to Wikidata institution QIDs.
 
     def _add_person_claims(
         self, item: WikidataItem, record: dict[str, object],
@@ -774,13 +766,13 @@ class WikidataItemBuilder:
         viaf_id = extract_viaf_id(str(viaf_uri)) if viaf_uri else None
         if viaf_id:
             person.statements.append(WikidataStatement(
-                property_id=P_VIAF_ID, value=viaf_id, value_type="string",
+                property_id=P_VIAF_ID, value=viaf_id, value_type="external-id",
             ))
 
         # P8189 = NLI J9U ID (links to Mazal authority)
         if mazal_id:
             person.statements.append(WikidataStatement(
-                property_id=P_NLI_J9U_ID, value=str(mazal_id), value_type="string",
+                property_id=P_NLI_J9U_ID, value=str(mazal_id), value_type="external-id",
             ))
 
         self._person_items[key] = person
