@@ -490,12 +490,8 @@ class WikidataItemBuilder:
                     property_id=P_EXEMPLAR_OF, value=work_qid,
                     value_type="item", qualifiers=qualifiers_ner, references=ref,
                 ))
-            else:
-                item.statements.append(WikidataStatement(
-                    property_id=P_HAS_PARTS, value=work_title,
-                    value_type="monolingualtext", language="he",
-                    qualifiers=qualifiers_ner, references=ref,
-                ))
+            # Unknown works (no QID) are skipped — P527 requires item values.
+            # They are preserved in the authority_enriched.json for future linking.
 
     def _add_canonical_subjects(
         self, item: WikidataItem, record: dict[str, object],
