@@ -17,15 +17,25 @@ _ICON_PATH = Path(__file__).parent.parent.parent / "assets" / "icon.png"
 
 
 def _configure_logging(log_level: str) -> None:
-    """Set up file and console logging."""
+    """Set up file and console logging with daily rotation and 30-day TTL."""
+    from logging.handlers import TimedRotatingFileHandler  # noqa: PLC0415
+
     log_dir = app_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "mhm_pipeline.log"
+
+    # Daily rotation, keep 30 days of logs
+    file_handler = TimedRotatingFileHandler(
+        log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8",
+    )
+    file_handler.suffix = "%Y-%m-%d"
+
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(log_dir / "mhm_pipeline.log", encoding="utf-8"),
+            file_handler,
         ],
     )
 

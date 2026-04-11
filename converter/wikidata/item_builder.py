@@ -192,6 +192,14 @@ class WikidataItemBuilder:
             property_id=P_COLLECTION, value=Q_NLI,
             value_type="item", references=ref,
         ))
+        # P17 = country (Israel — all NLI manuscripts are held in Israel)
+        item.statements.append(WikidataStatement(
+            property_id="P17", value="Q801", value_type="item", references=ref,
+        ))
+        # P131 = located in administrative entity (Jerusalem)
+        item.statements.append(WikidataStatement(
+            property_id="P131", value="Q1218", value_type="item", references=ref,
+        ))
 
         shelfmark = record.get("shelfmark")
         if shelfmark:
@@ -799,6 +807,46 @@ class WikidataItemBuilder:
         person.statements.append(WikidataStatement(
             property_id="P1343", value="Q118384267", value_type="item",  # Ktiv
         ))
+
+        # P1412 = languages spoken, written or signed (Hebrew)
+        if not is_org:
+            person.statements.append(WikidataStatement(
+                property_id="P1412", value="Q9288", value_type="item",  # Hebrew
+            ))
+
+        # P1559 = name in native language (Hebrew)
+        if name and not is_org:
+            person.statements.append(WikidataStatement(
+                property_id="P1559", value=name,
+                value_type="monolingualtext", language="he",
+            ))
+
+        # Additional authority IDs from VIAF cluster harvesting
+        for match in (source_record.get("marc_authority_matches") or []):
+            mid = str(match.get("mazal_id", ""))
+            vid = str(match.get("viaf_uri", ""))
+            if (mazal_id and mid == mazal_id) or (viaf_uri and vid == viaf_uri):
+                if match.get("gnd_id"):
+                    person.statements.append(WikidataStatement(
+                        property_id="P227", value=str(match["gnd_id"]),
+                        value_type="external-id",
+                    ))
+                if match.get("lc_id"):
+                    person.statements.append(WikidataStatement(
+                        property_id="P244", value=str(match["lc_id"]),
+                        value_type="external-id",
+                    ))
+                if match.get("isni"):
+                    person.statements.append(WikidataStatement(
+                        property_id="P213", value=str(match["isni"]),
+                        value_type="external-id",
+                    ))
+                if match.get("bnf_id"):
+                    person.statements.append(WikidataStatement(
+                        property_id="P268", value=str(match["bnf_id"]),
+                        value_type="external-id",
+                    ))
+                break
 
         self._person_items[key] = person
         return person

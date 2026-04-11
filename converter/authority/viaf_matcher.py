@@ -31,7 +31,10 @@ class VIAFMatcher:
 
     def __init__(self) -> None:
         self._cache: dict[str, str | None] = {}
+        self._cluster_cache: dict[str, dict[str, str]] = {}
         self._last_request: float = 0.0
+        self._session = requests.Session()
+        self._session.headers["Accept"] = "application/json"
 
     # ── public API ────────────────────────────────────────────────────
 
@@ -50,6 +53,75 @@ class VIAFMatcher:
     def match_work(self, title: str) -> Optional[str]:
         """Return the VIAF cluster URI for a uniform title, or None."""
         return self._search(title, cql_field="local.uniformTitleWorks")
+
+    def get_cluster_identifiers(self, viaf_id: str) -> dict[str, str]:
+        """Fetch VIAF cluster JSON and extract LOD authority identifiers.
+
+        Given a VIAF ID (numeric), fetches the full cluster record and
+        extracts GND, LC, BnF, and ISNI identifiers plus birth/death dates.
+
+        Returns a dict with keys: gnd, lc, bnf, isni, birth_date, death_date.
+        """
+        if viaf_id in self._cluster_cache:
+            return self._cluster_cache[viaf_id]
+
+        ids: dict[str, str] = {}
+        url = f"https://viaf.org/viaf/{viaf_id}/viaf.json"
+
+        # Respect rate limit
+        elapsed = time.monotonic() - self._last_request
+        if elapsed < _RATE_LIMIT:
+            time.sleep(_RATE_LIMIT - elapsed)
+
+        try:
+            resp = self._session.get(url, timeout=_TIMEOUT)
+            self._last_request = time.monotonic()
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.debug("VIAF cluster fetch failed for %s: %s", viaf_id, exc)
+            self._last_request = time.monotonic()
+            self._cluster_cache[viaf_id] = ids
+            return ids
+
+        # Extract source identifiers from sources.source array
+        sources = data.get("sources", {})
+        source_list = sources.get("source", [])
+        if isinstance(source_list, dict):
+            source_list = [source_list]
+
+        for source in source_list:
+            text = source.get("#text", "") if isinstance(source, dict) else str(source)
+            if "|" not in text:
+                continue
+            prefix, sid = text.split("|", 1)
+            if "DNB" in prefix and "gnd" not in ids:
+                ids["gnd"] = sid.strip()
+            elif "LC" in prefix and "lc" not in ids:
+                lc_id = sid.strip().replace("n ", "n").replace("nr ", "nr").replace("no ", "no")
+                ids["lc"] = lc_id
+            elif "BNF" in prefix and "bnf" not in ids:
+                ids["bnf"] = sid.strip()
+
+        # Extract ISNI
+        isnis = data.get("ISNIs", {})
+        isni_list = isnis.get("isni", []) if isinstance(isnis, dict) else []
+        if isinstance(isni_list, str):
+            isni_list = [isni_list]
+        if isni_list:
+            ids["isni"] = str(isni_list[0]).strip()
+
+        # Extract dates
+        birth = data.get("birthDate", "")
+        death = data.get("deathDate", "")
+        if birth and birth not in ("0",):
+            ids["birth_date"] = str(birth)
+        if death and death not in ("0",):
+            ids["death_date"] = str(death)
+
+        self._cluster_cache[viaf_id] = ids
+        logger.debug("VIAF cluster %s: extracted %d identifiers", viaf_id, len(ids))
+        return ids
 
     # ── internals ─────────────────────────────────────────────────────
 
@@ -73,10 +145,9 @@ class VIAFMatcher:
             "maximumRecords": "3",
         }
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 _VIAF_SEARCH,
                 params=params,
-                headers={"Accept": "application/json"},
                 timeout=_TIMEOUT,
             )
             self._last_request = time.monotonic()

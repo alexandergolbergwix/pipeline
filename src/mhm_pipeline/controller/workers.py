@@ -513,6 +513,21 @@ class AuthorityWorker(StageWorker):
             viaf_uri=viaf_uri,
         )
 
+        # Harvest VIAF cluster identifiers (GND, LC, ISNI, BnF)
+        if viaf_uri and viaf:
+            import re as _re  # noqa: PLC0415
+            viaf_id_match = _re.search(r"/viaf/(\d+)", viaf_uri)
+            if viaf_id_match:
+                cluster = viaf.get_cluster_identifiers(viaf_id_match.group(1))
+                if cluster.get("gnd"):
+                    match_info["gnd_id"] = cluster["gnd"]
+                if cluster.get("lc"):
+                    match_info["lc_id"] = cluster["lc"]
+                if cluster.get("isni"):
+                    match_info["isni"] = cluster["isni"]
+                if cluster.get("bnf"):
+                    match_info["bnf_id"] = cluster["bnf"]
+
         # Enrich with dates and preferred names from Mazal DB
         if mazal_id and mazal:
             details = mazal.get_person_details(mazal_id)
