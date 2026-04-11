@@ -40,8 +40,9 @@ class UploadResult:
 
     local_id: str
     qid: str | None = None
-    status: str = "pending"  # "success" | "exists" | "failed" | "skipped"
+    status: str = "pending"  # "success" | "updated" | "exists" | "failed" | "skipped"
     message: str = ""
+    added_properties: list[str] = field(default_factory=list)
 
 
 class WikidataUploader:
@@ -199,18 +200,23 @@ class WikidataUploader:
         # Statements — use WBI's built-in dedup for existing items
         from wikibaseintegrator.wbi_enums import ActionIfExists  # noqa: PLC0415
 
-        # For existing items: MERGE_REFS_OR_APPEND (safe upsert, no duplicates)
-        # For new items: FORCE_APPEND (add everything, no existing claims to compare)
-        action = ActionIfExists.MERGE_REFS_OR_APPEND if item.existing_qid else ActionIfExists.FORCE_APPEND
+        action = (
+            ActionIfExists.MERGE_REFS_OR_APPEND if item.existing_qid
+            else ActionIfExists.FORCE_APPEND
+        )
 
         claims_before = len(wbi_item.claims) if item.existing_qid else 0
+        added_properties: list[str] = []
         for stmt in item.statements:
             claim = self._build_claim(stmt)
             if claim:
+                count_before = len(wbi_item.claims)
                 wbi_item.claims.add(claim, action_if_exists=action)
+                if len(wbi_item.claims) > count_before:
+                    added_properties.append(stmt.property_id)
 
-        new_claims = len(wbi_item.claims) - claims_before if item.existing_qid else len(item.statements)
-        return wbi_item, new_claims
+        new_claims = len(added_properties) if item.existing_qid else len(item.statements)
+        return wbi_item, new_claims, added_properties
 
     def _claim_exists(self, wbi_item: object, stmt: "WikidataStatement") -> bool:
         """Check if a claim with the same property+value already exists on the item."""
@@ -377,7 +383,7 @@ class WikidataUploader:
         for attempt in range(1, _MAX_RETRIES + 1):
             self._rate_limit()
             try:
-                wbi_item, new_claims = self._build_wbi_item(item)
+                wbi_item, new_claims, added_props = self._build_wbi_item(item)
 
                 # Skip write if existing item has no new claims
                 if item.existing_qid and new_claims == 0:
@@ -392,17 +398,23 @@ class WikidataUploader:
                 qid = result.id if result else None
 
                 if item.existing_qid:
+                    from collections import Counter  # noqa: PLC0415
+                    prop_summary = ", ".join(
+                        f"{pid}x{cnt}" for pid, cnt in Counter(added_props).most_common(5)
+                    )
                     return UploadResult(
                         local_id=item.local_id,
                         qid=qid,
                         status="updated",
-                        message=f"Updated {qid} (+{new_claims} claims)",
+                        message=f"Updated {qid}: +{new_claims} claims ({prop_summary})",
+                        added_properties=added_props,
                     )
                 return UploadResult(
                     local_id=item.local_id,
                     qid=qid,
                     status="success",
                     message=f"Created {qid} ({new_claims} claims)",
+                    added_properties=added_props,
                 )
             except Exception as exc:
                 last_error = str(exc)

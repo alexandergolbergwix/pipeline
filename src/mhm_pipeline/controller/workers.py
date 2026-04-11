@@ -1157,6 +1157,7 @@ class WikidataUploadWorker(StageWorker):
                         "status": r.status,
                         "qid": r.qid,
                         "message": r.message,
+                        "added_properties": getattr(r, "added_properties", []),
                     }
                     for r in results
                 ]
