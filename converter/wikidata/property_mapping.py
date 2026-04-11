@@ -308,7 +308,7 @@ SUBJECT_TO_QID: dict[str, str] = {
     "Astrology": "Q34362",             # astrology
     "Phlebotomy": "Q575696",           # phlebotomy
     "Berit milah": "Q204819",          # circumcision
-    "Bar mitzvah": "Q333783",          # Bar Mitzvah
+    "Bar mitzvah": "Q28807008",         # Bar Mitzvah (Jewish ceremony)
     "Gematria": "Q168529",             # gematria
     "Purim": "Q132834",               # Purim
     "Apostasy": "Q179723",             # apostasy
