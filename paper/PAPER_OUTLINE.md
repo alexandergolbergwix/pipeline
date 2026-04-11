@@ -25,7 +25,7 @@ Department of Information Science and Applied Artificial Intelligence, Bar-Ilan 
 
 ## Abstract (~250 words)
 
-Transforming library catalogs into Linked Open Data is critical for connecting isolated cultural heritage collections, yet automated conversion from MARC records to Wikidata achieves typically low coverage due to the heterogeneity of bibliographic data and the gap between structured metadata fields and unstructured note fields. We present a multi-strategy pipeline for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96% date coverage, 100% genre coverage, an average of ~22.9 Wikidata statements per manuscript and 6.4 statements per person entity — compared to ~5 statements achievable with rule-based mapping alone.
+Transforming library catalogs into Linked Open Data is critical for connecting isolated cultural heritage collections, yet automated conversion from MARC records to Wikidata achieves typically low coverage due to the heterogeneity of bibliographic data and the gap between structured metadata fields and unstructured note fields. We present a multi-strategy pipeline for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96% date coverage, 100% genre coverage, an average of 24.8 Wikidata statements per manuscript and 7.5 statements per person entity — compared to ~5 statements achievable with rule-based mapping alone.
 
 Our approach combines five complementary strategies: (A) three domain-specific NER models trained via distant supervision from MARC structured fields, achieving 85.7%, 95.9%, and 99.99% F1 for person, provenance, and contents extraction respectively; (B) rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping; (C) multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D) VIAF cluster harvesting for cross-referencing external identifiers (GND, LCCN, ISNI, BnF); and (E) property-level data type validation against the WikiProject Manuscripts Data Model.
 
@@ -232,7 +232,7 @@ RDF Graph (HMO ontology)    +    Wikidata Upload (WikibaseIntegrator)
 | P1071 (location) | 0% | ~10% | ~20% | **34%** | KIMA resolution |
 | P127 (owner) | 0% | ~15% | ~25% | **43%** | Provenance NER |
 | P11603 (scribe) | 0% | ~10% | ~15% | **18%** | Person NER |
-| **Avg stmts/MS** | **~8** | **~12** | **~15** | **~22.9** | Combined |
+| **Avg stmts/MS** | **~8** | **~12** | **~15** | **24.8** | Combined |
 
 *(GPT-4 numbers are estimates — actual experiments needed)*
 
@@ -253,7 +253,7 @@ RDF Graph (HMO ontology)    +    Wikidata Upload (WikibaseIntegrator)
 | P213 (ISNI) | 129 | 23% | VIAF cluster harvesting |
 | P268 (BnF) | 29 | 5% | VIAF cluster harvesting |
 | P569/P570 (dates) | 12 | ~2% | Mazal DB |
-| **Avg stmts/person** | — | **6.4** | Combined |
+| **Avg stmts/person** | — | **7.5** | Combined |
 
 ### 6.1c Upload Summary (pilot: 100 manuscripts)
 
