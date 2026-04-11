@@ -60,13 +60,18 @@ class VIAFMatcher:
         Given a VIAF ID (numeric), fetches the full cluster record and
         extracts GND, LC, BnF, and ISNI identifiers plus birth/death dates.
 
+        Uses ``https://viaf.org/viaf/{id}`` with ``Accept: application/json``.
+        Response is namespaced under ``ns1:VIAFCluster`` with sources in
+        ``ns1:sources.ns1:source[].content`` as ``PREFIX|ID``.
+
         Returns a dict with keys: gnd, lc, bnf, isni, birth_date, death_date.
         """
         if viaf_id in self._cluster_cache:
             return self._cluster_cache[viaf_id]
 
         ids: dict[str, str] = {}
-        url = f"https://viaf.org/viaf/{viaf_id}/viaf.json"
+        # /viaf.json endpoint was removed; use content negotiation instead
+        url = f"https://viaf.org/viaf/{viaf_id}"
 
         # Respect rate limit
         elapsed = time.monotonic() - self._last_request
@@ -84,39 +89,41 @@ class VIAFMatcher:
             self._cluster_cache[viaf_id] = ids
             return ids
 
-        # Extract source identifiers from sources.source array
-        sources = data.get("sources", {})
-        source_list = sources.get("source", [])
+        # Navigate ns1:VIAFCluster wrapper
+        cluster = data.get("ns1:VIAFCluster", data)
+
+        # Extract source identifiers from ns1:sources.ns1:source array
+        sources = cluster.get("ns1:sources", cluster.get("sources", {}))
+        source_list = sources.get("ns1:source", sources.get("source", []))
         if isinstance(source_list, dict):
             source_list = [source_list]
 
         for source in source_list:
-            text = source.get("#text", "") if isinstance(source, dict) else str(source)
-            if "|" not in text:
+            # Current API uses "content" key; older used "#text"
+            text = source.get("content", source.get("#text", ""))
+            if isinstance(text, (int, float)):
+                text = str(text)
+            if not text or "|" not in text:
                 continue
             prefix, sid = text.split("|", 1)
-            if "DNB" in prefix and "gnd" not in ids:
-                ids["gnd"] = sid.strip()
-            elif "LC" in prefix and "lc" not in ids:
-                lc_id = sid.strip().replace("n ", "n").replace("nr ", "nr").replace("no ", "no")
-                ids["lc"] = lc_id
-            elif "BNF" in prefix and "bnf" not in ids:
-                ids["bnf"] = sid.strip()
-
-        # Extract ISNI
-        isnis = data.get("ISNIs", {})
-        isni_list = isnis.get("isni", []) if isinstance(isnis, dict) else []
-        if isinstance(isni_list, str):
-            isni_list = [isni_list]
-        if isni_list:
-            ids["isni"] = str(isni_list[0]).strip()
+            sid = str(sid).strip()
+            if prefix == "DNB" and "gnd" not in ids:
+                ids["gnd"] = sid
+            elif prefix == "LC" and "lc" not in ids:
+                ids["lc"] = sid.replace(" ", "")
+            elif prefix == "BNF" and "bnf" not in ids:
+                ids["bnf"] = sid
+            elif prefix == "ISNI" and "isni" not in ids:
+                ids["isni"] = sid
+            elif prefix == "J9U" and "j9u" not in ids:
+                ids["j9u"] = sid
 
         # Extract dates
-        birth = data.get("birthDate", "")
-        death = data.get("deathDate", "")
-        if birth and birth not in ("0",):
+        birth = cluster.get("ns1:birthDate", cluster.get("birthDate", ""))
+        death = cluster.get("ns1:deathDate", cluster.get("deathDate", ""))
+        if birth and str(birth) not in ("0",):
             ids["birth_date"] = str(birth)
-        if death and death not in ("0",):
+        if death and str(death) not in ("0",):
             ids["death_date"] = str(death)
 
         self._cluster_cache[viaf_id] = ids
