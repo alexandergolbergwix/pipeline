@@ -197,7 +197,7 @@ class WikidataPanel(QWidget):
             widget.set_status(status=status, qid=qid, message=message)
 
             # Update overall progress for completed items
-            if status in ("success", "exists", "failed", "skipped"):
+            if status in ("success", "updated", "exists", "failed", "skipped"):
                 self._completed_items = getattr(self, "_completed_items", 0) + 1
                 total = getattr(self, "_total_items", self._completed_items)
                 self._upload_view.update_overall_progress(self._completed_items, total)
@@ -338,7 +338,7 @@ class WikidataPanel(QWidget):
             QMessageBox.critical(self, "Load Error", str(e))
 
     def _on_fullscreen(self) -> None:
-        """Open upload progress in a full-screen dialog."""
+        """Open upload progress in a full-screen dialog with live stats."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Wikidata Upload Progress")
         screen = self.screen()
@@ -348,9 +348,59 @@ class WikidataPanel(QWidget):
         else:
             dialog.resize(1200, 800)
         dlg_layout = QVBoxLayout(dialog)
-        full_view = UploadProgressView()
-        dlg_layout.addWidget(full_view, stretch=1)
+
+        # Stats summary at top
+        stats = self._compute_upload_stats()
+        stats_label = QLabel(stats)
+        stats_label.setStyleSheet(
+            "background-color: #f0f9ff; border: 1px solid #bae6fd; "
+            "border-radius: 6px; padding: 8px; font-size: 12px;"
+        )
+        stats_label.setWordWrap(True)
+        dlg_layout.addWidget(stats_label)
+
+        # Reuse existing upload view (has all entity widgets)
+        # Temporarily reparent it to the dialog
+        self._upload_view.setParent(dialog)
+        dlg_layout.addWidget(self._upload_view, stretch=1)
+
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(dialog.accept)
         dlg_layout.addWidget(close_btn)
+
         dialog.exec()
+
+        # Reparent back to the panel after dialog closes
+        self._upload_view.setParent(self)
+        # Re-add to panel layout (scroll area content)
+        for i in range(self.layout().count()):
+            widget = self.layout().itemAt(i).widget()
+            if widget and hasattr(widget, 'widget'):  # QScrollArea
+                content = widget.widget()
+                if content:
+                    content.layout().insertWidget(content.layout().count() - 1, self._upload_view)
+                    break
+
+    def _compute_upload_stats(self) -> str:
+        """Compute live upload statistics as HTML."""
+        widgets = getattr(self._upload_view, '_entity_widgets', [])
+        if not widgets:
+            return "No upload data."
+
+        from collections import Counter  # noqa: PLC0415
+        statuses = Counter(w.current_status for w in widgets)
+        total = len(widgets)
+        created = statuses.get("success", 0)
+        updated = statuses.get("updated", 0)
+        unchanged = statuses.get("exists", 0)
+        failed = statuses.get("failed", 0)
+        pending = statuses.get("pending", 0) + statuses.get("uploading", 0)
+
+        return (
+            f"<b>Upload Statistics</b> ({total} items)<br>"
+            f"<span style='color:#3CB44B'>Created: {created}</span> | "
+            f"<span style='color:#F0A030'>Updated: {updated}</span> | "
+            f"<span style='color:#888888'>Unchanged: {unchanged}</span> | "
+            f"<span style='color:#DC3232'>Failed: {failed}</span> | "
+            f"Pending: {pending}"
+        )

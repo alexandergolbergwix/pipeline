@@ -21,7 +21,8 @@ _STATUS_ICONS: dict[str, str] = {
     "pending": "⏳",
     "uploading": "⟳",
     "success": "✓",
-    "exists": "✓",
+    "updated": "↑",
+    "exists": "=",
     "failed": "✗",
     "skipped": "⊘",
 }
@@ -31,7 +32,8 @@ _STATUS_COLORS: dict[str, str] = {
     "pending": "#888888",
     "uploading": "#3280F0",
     "success": "#3CB44B",
-    "exists": "#3CB44B",
+    "updated": "#F0A030",
+    "exists": "#888888",
     "failed": "#DC3232",
     "skipped": "#888888",
 }
@@ -379,7 +381,7 @@ class UploadProgressView(QWidget):
             return
 
         completed = sum(
-            1 for w in self._entity_widgets if w.current_status in ("success", "exists", "skipped")
+            1 for w in self._entity_widgets if w.current_status in ("success", "updated", "exists", "failed", "skipped")
         )
         self.update_overall_progress(completed, total)
 

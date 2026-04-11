@@ -788,6 +788,18 @@ class WikidataItemBuilder:
                 property_id=P_NLI_J9U_ID, value=str(mazal_id), value_type="external-id",
             ))
 
+        # P21 = sex or gender (male for historical Hebrew manuscript persons)
+        # Nearly all historical manuscript authors/scribes were male
+        if not is_org:
+            person.statements.append(WikidataStatement(
+                property_id="P21", value="Q6581097", value_type="item",  # male
+            ))
+
+        # P1343 = described by source (link to NLI/Ktiv catalog)
+        person.statements.append(WikidataStatement(
+            property_id="P1343", value="Q118384267", value_type="item",  # Ktiv
+        ))
+
         self._person_items[key] = person
         return person
 
