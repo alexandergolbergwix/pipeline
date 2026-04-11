@@ -1031,72 +1031,58 @@ class WikidataUploadWorker(StageWorker):
                 f"{len(items) - builder.person_count} manuscripts)"
             )
 
-            # Phase 1.5: Local reconciliation — check for previously uploaded items
-            # to avoid duplicates. Uses upload_results.json from prior runs.
+            # Phase 1.5: Reconciliation — find existing Wikidata items to avoid duplicates
+            self.log_line.emit("Reconciling against Wikidata...")
+
+            # Step A: Load prior upload results (fast, local)
             prev_results_path = self._output_dir / "upload_results.json"
             if prev_results_path.exists():
                 try:
                     prev_results = json.loads(prev_results_path.read_text(encoding="utf-8"))
                     prev_qids: dict[str, str] = {}
                     for pr in prev_results:
-                        if pr.get("qid") and pr.get("status") in ("success", "exists"):
+                        if pr.get("qid") and pr.get("status") in ("success", "exists", "updated"):
                             prev_qids[pr["local_id"]] = pr["qid"]
-
                     matched = 0
                     for item in items:
                         if item.local_id in prev_qids and not item.existing_qid:
                             item.existing_qid = prev_qids[item.local_id]
                             matched += 1
                     if matched:
-                        self.log_line.emit(
-                            f"Reconciled {matched} items from previous upload results"
-                        )
-                except Exception as recon_exc:
-                    self.log_line.emit(f"Could not load prior results: {recon_exc}")
-
-            # Also check NLI IDs via SPARQL for manuscripts not in prior results
-            ms_without_qid = [
-                i for i in items
-                if i.entity_type == "manuscript" and not i.existing_qid
-            ]
-            if ms_without_qid:
-                try:
-                    import requests  # noqa: PLC0415
-                    self.log_line.emit(
-                        f"Checking {len(ms_without_qid)} manuscripts against Wikidata..."
-                    )
-                    headers = {"User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)"}
-                    for item in ms_without_qid:
-                        for stmt in item.statements:
-                            if stmt.property_id == "P8189":
-                                nli_id = str(stmt.value)
-                                sparql = (
-                                    f'SELECT ?item WHERE {{ '
-                                    f'?item wdt:P8189 "{nli_id}" . '
-                                    f'}} LIMIT 1'
-                                )
-                                try:
-                                    resp = requests.get(
-                                        "https://query.wikidata.org/sparql",
-                                        params={"query": sparql, "format": "json"},
-                                        headers=headers,
-                                        timeout=10,
-                                    )
-                                    if resp.status_code == 200:
-                                        bindings = resp.json().get("results", {}).get("bindings", [])
-                                        if bindings:
-                                            qid = bindings[0]["item"]["value"].split("/")[-1]
-                                            item.existing_qid = qid
-                                    import time as _time  # noqa: PLC0415
-                                    _time.sleep(1)  # SPARQL rate limit
-                                except Exception:
-                                    pass
-                                break
-                    n_found = sum(1 for i in ms_without_qid if i.existing_qid)
-                    if n_found:
-                        self.log_line.emit(f"Found {n_found} existing manuscripts on Wikidata")
+                        self.log_line.emit(f"  Local: {matched} items from prior results")
                 except Exception:
                     pass
+
+            # Step B: Batch SPARQL for items with NLI IDs not yet reconciled
+            items_with_nli = []
+            nli_to_item: dict[str, list] = {}
+            for item in items:
+                if item.existing_qid:
+                    continue
+                for stmt in item.statements:
+                    if stmt.property_id == "P8189":
+                        nli_id = str(stmt.value)
+                        items_with_nli.append(nli_id)
+                        nli_to_item.setdefault(nli_id, []).append(item)
+                        break
+
+            if items_with_nli:
+                try:
+                    from converter.wikidata.reconciler import WikidataReconciler  # noqa: PLC0415
+                    reconciler = WikidataReconciler()
+                    self.log_line.emit(f"  SPARQL: checking {len(items_with_nli)} NLI IDs...")
+                    batch_qids = reconciler.reconcile_batch_by_nli_id(items_with_nli)
+                    for nli_id, qid in batch_qids.items():
+                        for item in nli_to_item.get(nli_id, []):
+                            item.existing_qid = qid
+                    self.log_line.emit(f"  SPARQL: {len(batch_qids)} existing items found")
+                except Exception as exc:
+                    self.log_line.emit(f"  SPARQL reconciliation failed: {exc}")
+
+            n_existing = sum(1 for i in items if i.existing_qid)
+            n_new = len(items) - n_existing
+            self.log_line.emit(f"Reconciliation: {n_existing} existing + {n_new} new = {len(items)} total")
+            self.progress.emit(45)
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1158,8 +1144,11 @@ class WikidataUploadWorker(StageWorker):
                     entity_cb=_entity_cb,
                 )
 
-                success = sum(1 for r in results if r.status in ("success", "exists"))
+                created = sum(1 for r in results if r.status == "success")
+                updated = sum(1 for r in results if r.status == "updated")
+                unchanged = sum(1 for r in results if r.status == "exists")
                 failed = sum(1 for r in results if r.status == "failed")
+                success = created + updated + unchanged
 
                 output_path = self._output_dir / "upload_results.json"
                 result_data = [
@@ -1177,7 +1166,8 @@ class WikidataUploadWorker(StageWorker):
                 )
 
                 self.log_line.emit(
-                    f"Upload complete — {success} succeeded, {failed} failed"
+                    f"Upload complete — {created} created, {updated} updated, "
+                    f"{unchanged} unchanged, {failed} failed"
                 )
                 self.progress.emit(100)
                 self.finished.emit(output_path)

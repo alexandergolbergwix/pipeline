@@ -309,6 +309,43 @@ class WikidataReconciler:
 
         return None
 
+    # ── Batch reconciliation (efficient for large uploads) ────────
+
+    def reconcile_batch_by_nli_id(
+        self, nli_ids: list[str],
+    ) -> dict[str, str]:
+        """Reconcile multiple items by NLI J9U ID in a single SPARQL query.
+
+        Uses the VALUES clause to batch-query up to 100 IDs at once.
+
+        Returns:
+            Dict mapping NLI ID → Wikidata QID for found items.
+        """
+        results: dict[str, str] = {}
+        # Process in chunks of 100 (SPARQL VALUES limit)
+        for i in range(0, len(nli_ids), 100):
+            chunk = nli_ids[i:i + 100]
+            values = " ".join(f'"{nid}"' for nid in chunk)
+            sparql = f"""
+            SELECT ?item ?nli WHERE {{
+              VALUES ?nli {{ {values} }}
+              ?item wdt:P8189 ?nli .
+            }}
+            """
+            try:
+                bindings = self._query(sparql)
+                for b in bindings:
+                    nli = b.get("nli", {}).get("value", "")
+                    item_uri = b.get("item", {}).get("value", "")
+                    qid = extract_wikidata_qid(item_uri)
+                    if qid and nli:
+                        results[nli] = qid
+            except Exception as exc:
+                logger.warning("Batch reconciliation failed for chunk %d: %s", i, exc)
+
+        logger.info("Batch reconciliation: %d/%d NLI IDs matched", len(results), len(nli_ids))
+        return results
+
     def reconcile_all(
         self,
         records: list[dict[str, object]],

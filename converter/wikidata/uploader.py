@@ -165,14 +165,14 @@ class WikidataUploader:
             time.sleep(_EDIT_DELAY_SECONDS - elapsed)
         self._last_edit_time = time.time()
 
-    def _build_wbi_item(self, item: WikidataItem) -> object:
+    def _build_wbi_item(self, item: WikidataItem) -> tuple[object, int]:
         """Convert a WikidataItem to a WikibaseIntegrator item object.
 
-        Args:
-            item: The WikidataItem to convert.
+        For existing items, performs claim diffing to avoid duplicates.
+        Only adds claims that don't already exist on Wikidata.
 
         Returns:
-            A wikibaseintegrator Item object ready for writing.
+            Tuple of (wbi_item, new_claims_count).
         """
         from wikibaseintegrator import datatypes  # noqa: PLC0415
 
@@ -196,13 +196,61 @@ class WikidataUploader:
             for alias in alias_list:
                 wbi_item.aliases.set(lang, alias)
 
-        # Statements
+        # Statements — with claim diffing for existing items
+        new_claims = 0
         for stmt in item.statements:
             claim = self._build_claim(stmt)
-            if claim:
-                wbi_item.claims.add(claim)
+            if not claim:
+                continue
 
-        return wbi_item
+            # For existing items, skip claims that already exist
+            if item.existing_qid and self._claim_exists(wbi_item, stmt):
+                continue
+
+            wbi_item.claims.add(claim)
+            new_claims += 1
+
+        return wbi_item, new_claims
+
+    def _claim_exists(self, wbi_item: object, stmt: "WikidataStatement") -> bool:
+        """Check if a claim with the same property+value already exists on the item."""
+        try:
+            existing_claims = wbi_item.claims.get(stmt.property_id)
+            if not existing_claims:
+                return False
+
+            new_value = str(stmt.value)
+
+            for existing in existing_claims:
+                existing_value = self._extract_claim_value(existing)
+                if existing_value == new_value:
+                    return True
+        except Exception:
+            pass  # If comparison fails, assume claim doesn't exist → add it
+        return False
+
+    @staticmethod
+    def _extract_claim_value(wbi_claim: object) -> str:
+        """Extract a comparable string value from a WBI claim."""
+        try:
+            snak = wbi_claim.mainsnak
+            dv = snak.datavalue
+            if not dv:
+                return ""
+            val = dv.get("value", dv) if isinstance(dv, dict) else dv
+            if isinstance(val, dict):
+                if "id" in val:
+                    return val["id"]  # Q12345
+                if "time" in val:
+                    return val["time"]  # +1650-00-00T00:00:00Z
+                if "text" in val:
+                    return val["text"]  # monolingual text
+                if "amount" in val:
+                    return val["amount"]
+                return str(val)
+            return str(val)
+        except Exception:
+            return ""
 
     def _build_claim(self, stmt: WikidataStatement) -> object | None:
         """Convert a WikidataStatement to a WikibaseIntegrator claim.
@@ -315,10 +363,10 @@ class WikidataUploader:
             return None
 
     def upload_item(self, item: WikidataItem) -> UploadResult:
-        """Upload a single item to Wikidata with retry logic.
+        """Upload a single item to Wikidata with retry logic and smart diffing.
 
-        Args:
-            item: The WikidataItem to upload.
+        For existing items: fetches current claims, compares with new claims,
+        and only writes if there are actual changes (avoids duplicates).
 
         Returns:
             UploadResult with QID and status.
@@ -329,15 +377,32 @@ class WikidataUploader:
         for attempt in range(1, _MAX_RETRIES + 1):
             self._rate_limit()
             try:
-                wbi_item = self._build_wbi_item(item)
+                wbi_item, new_claims = self._build_wbi_item(item)
+
+                # Skip write if existing item has no new claims
+                if item.existing_qid and new_claims == 0:
+                    return UploadResult(
+                        local_id=item.local_id,
+                        qid=item.existing_qid,
+                        status="exists",
+                        message=f"No changes needed for {item.existing_qid}",
+                    )
+
                 result = wbi_item.write()
                 qid = result.id if result else None
-                status = "exists" if item.existing_qid else "success"
+
+                if item.existing_qid:
+                    return UploadResult(
+                        local_id=item.local_id,
+                        qid=qid,
+                        status="updated",
+                        message=f"Updated {qid} (+{new_claims} claims)",
+                    )
                 return UploadResult(
                     local_id=item.local_id,
                     qid=qid,
-                    status=status,
-                    message=f"{'Updated' if item.existing_qid else 'Created'} {qid}",
+                    status="success",
+                    message=f"Created {qid} ({new_claims} claims)",
                 )
             except Exception as exc:
                 last_error = str(exc)
