@@ -823,6 +823,9 @@ class WikidataItemBuilder:
             if progress_cb:
                 progress_cb(idx + 1, total)
 
+        # Second pass: add P800 (notable work) backlinks from persons → manuscripts
+        self._add_person_work_backlinks()
+
         # Persons MUST come before manuscripts so their QIDs are available
         # for resolving __LOCAL: references in manuscript claims
         all_items = list(self._person_items.values()) + self._manuscript_items
@@ -831,6 +834,54 @@ class WikidataItemBuilder:
             len(all_items), len(self._manuscript_items), len(self._person_items),
         )
         return all_items
+
+    def _add_person_work_backlinks(self) -> None:
+        """Add P800 (notable work) to persons linking back to their manuscripts.
+
+        Scans all manuscript P50/P11603 claims to find which persons are
+        associated with which manuscripts, then adds P800 backlinks.
+        """
+        # Build person_key → manuscript local_ids mapping
+        person_to_manuscripts: dict[str, list[str]] = {}
+        for ms_item in self._manuscript_items:
+            for stmt in ms_item.statements:
+                if stmt.property_id in (P_AUTHOR, P_TRANSCRIBED_BY):
+                    value = str(stmt.value)
+                    # Extract person key from __LOCAL: ref or QID
+                    if value.startswith("__LOCAL:"):
+                        person_key = value[len("__LOCAL:"):]
+                    else:
+                        # Find person by resolved QID
+                        person_key = None
+                        for pk, qid in self._person_qids.items():
+                            if qid == value:
+                                person_key = pk
+                                break
+                        if not person_key:
+                            continue
+                    person_to_manuscripts.setdefault(person_key, []).append(
+                        ms_item.local_id,
+                    )
+
+        # Add P800 statements to persons (max 10 per person to avoid spam)
+        backlinks_added = 0
+        for person_key, ms_ids in person_to_manuscripts.items():
+            person = self._person_items.get(person_key)
+            if not person:
+                continue
+            for ms_id in ms_ids[:10]:
+                person.statements.append(WikidataStatement(
+                    property_id="P800",
+                    value=f"__LOCAL:{ms_id}",
+                    value_type="item",
+                ))
+                backlinks_added += 1
+
+        if backlinks_added:
+            logger.info(
+                "Added %d P800 (notable work) backlinks to %d persons",
+                backlinks_added, len(person_to_manuscripts),
+            )
 
     @property
     def person_count(self) -> int:
