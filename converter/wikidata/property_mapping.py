@@ -204,6 +204,21 @@ GENRE_TO_QID: dict[str, str] = {
     "Drama": "Q25372",                          # drama
     "Calendars": "Q12132",                      # calendar
     "Pinkasim": "Q7197095",                     # pinkas (communal record book)
+    "Censored manuscripts": "Q49100005",         # banned book (censored)
+    "Family records": "Q485228",                 # family register
+    "Registers of births, etc.": "Q18562479",    # vital record
+    "Autograph manuscripts": "Q9026959",         # autograph (handwritten by author)
+    "Bibliographies": "Q1631107",                # bibliography
+    "Tales": "Q49084",                           # short story / tale
+    "Negotiable instruments": "Q3359388",        # negotiable instrument
+    "Riddles": "Q189539",                        # riddle
+    "Death registers": "Q3348095",               # register of deaths
+    "Account books": "Q192907",                  # ledger / account book
+    "Business records (Manuscript)": "Q804154",  # business record
+    "Licenses": "Q79719",                        # license
+    "Records (Documents)": "Q49848",             # document
+    "Community records (Manuscript)": "Q7197095", # pinkas (communal record)
+    "Literature (Miscellaneous, in manuscript)": "Q8242",  # literature
 }
 
 # Well-known works that already exist on Wikidata
@@ -255,6 +270,40 @@ TALMUD_TRACTATE_TO_QID: dict[str, str] = {
     "נדרים": "Q2604843",
     "נזיר": "Q2605296",
     "שבועות": "Q2606013",
+}
+
+# LCSH subject terms → Wikidata QIDs (for P921 main subject)
+SUBJECT_TO_QID: dict[str, str] = {
+    "Eretz Israel": "Q1207",           # Land of Israel
+    "Jews": "Q7325",                   # Jews
+    "Karaites": "Q173579",             # Karaites
+    "Jewish law": "Q107427",           # Halakha
+    "Cabala": "Q123006",               # Kabbalah
+    "Religious disputations": "Q841408",  # religious debate
+    "Astronomy": "Q333",               # astronomy
+    "Responsa": "Q2112559",            # responsa
+    "Philosophy": "Q5891",             # philosophy
+    "Jewish philosophy": "Q131748",     # Jewish philosophy
+    "Shehitah": "Q328079",             # shechita (kosher slaughter)
+    "Christianity": "Q5043",           # Christianity
+    "Jewish sermons, Hebrew": "Q861911",  # sermon
+    "Jewish calendar": "Q217535",       # Hebrew calendar
+    "Hebrew language": "Q9288",         # Hebrew language
+    "Dreams": "Q36348",                # dream
+    "Earthquakes": "Q7944",            # earthquake
+    "Medicine": "Q11190",              # medicine
+    "Astrology": "Q34362",             # astrology
+    "Phlebotomy": "Q575696",           # phlebotomy
+    "Berit milah": "Q204819",          # circumcision
+    "Bar mitzvah": "Q333783",          # Bar Mitzvah
+    "Gematria": "Q168529",             # gematria
+    "Purim": "Q132834",               # Purim
+    "Apostasy": "Q179723",             # apostasy
+    "Liturgy": "Q172331",              # liturgy
+    "Prayer": "Q40953",                # prayer
+    "Bible": "Q1845",                  # Bible
+    "Talmud": "Q43290",                # Talmud
+    "Torah scrolls": "Q37602",         # Torah
 }
 
 # ── Language code → QID mapping ──────────────────────────────────────

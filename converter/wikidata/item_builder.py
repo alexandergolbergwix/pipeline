@@ -500,9 +500,11 @@ class WikidataItemBuilder:
         Maps Bible book names and Talmud Bavli tractate names to Wikidata QIDs.
         """
         from converter.wikidata.property_mapping import (  # noqa: PLC0415
-            BIBLE_BOOK_TO_QID, TALMUD_TRACTATE_TO_QID,
+            BIBLE_BOOK_TO_QID, SUBJECT_TO_QID, TALMUD_TRACTATE_TO_QID,
         )
         seen_qids: set[str] = set()
+
+        # From canonical references (Bible books, Talmud tractates)
         for cr in (record.get("canonical_references") or []):
             hierarchy = cr.get("hierarchy", "")
             qid = None
@@ -512,6 +514,17 @@ class WikidataItemBuilder:
             elif hierarchy == "Talmud_Bavli":
                 tractate = cr.get("tractate", "")
                 qid = TALMUD_TRACTATE_TO_QID.get(tractate)
+            if qid and qid not in seen_qids:
+                seen_qids.add(qid)
+                item.statements.append(WikidataStatement(
+                    property_id=P_MAIN_SUBJECT, value=qid,
+                    value_type="item", references=ref,
+                ))
+
+        # From LCSH subject headings
+        for subj in (record.get("subjects") or []):
+            term = subj.get("term", "") if isinstance(subj, dict) else str(subj)
+            qid = SUBJECT_TO_QID.get(term)
             if qid and qid not in seen_qids:
                 seen_qids.add(qid)
                 item.statements.append(WikidataStatement(
