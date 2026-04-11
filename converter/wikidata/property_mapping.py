@@ -392,12 +392,42 @@ def nli_reference(control_number: str) -> list[dict[str, str]]:
     ]
 
 
+PRECISION_CENTURY = 7
+
+# Hebrew ordinal → century number mapping
+_HEBREW_ORDINAL_TO_INT: dict[str, int] = {
+    'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 7, 'ח': 8, 'ט': 9,
+    'י': 10, "י\"א": 11, "י\"ב": 12, "י\"ג": 13, "י\"ד": 14, "י\"ה": 15,
+    "ט\"ו": 15, "י\"ו": 16, "ט\"ז": 16, "י\"ז": 17, "י\"ח": 18, "י\"ט": 19,
+    'כ': 20, "כ\"א": 21,
+}
+
+
+def _parse_hebrew_century(text: str) -> int | None:
+    """Parse Hebrew century string like 'מאה ט"ז' → 16 (= 1500s)."""
+    # Clean CSV double-quote escaping
+    text = text.replace('""', '"')
+    match = re.search(r'מאה\s+([א-ת]["\u05F4\']?[א-ת]?)', text)
+    if not match:
+        return None
+    ordinal = match.group(1).strip()
+    # Try direct lookup
+    century = _HEBREW_ORDINAL_TO_INT.get(ordinal)
+    if century:
+        return century
+    # Try with quote variations
+    for variant in [ordinal, ordinal.replace("'", '"'), ordinal.replace('"', "'")]:
+        century = _HEBREW_ORDINAL_TO_INT.get(variant)
+        if century:
+            return century
+    return None
+
+
 def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
     """Convert a pipeline dates dict to a Wikidata time value and precision.
 
-    Args:
-        dates_dict: The 'dates' field from authority_enriched.json, containing
-            'year', 'date_format', 'original_string', etc.
+    Handles: structured years, English century strings, Hebrew century strings
+    (מאה ט"ז = 16th century), and approximate dates.
 
     Returns:
         Tuple of (ISO time string, precision int) or None if no date available.
@@ -408,21 +438,45 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
     year = dates_dict.get("year")
     date_format = dates_dict.get("date_format", "")
 
-    if year is None:
-        original = str(dates_dict.get("original_string", ""))
-        century_match = re.search(r"(\d{1,2})(?:th|st|nd|rd)\s*cent", original, re.IGNORECASE)
-        if century_match:
-            century = int(century_match.group(1))
-            mid_year = (century - 1) * 100 + 50
-            return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+    if year is not None:
+        year_int = int(year)
+        if date_format == "FullDate":
+            return f"+{year_int:04d}-01-01T00:00:00Z", PRECISION_YEAR
+        return f"+{year_int:04d}-00-00T00:00:00Z", PRECISION_YEAR
+
+    # No structured year — try to parse from original string
+    original = str(dates_dict.get("original_string", "")).replace('""', '"')
+    if not original:
         return None
 
-    year_int = int(year)
+    # English century: "16th century"
+    century_match = re.search(r"(\d{1,2})(?:th|st|nd|rd)\s*cent", original, re.IGNORECASE)
+    if century_match:
+        century = int(century_match.group(1))
+        mid_year = (century - 1) * 100 + 50
+        return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
-    if date_format == "FullDate":
-        return f"+{year_int:04d}-01-01T00:00:00Z", PRECISION_YEAR
+    # Hebrew century: "מאה ט"ז" (16th century)
+    heb_century = _parse_hebrew_century(original)
+    if heb_century:
+        mid_year = (heb_century - 1) * 100 + 50
+        return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
-    return f"+{year_int:04d}-00-00T00:00:00Z", PRECISION_YEAR
+    # Hebrew century range: "מאה י"ד-ט"ו" → use midpoint
+    range_match = re.search(r'מאה\s+([א-ת]["\u05F4\']?[א-ת]?)\s*[-–]\s*([א-ת]["\u05F4\']?[א-ת]?)', original.replace('""', '"'))
+    if range_match:
+        c1 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(1).strip())
+        c2 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(2).strip())
+        if c1 and c2:
+            mid_year = ((c1 - 1) * 100 + (c2 - 1) * 100) // 2 + 50
+            return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+
+    # Gregorian year in string: extract 4-digit year
+    year_match = re.search(r'\b(\d{4})\b', original)
+    if year_match:
+        return f"+{int(year_match.group(1)):04d}-00-00T00:00:00Z", PRECISION_YEAR
+
+    return None
 
 
 def extract_viaf_id(viaf_uri: str) -> str | None:
