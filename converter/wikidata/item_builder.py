@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from converter.wikidata.property_mapping import (
+    CONDITION_TO_QID,
     GENRE_TO_QID,
     KNOWN_WORK_QIDS,
     LANG_TO_QID,
@@ -39,25 +40,31 @@ from converter.wikidata.property_mapping import (
     P_HEIGHT,
     P_IIIF_MANIFEST,
     P_INCEPTION,
+    P_INSCRIPTION,
     P_INSTANCE_OF,
     P_INVENTORY_NUMBER,
     P_LANGUAGE,
+    P_LAST_LINE,
     P_LOCATION_OF_CREATION,
     P_MAIN_SUBJECT,
     P_MATERIAL,
     P_NLI_J9U_ID,
     P_NUMBER_OF_PAGES,
+    P_NUMBER_OF_PARTS,
+    P_OBJECT_HAS_ROLE,
     P_OBJECT_NAMED_AS,
     P_OCCUPATION,
     P_ON_FOCUS_LIST,
     P_OWNED_BY,
     P_PART_OF,
     P_SCRIPT_STYLE,
+    P_SIGNIFICANT_PLACE,
     P_SOURCING_CIRCUMSTANCES,
     P_START_TIME,
     P_TITLE,
     P_TRANSCRIBED_BY,
     P_VIAF_ID,
+    P_VOLUME,
     P_WIDTH,
     P_WRITING_SYSTEM,
     PRECISION_DAY,
@@ -65,13 +72,17 @@ from converter.wikidata.property_mapping import (
     Q_AUTHOR_OCCUPATION,
     Q_CIRCA,
     Q_CODEX,
+    Q_COLOPHON,
     Q_COMMENTATOR_OCCUPATION,
+    Q_CORRECTION,
     Q_DAMAGED,
+    Q_GLOSS,
     Q_GOOD_CONDITION,
     Q_HEBREW_ALPHABET,
     Q_HUMAN,
     Q_ILLUMINATED_MANUSCRIPT,
     Q_MANUSCRIPT,
+    Q_MARGINALIA,
     Q_NLI,
     Q_ORGANIZATION,
     Q_SCRIBE,
@@ -300,10 +311,24 @@ class WikidataItemBuilder:
                 value_type="monolingualtext", language="he", references=ref,
             ))
 
-        # ── Condition ────────────────────────────────────────────
-        # P5816 (state of conservation) expects item QIDs, not strings.
-        # Free-text condition notes are skipped — would need QID mapping
-        # (e.g., Q56557591 "good condition", Q106379705 "damaged").
+        # ── Explicit (last line of text) → P3132 ───────────────
+        explicit = record.get("has_explicit")
+        if explicit and str(explicit).strip() and str(explicit) != "None":
+            item.statements.append(WikidataStatement(
+                property_id=P_LAST_LINE, value=str(explicit).strip().strip('"'),
+                value_type="monolingualtext", language="he", references=ref,
+            ))
+
+        # ── Condition → P5816 (keyword → QID mapping) ──────────
+        for cond_note in (record.get("condition_notes") or []):
+            cond_text = str(cond_note).lower().strip()
+            for keyword, qid in CONDITION_TO_QID.items():
+                if keyword in cond_text:
+                    item.statements.append(WikidataStatement(
+                        property_id=P_CONDITION, value=qid,
+                        value_type="item", references=ref,
+                    ))
+                    break
 
         # ── Catalog references ───────────────────────────────────
         for cat_ref in (record.get("catalog_references") or []):
@@ -337,6 +362,74 @@ class WikidataItemBuilder:
 
         # ── Provenance claims (owners from NER on MARC 561) ─────
         self._add_provenance_claims(item, record, ref)
+
+        # ── Number of codicological units → P2635 ───────────────
+        codic_units = record.get("codicological_units") or []
+        if len(codic_units) > 1:
+            item.statements.append(WikidataStatement(
+                property_id=P_NUMBER_OF_PARTS, value=len(codic_units),
+                value_type="quantity", references=ref,
+            ))
+
+        # ── Colophon text → P1684 (inscription) ─────────────────
+        colophon = record.get("colophon_text")
+        if colophon and str(colophon).strip() and str(colophon) != "None":
+            item.statements.append(WikidataStatement(
+                property_id=P_INSCRIPTION, value=str(colophon).strip(),
+                value_type="monolingualtext", language="he", references=ref,
+                qualifiers=[{
+                    "property": P_OBJECT_HAS_ROLE,
+                    "value": Q_COLOPHON, "type": "item",
+                }],
+            ))
+
+        # ── Scribal interventions → P1684 (inscription) ─────────
+        for intervention in (record.get("scribal_interventions") or []):
+            text = (
+                str(intervention.get("text", "")).strip()
+                if isinstance(intervention, dict)
+                else str(intervention).strip()
+            )
+            if not text or text == "None":
+                continue
+            int_type = (
+                str(intervention.get("type", "")).lower()
+                if isinstance(intervention, dict)
+                else ""
+            )
+            role_qid = (
+                Q_GLOSS if "gloss" in int_type
+                else Q_CORRECTION if "correct" in int_type
+                else Q_MARGINALIA
+            )
+            item.statements.append(WikidataStatement(
+                property_id=P_INSCRIPTION, value=text,
+                value_type="monolingualtext", language="he", references=ref,
+                qualifiers=[{
+                    "property": P_OBJECT_HAS_ROLE,
+                    "value": role_qid, "type": "item",
+                }],
+            ))
+
+        # ── Volume info → P478 ──────────────────────────────────
+        vol_info = record.get("volume_info")
+        if vol_info and str(vol_info).strip() and str(vol_info) != "None":
+            item.statements.append(WikidataStatement(
+                property_id=P_VOLUME, value=str(vol_info).strip(),
+                value_type="string", references=ref,
+            ))
+
+        # ── Related places → P7153 (significant place) ──────────
+        for place_name in (record.get("related_places") or []):
+            for _name, uri in (record.get("kima_places") or {}).items():
+                if place_name.strip() in _name or _name in place_name.strip():
+                    qid = extract_wikidata_qid(str(uri))
+                    if qid:
+                        item.statements.append(WikidataStatement(
+                            property_id=P_SIGNIFICANT_PLACE, value=qid,
+                            value_type="item", references=ref,
+                        ))
+                        break
 
         # ── WikiProject Manuscripts ──────────────────────────────
         item.statements.append(WikidataStatement(

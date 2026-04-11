@@ -128,8 +128,22 @@ P_FOLIO = "P958"
 P_BEFOREHAND_OWNED_BY = "P11811"
 P_AFTERWARD_OWNED_BY = "P11812"
 
-# First/last line (manuscript incipits)
+# First/last line (manuscript incipits/explicits)
 P_FIRST_LINE = "P1922"
+P_LAST_LINE = "P3132"
+
+# Inscription (colophons, scribal interventions)
+P_INSCRIPTION = "P1684"
+P_OBJECT_HAS_ROLE = "P3831"
+
+# Codicological structure
+P_NUMBER_OF_PARTS = "P2635"
+
+# Volume
+P_VOLUME = "P478"
+
+# Significant place (associated, not creation location)
+P_SIGNIFICANT_PLACE = "P7153"
 
 # ── Wikidata QIDs ────────────────────────────────────────────────────
 
@@ -157,6 +171,15 @@ Q_WIKIPROJECT_MANUSCRIPTS = "Q123078816"
 # Condition states
 Q_GOOD_CONDITION = "Q56557591"   # preserved
 Q_DAMAGED = "Q106379705"         # damaged
+Q_FRAGMENT = "Q3749265"          # fragment
+Q_RESTORED = "Q75505084"         # restored
+Q_POOR_CONDITION = "Q136350185"  # poor
+
+# Inscription roles (colophon, gloss, correction, marginalia)
+Q_COLOPHON = "Q372474"
+Q_GLOSS = "Q860740"
+Q_CORRECTION = "Q3299332"
+Q_MARGINALIA = "Q1136474"
 
 # Copyright status
 Q_COPYRIGHTED = "Q50423863"     # copyrighted
@@ -317,6 +340,9 @@ SUBJECT_TO_QID: dict[str, str] = {
     "Bible": "Q1845",                  # Bible
     "Talmud": "Q43290",                # Talmud
     "Torah scrolls": "Q37602",         # Torah
+    "Sepulchral monuments": "Q56055312", # sepulchral monument
+    "Christian converts from Judaism": "Q814999",  # conversion to Christianity
+    "Devil": "Q6674",                # devil
 }
 
 # ── Language code → QID mapping ──────────────────────────────────────
@@ -359,6 +385,19 @@ MATERIAL_TO_QID: dict[str, str] = {
     "קלף": "Q226697",
     "נייר": "Q11472",
     "פפירוס": "Q125576",
+}
+
+# ── Condition keyword → QID mapping ─────────────────────────────────
+
+CONDITION_TO_QID: dict[str, str] = {
+    "good": Q_GOOD_CONDITION,
+    "טוב": Q_GOOD_CONDITION,
+    "damaged": Q_DAMAGED,
+    "פגום": Q_DAMAGED,
+    "fragment": Q_FRAGMENT,
+    "קטע": Q_FRAGMENT,
+    "restored": Q_RESTORED,
+    "poor": Q_POOR_CONDITION,
 }
 
 # ── NER/MARC role → Wikidata PID mapping ─────────────────────────────
