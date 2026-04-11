@@ -219,6 +219,19 @@ GENRE_TO_QID: dict[str, str] = {
     "Records (Documents)": "Q49848",             # document
     "Community records (Manuscript)": "Q7197095", # pinkas (communal record)
     "Literature (Miscellaneous, in manuscript)": "Q8242",  # literature
+    "Biographies (Manuscript)": "Q36279",        # biography
+    "Parodies": "Q12378",                        # parody
+    "Ketubbot": "Q207128",                       # ketubah (marriage contract)
+    "Forms (Jewish law)": "Q11028",              # legal document / form
+    "Prayer books": "Q3412432",                  # prayer book / siddur
+    "Sermons": "Q861911",                        # sermon
+    "Commentaries": "Q1749541",                  # commentary
+    "Responsa (Jewish law)": "Q2112559",         # responsa
+    "Deeds": "Q40621",                           # deed (legal document)
+    "Manuscripts, Hebrew": "Q87167",             # Hebrew manuscript
+    "Wills": "Q179157",                          # will / testament
+    "Contracts": "Q386724",                      # contract
+    "Letters": "Q133492",                        # letter
 }
 
 # Well-known works that already exist on Wikidata
