@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from converter.wikidata.item_builder import WikidataItem, WikidataStatement
