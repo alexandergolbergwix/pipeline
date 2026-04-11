@@ -1031,9 +1031,73 @@ class WikidataUploadWorker(StageWorker):
                 f"{len(items) - builder.person_count} manuscripts)"
             )
 
-            # Phase 2: Upload or export
-            # SPARQL reconciliation removed — items with existing_qid from
-            # authority matching (VIAF/NLI IDs) are updated; others are created.
+            # Phase 1.5: Local reconciliation — check for previously uploaded items
+            # to avoid duplicates. Uses upload_results.json from prior runs.
+            prev_results_path = self._output_dir / "upload_results.json"
+            if prev_results_path.exists():
+                try:
+                    prev_results = json.loads(prev_results_path.read_text(encoding="utf-8"))
+                    prev_qids: dict[str, str] = {}
+                    for pr in prev_results:
+                        if pr.get("qid") and pr.get("status") in ("success", "exists"):
+                            prev_qids[pr["local_id"]] = pr["qid"]
+
+                    matched = 0
+                    for item in items:
+                        if item.local_id in prev_qids and not item.existing_qid:
+                            item.existing_qid = prev_qids[item.local_id]
+                            matched += 1
+                    if matched:
+                        self.log_line.emit(
+                            f"Reconciled {matched} items from previous upload results"
+                        )
+                except Exception as recon_exc:
+                    self.log_line.emit(f"Could not load prior results: {recon_exc}")
+
+            # Also check NLI IDs via SPARQL for manuscripts not in prior results
+            ms_without_qid = [
+                i for i in items
+                if i.entity_type == "manuscript" and not i.existing_qid
+            ]
+            if ms_without_qid:
+                try:
+                    import requests  # noqa: PLC0415
+                    self.log_line.emit(
+                        f"Checking {len(ms_without_qid)} manuscripts against Wikidata..."
+                    )
+                    headers = {"User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)"}
+                    for item in ms_without_qid:
+                        for stmt in item.statements:
+                            if stmt.property_id == "P8189":
+                                nli_id = str(stmt.value)
+                                sparql = (
+                                    f'SELECT ?item WHERE {{ '
+                                    f'?item wdt:P8189 "{nli_id}" . '
+                                    f'}} LIMIT 1'
+                                )
+                                try:
+                                    resp = requests.get(
+                                        "https://query.wikidata.org/sparql",
+                                        params={"query": sparql, "format": "json"},
+                                        headers=headers,
+                                        timeout=10,
+                                    )
+                                    if resp.status_code == 200:
+                                        bindings = resp.json().get("results", {}).get("bindings", [])
+                                        if bindings:
+                                            qid = bindings[0]["item"]["value"].split("/")[-1]
+                                            item.existing_qid = qid
+                                    import time as _time  # noqa: PLC0415
+                                    _time.sleep(1)  # SPARQL rate limit
+                                except Exception:
+                                    pass
+                                break
+                    n_found = sum(1 for i in ms_without_qid if i.existing_qid)
+                    if n_found:
+                        self.log_line.emit(f"Found {n_found} existing manuscripts on Wikidata")
+                except Exception:
+                    pass
+
             self._output_dir.mkdir(parents=True, exist_ok=True)
 
             # Emit total count so the panel sets the overall progress bar
