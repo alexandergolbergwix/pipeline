@@ -889,7 +889,7 @@ The Virtual International Authority File (VIAF) aggregates authority records fro
 
 \begin{enumerate}
 \item \textbf{Name matching} --- searches personal-name headings via \code{https://viaf.org/viaf/search} (SRU with CQL, \code{Accept: application/json} header). Rate-limited to 2 requests/second. Returns VIAF cluster URIs for matched entities.
-\item \textbf{Cluster harvesting} --- fetches \code{https://viaf.org/viaf/\{id\}/viaf.json} for each matched cluster and extracts cross-referenced authority identifiers:
+\item \textbf{Cluster harvesting} --- fetches \code{https://viaf.org/viaf/\{id\}} with \code{Accept: application/json} header (the \code{/viaf.json} endpoint was removed) and extracts cross-referenced authority identifiers from the \code{ns1:VIAFCluster} JSON response:
   \begin{description}[leftmargin=1.5cm]
   \item[P227] GND ID (Deutsche Nationalbibliothek)
   \item[P244] LCCN (Library of Congress)

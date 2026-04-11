@@ -211,9 +211,11 @@ sys.exit(app.exec())
 "
 ```
 
-### 11. VIAF API requires Accept header — never use recordSchema param
+### 11. VIAF API requires Accept header — never use recordSchema param or /viaf.json
 
-The VIAF SRU API no longer returns JSON via `recordSchema=info:srw/schema/1/JSON`. It now requires the `Accept: application/json` HTTP header. Without it, the API returns an HTML page and `resp.json()` fails silently. The JSON response structure is also namespaced: `records.record[].recordData.ns2:VIAFCluster.ns2:viafID`. Rate limit: max 2 requests per second (0.5s between requests).
+The VIAF SRU API no longer returns JSON via `recordSchema=info:srw/schema/1/JSON`. It now requires the `Accept: application/json` HTTP header. Without it, the API returns an HTML page and `resp.json()` fails silently. The SRU JSON response structure is namespaced: `records.record[].recordData.ns2:VIAFCluster.ns2:viafID`. Rate limit: max 2 requests per second (0.5s between requests).
+
+**Cluster JSON endpoint** (for harvesting identifiers): The old `/viaf/{id}/viaf.json` endpoint was removed. Use `https://viaf.org/viaf/{id}` with `Accept: application/json` header instead. The response is wrapped in `ns1:VIAFCluster` (not bare keys). Sources are at `ns1:sources.ns1:source[]` with `content` field (not `#text`), format `PREFIX|ID` (e.g., `DNB|118576488`, `LC|n 78096039`, `ISNI|0000000123750072`). ISNI comes from the sources array, not a separate `ISNIs` field.
 
 ### 12. Always verify KIMA index DB exists before running authority matching
 
@@ -354,3 +356,9 @@ Wikidata properties have strict value type constraints. Common pitfalls:
 - `P195` (collection) requires `item` QIDs, not collection name strings
 
 When a property expects an `item` but only a string is available, skip the claim rather than uploading an invalid type.
+
+### 22. VIAF cluster harvesting adds P227/P244/P213/P268 to persons
+
+`VIAFMatcher.get_cluster_identifiers(viaf_id)` fetches the full VIAF cluster JSON and extracts cross-referenced authority identifiers. These flow through `AuthorityWorker._match_marc_person_entry()` into `match_info["gnd_id"]`, `match_info["lc_id"]`, `match_info["isni"]`, `match_info["bnf_id"]`, then into `WikidataItemBuilder._get_or_create_person()` as external-id claims. The method also extracts J9U (NLI) IDs from the cluster.
+
+Person entities also get hardcoded properties: P1412 (Hebrew, Q9288), P1559 (native name in Hebrew), P21 (male, Q6581097), P1343 (Ktiv, Q118384267). Manuscripts get P17 (Israel, Q801) and P131 (Jerusalem, Q1218). All hardcoded properties skip organizations (detected by keyword in name).
