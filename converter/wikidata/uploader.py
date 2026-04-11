@@ -196,20 +196,20 @@ class WikidataUploader:
             for alias in alias_list:
                 wbi_item.aliases.set(lang, alias)
 
-        # Statements — with claim diffing for existing items
-        new_claims = 0
+        # Statements — use WBI's built-in dedup for existing items
+        from wikibaseintegrator.wbi_enums import ActionIfExists  # noqa: PLC0415
+
+        # For existing items: MERGE_REFS_OR_APPEND (safe upsert, no duplicates)
+        # For new items: FORCE_APPEND (add everything, no existing claims to compare)
+        action = ActionIfExists.MERGE_REFS_OR_APPEND if item.existing_qid else ActionIfExists.FORCE_APPEND
+
+        claims_before = len(wbi_item.claims) if item.existing_qid else 0
         for stmt in item.statements:
             claim = self._build_claim(stmt)
-            if not claim:
-                continue
+            if claim:
+                wbi_item.claims.add(claim, action_if_exists=action)
 
-            # For existing items, skip claims that already exist
-            if item.existing_qid and self._claim_exists(wbi_item, stmt):
-                continue
-
-            wbi_item.claims.add(claim)
-            new_claims += 1
-
+        new_claims = len(wbi_item.claims) - claims_before if item.existing_qid else len(item.statements)
         return wbi_item, new_claims
 
     def _claim_exists(self, wbi_item: object, stmt: "WikidataStatement") -> bool:
