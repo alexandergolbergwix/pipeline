@@ -562,11 +562,11 @@ Output: {"text": "Moreh Nevukhim", "type": "WORK", "source": "contents_ner"}
 \draw[arrow] (cont) -- (out);
 
 \node[note, above=0.1cm of person] {85.7\% F1};
-\node[note, right=0.1cm of prov] {93.96\% F1};
+\node[note, right=0.1cm of prov] {95.91\% F1};
 \node[note, right=0.1cm of cont] {99.99\% F1};
 
 \end{tikzpicture}
-\caption{Three-model NER architecture. Person NER uses keyword-based role classification; provenance and contents models share DictaBERT base.}
+\caption{Three-model NER architecture. Person NER uses keyword-based role classification; provenance v2 and contents models each load independent DictaBERT instances.}
 \label{fig:ner-architecture}
 \end{figure}
 
@@ -621,7 +621,7 @@ Entity types:
 \item \textbf{COLLECTION} --- named collection or library
 \end{itemize}
 
-Training: 10K curated samples from 123K MARC records; 5-fold cross-validation with DictaBERT + NER head; \code{max\_length=64}, \code{batch\_size=32}, \code{lr=3e-5}. F1 score: 93.96\%.
+Training: 12,100 samples (28.4\% multi-entity augmented) from 123K MARC records; 5-fold cross-validation with DictaBERT + NER head; \code{max\_length=128}, \code{batch\_size=32}, \code{lr=3e-5}. F1 score: 95.91\% (v2, multi-entity augmented; v1 single-entity was 93.96\%).
 
 The \code{\_split\_provenance\_text()} function in \code{NerWorker} preprocesses MARC 561 text by splitting on delimiters before inference.
 
@@ -640,7 +640,7 @@ Training: 10K curated samples (all with WORK+FOLIO+WORK\_AUTHOR triples); same h
 
 \subsubsection{Shared DictaBERT Base}
 
-The provenance and contents models share a single DictaBERT base model via \code{NERInferencePipeline.from\_shared\_base()}, reducing memory from $\sim$2.1\,GB (loading DictaBERT three times) to $\sim$700\,MB. Model paths resolve in order: explicit kwarg $\to$ environment variable (\code{MHM\_BUNDLED\_PROVENANCE\_MODEL} / \code{MHM\_BUNDLED\_CONTENTS\_MODEL}) $\to$ repo-relative fallback (\filepath{ner/provenance\_ner\_model.pt}).
+Each NER model loads its own DictaBERT instance independently ($\sim$2.1\,GB total for 3 models). Shared-base loading via \code{NERInferencePipeline.from\_shared\_base()} was found to corrupt BERT weights when full checkpoints (containing \code{bert.*} keys) are loaded with \code{load\_state\_dict(strict=False)} --- see Section~5.2 of \filepath{ner/NER\_TRAINING\_REPORT.md}. Model paths resolve in order: explicit kwarg $\to$ environment variable (\code{MHM\_BUNDLED\_PROVENANCE\_MODEL} / \code{MHM\_BUNDLED\_CONTENTS\_MODEL}) $\to$ repo-relative fallback (\filepath{ner/provenance\_ner\_model.pt}).
 
 \subsubsection{Post-Processing Rules}
 
@@ -665,7 +665,7 @@ Person NER & HalleluBERT (single) & 86.56\% F1 & 8,186 single-person \\
 \midrule
 Role & Keyword heuristics & --- & Hebrew role terms \\
 \midrule
-\textbf{Provenance NER} & \textbf{DictaBERT + NER head} & \textbf{93.96\% F1} & \textbf{10K from 123K MARC} \\
+\textbf{Provenance NER v2} & \textbf{DictaBERT + NER head} & \textbf{95.91\% F1} & \textbf{12.1K (28.4\% multi-entity)} \\
 \textbf{Contents NER} & \textbf{DictaBERT + NER head} & \textbf{99.99\% F1} & \textbf{10K from 123K MARC} \\
 \bottomrule
 \end{tabular}
@@ -679,7 +679,7 @@ All three NER models use the same distant supervision methodology (Goldberg, Pre
 
 \textbf{Person NER:} Structured person fields from MARC (100\$a, 600\$a, 700\$a, 800\$a) were matched against concatenated note fields (500\$a, 520\$a, 545\$a, 546\$a, 561\$a, 957\$a) using fuzzy string matching.
 
-\textbf{Provenance NER:} Three extraction strategies from MARC 561: structured cross-referencing against authority fields, rule-based pattern matching for ownership phrases, and Latin censor name identification. Produced 10K curated samples from 123K records.
+\textbf{Provenance NER:} Three extraction strategies from MARC 561: structured cross-referencing against authority fields, rule-based pattern matching for ownership phrases, and Latin censor name identification. Produced 10K curated samples from 123K records, augmented to 12.1K samples with 28.4\% multi-entity concatenations (v2).
 
 \textbf{Contents NER:} Rule-based parsing of MARC 505 structured contents notes (title / author / folio triples). Produced 10K curated samples, all containing WORK+FOLIO+WORK\_AUTHOR.
 
@@ -690,7 +690,7 @@ All three NER models use the same distant supervision methodology (Goldberg, Pre
 \textbf{Dataset} & \textbf{Train} & \textbf{Val} & \textbf{Test} \\
 \midrule
 Person NER (multi-entity, filtered) & 6,058 & 757 & 765 \\
-Provenance NER & 8,000 & 1,000 & 1,000 \\
+Provenance NER v2 (multi-entity) & 9,680 & 1,210 & 1,210 \\
 Contents NER & 8,000 & 1,000 & 1,000 \\
 K-fold (5 folds, each model) & \multicolumn{3}{c}{5 $\times$ train/val splits} \\
 \bottomrule
@@ -1258,11 +1258,19 @@ The MARC-to-HMO crosswalk follows five core principles:
 \hline
 \code{hm:has\_script\_type} & P6573 & \code{owl:equivalentProperty} \\
 \hline
-\code{hm:external\_identifier\_nli} & P8189 & \code{owl:equivalentProperty} \\
+\code{hm:external\_identifier\_nli} & P8189 (external-id) & \code{owl:equivalentProperty} \\
 \hline
-\code{hm:has\_viaf\_id} & P214 & \code{owl:equivalentProperty} \\
+\code{hm:has\_viaf\_id} & P214 (external-id) & \code{owl:equivalentProperty} \\
 \hline
 \code{hm:has\_wikidata\_id} & --- & \code{owl:sameAs} target \\
+\hline
+\code{hm:has\_production\_date} & P571 (inception) & Century precision from Hebrew ordinals \\
+\hline
+\code{hm:has\_genre} & P136 (genre) & 50 genre$\to$QID mappings \\
+\hline
+\code{hm:has\_subject} & P921 (main subject) & 30 LCSH + 13 Bible + 14 Talmud QIDs \\
+\hline
+\code{hm:has\_author} & P50 (author) & Via VIAF/Mazal authority resolution \\
 \hline
 \end{longtable}
 
@@ -1667,15 +1675,15 @@ The final stage of the pipeline uploads validated RDF data to Wikidata, making H
 \endhead
 \hline
 \endfoot
-F4\_Manifestation\_Singleton & Q87167 (manuscript) & P195 (collection), P921 (main subject), P186 (material), P1104 (pages) \\
+F4\_Manifestation\_Singleton & Q87167 (manuscript) & P195 (collection), P921 (main subject), P186 (material), P1104 (pages), P127 (owned by), P6216 (copyright), P8189 (NLI ID, external-id), P571 (inception), P1071 (location), P11603 (transcribed by) \\
 \hline
-F1\_Work & Q47461344 (written work) & P50 (author), P407 (language of work), P136 (genre) \\
+F1\_Work & Q47461344 (written work) & P50 (author), P407 (language of work), P136 (genre, 50 QID mappings) \\
 \hline
-E21\_Person & Q5 (human) & P569/P570 (birth/death), P106 (occupation), P214 (VIAF) \\
+E21\_Person & Q5 (human) & P569/P570 (birth/death), P106 (occupation), P214 (VIAF, external-id) \\
 \hline
 E53\_Place & Q515 (city) etc. & P625 (coordinates), P17 (country) \\
 \hline
-Production event & qualifier on manuscript & P571 (inception), P1071 (location of creation), P170 (creator) \\
+Production event & qualifier on manuscript & P571 (inception, 96\% coverage with Hebrew century parsing), P1071 (location of creation), P170 (creator) \\
 \hline
 \end{longtable}
 
@@ -1780,6 +1788,15 @@ LAST  P8189  "990000623390205171"
 \item Rate limiting: 1.5s per-edit delay, 30s batch pause every 45 items (batch mode ON by default)
 \item Authority-based reconciliation replaces SPARQL reconciliation (uses VIAF/NLI IDs from authority matching)
 \item Null-safe signal handling and QThread lifecycle management (prevents SIGABRT crashes)
+\item \textbf{Property coverage improvements (v1.8):}
+  \begin{itemize}
+  \item Hebrew century date parsing for P571 (inception): 22\%$\to$96\% of MSS
+  \item 50 genre$\to$QID mappings for P136: 14\%$\to$100\% of MSS with genre data
+  \item 30 LCSH subject$\to$QID mappings for P921: 56$\to$91 claims (46\% of MSS)
+  \item External-id type fix for P8189 (NLI) and P214 (VIAF)
+  \item Type guards for P5816/P527/P195 (skip invalid value types)
+  \item Average 20.9 statements per manuscript on 100-record pilot
+  \end{itemize}
 \item Upload pilot manuscripts (6 items)
 \item Obtain bot approval for batch upload
 \item Upload full catalog with source references

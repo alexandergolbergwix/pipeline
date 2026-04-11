@@ -62,7 +62,7 @@
   {\LARGE\bfseries Mapping Hebrew Manuscripts (MHM)}\\[0.5cm]
   {\LARGE\bfseries Cross-Platform Desktop Application}\\[0.5cm]
   {\Large System Design Document}\\[1cm]
-  {\large Version 1.7}
+  {\large Version 1.8}
 }
 \author{
   Alexander Goldberg\\
@@ -442,7 +442,7 @@ The application is organised into four horizontal layers. Each layer depends onl
 \hline
 \code{KimaIndexWorker} & Parses three KIMA TSV files and builds a SQLite place authority index for Hebrew historical place names & Worker & \code{KimaIndex} (core) \\
 \hline
-\code{WikidataUploadWorker} & Two-phase upload pipeline: (1)~build \code{WikidataItem} objects from authority-enriched JSON via \code{WikidataItemBuilder}, (2)~upload to Wikidata via \code{WikidataUploader} (live, with OAuth~2.0 / bot password) or export QuickStatements (dry run). SPARQL reconciliation is skipped; items with \code{existing\_qid} from authority matching are updated, others are created. Emits \code{entity\_status(str,str,str,str)} per item. & Worker & \code{WikidataUploader}, \code{WikidataItemBuilder}, \code{QuickStatementsExporter} \\
+\code{WikidataUploadWorker} & Two-phase upload pipeline: (1)~build \code{WikidataItem} objects from authority-enriched JSON via \code{WikidataItemBuilder} (avg 20.9 statements/MS with Hebrew century dates, 50 genre QIDs, 30 LCSH subject QIDs), (2)~upload to Wikidata via \code{WikidataUploader} (live, with OAuth~2.0 / bot password) or export QuickStatements (dry run). SPARQL reconciliation is skipped; items with \code{existing\_qid} from authority matching are updated, others are created. Emits \code{entity\_status(str,str,str,str)} per item. & Worker & \code{WikidataUploader}, \code{WikidataItemBuilder}, \code{QuickStatementsExporter} \\
 \hline
 \end{longtable}
 
@@ -1158,6 +1158,53 @@ The following ontology classes and properties cannot be populated from NLI MARC 
 
 Ontology coverage is measured by running the pipeline over the full \filepath{data/tsvs/17th\_century\_samples.tsv} fixture (897 records) and comparing the set of RDF types and predicates used against the full ontology term set. The \code{/check-coverage} Claude Code skill automates this measurement. The v1.4 baseline was 28/73 classes (38\%) and 66/237 HM properties (28\%). Version 1.5 targets $\geq$85\% of all terms that appear in Table~\ref{tbl:coverage-gaps} and above.
 
+\subsection{Wikidata Property Coverage (v1.8)}
+
+\code{WikidataItemBuilder} generates Wikidata statements from authority-enriched pipeline JSON. Version 1.8 introduced three coverage improvements: Hebrew century date parsing for P571 (inception), comprehensive genre-to-QID mappings for P136, and LCSH subject-to-QID mappings for P921. Table~\ref{tbl:wikidata-coverage} summarises the per-property coverage measured on 100 manuscripts with the richest metadata.
+
+\begin{longtable}{|l|p{3.5cm}|r|r|p{4cm}|}
+\hline
+\textbf{Property} & \textbf{Name} & \textbf{Claims} & \textbf{MS \%} & \textbf{Notes} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Property} & \textbf{Name} & \textbf{Claims} & \textbf{MS \%} & \textbf{Notes} \\
+\hline
+\endhead
+\hline
+\endfoot
+P50 & author & 729 & 100\% & avg 7.3 claims/MS \\
+\hline
+P571 & inception (date) & --- & 96\% & Hebrew century parsing: \code{מאה ט"ז} $\to$ 1550 \\
+\hline
+P6216 & copyright status & --- & 100\% & Public domain for pre-1900 works \\
+\hline
+P136 & genre & --- & 53\% & 100\% of MSS with genre data; 50 QID mappings \\
+\hline
+P921 & main subject & 91 & 46\% & 30 LCSH + 13 Bible + 14 Talmud QIDs \\
+\hline
+P1071 & location of creation & --- & 79\% & KIMA place authority \\
+\hline
+P127 & owned by & 53 & 43\% & Provenance NER \\
+\hline
+P11603 & transcribed by & 20 & 18\% & NER + role classification \\
+\hline
+\multicolumn{2}{|l|}{\textbf{Average statements/MS}} & \multicolumn{2}{r|}{\textbf{20.9}} & \\
+\hline
+\caption{Wikidata property coverage on 100 richest manuscripts (v1.8).}
+\label{tbl:wikidata-coverage}
+\end{longtable}
+
+\noindent Key improvements from v1.7 to v1.8:
+
+\begin{itemize}
+\item \textbf{P571 (inception):} Coverage rose from 22\% to 96\% by implementing \code{\_parse\_hebrew\_century()} in \filepath{converter/wikidata/property\_mapping.py}. The function parses Hebrew ordinal century strings (\code{מאה ט"ז} = 16th century) into Wikidata time values with century precision. Handles both single centuries and century ranges.
+\item \textbf{P136 (genre):} Coverage rose from 14\% to 100\% of manuscripts with genre data by adding 50 genre-to-QID mappings in \code{GENRE\_TO\_QID}, covering both HMO ontology genre types and MARC genre/form strings.
+\item \textbf{P921 (main subject):} Claims increased from 56 to 91 by adding 30 LCSH subject term mappings in \code{SUBJECT\_TO\_QID}, supplementing the existing Bible book and Talmud tractate dictionaries.
+\item \textbf{P8189/P214 type fix:} Changed value type from \code{string} to \code{external-id} to comply with Wikidata property constraints.
+\item \textbf{P5816/P527/P195 type guards:} Added skip logic for properties that require item QIDs when only string values are available, preventing invalid uploads.
+\end{itemize}
+
 
 %% ============================================================
 %% SECTION 10: TECHNICAL REQUIREMENTS
@@ -1268,6 +1315,8 @@ v1.5 & Ontology coverage & 12 new MARC field handlers; 10 new \code{GraphBuilder
 v1.6 & Multi-model NER + GUI polish & 3-model NER system (person + provenance + contents); descriptive stage labels and button names; \code{KnowledgeGraphView} (Cytoscape.js) replacing \code{TripleGraphView}; \code{ExtractionEditor} for expert entity correction; keyword-based role classification; macOS app bundles all 3 NER models ($\sim$14\,GB total, $\sim$9.4\,GB DMG) & Apr 2026 \\
 \hline
 v1.7 & Wikidata upload hardening & OAuth~2.0 support (\code{consumer\_key|consumer\_secret}); SPARQL reconciliation removed (uses authority IDs instead); rate limiting: 1.5s edit delay + 30s batch pause every 45 items; batch mode ON by default; null-safe \code{entity\_status} signal; \code{worker.wait()} before QThread GC; provenance NER v2 model (95.91\% F1, multi-entity augmented) & Apr 2026 \\
+\hline
+v1.8 & Wikidata coverage improvements & Hebrew century date parsing (P571 22\%$\to$96\%); 50 genre$\to$QID mappings (P136 14\%$\to$100\% of genre data); 30 LCSH subject$\to$QID mappings (P921 56$\to$91 claims); external-id type fix for P8189/P214; P5816/P527/P195 type guards (skip invalid value types); avg 20.9 statements/MS on 100-record pilot & Apr 2026 \\
 \hline
 \end{longtable}
 

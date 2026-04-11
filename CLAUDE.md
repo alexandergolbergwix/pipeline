@@ -47,6 +47,7 @@ Key paths:
 - NER inference (persons): `ner/inference_pipeline.py` (`JointNERPipeline`, model: `alexgoldberg/hebrew-manuscript-joint-ner-v2`)
 - NER inference (provenance + contents): `ner/ner_inference_pipeline.py` (`NERInferencePipeline`, supports shared DictaBERT base)
 - NER models: `ner/provenance_ner_model.pt` (95.91% F1 v2 multi-entity, OWNER/DATE/COLLECTION), `ner/contents_ner_model.pt` (99.99% F1, WORK/FOLIO/WORK_AUTHOR)
+- Wikidata property mapping: `converter/wikidata/property_mapping.py` (50 genre QIDs, 30 LCSH subject QIDs, 13 Bible book QIDs, 14 Talmud tractate QIDs, Hebrew century date parsing)
 - NER training: `ner/train_ner_model_kfold.py` (generic DictaBERT + token-classification head, 5-fold CV)
 - Editable entity results: `src/mhm_pipeline/gui/widgets/extraction_editor.py` (`ExtractionEditor`, `EditableEntityModel`)
 - RDF mapper: `converter/transformer/mapper.py` (`MarcToRdfMapper`)
@@ -291,3 +292,45 @@ The pipeline uses three NER models. Keep these F1 scores current:
 | Contents NER | `ner/contents_ner_model.pt` (704 MB) | 99.99% | WORK, FOLIO, WORK_AUTHOR |
 
 Provenance v2 was trained on 12,100 samples (28.4% multi-entity augmented) with `max_length=128`. The v1 model (93.96% F1, `max_length=64`) is superseded.
+
+### 18. Wikidata property coverage (100 richest manuscripts, v1.8)
+
+Per-property coverage from `WikidataItemBuilder` on 100 manuscripts:
+
+| Property | Claims | MS Coverage | Notes |
+|---|---|---|---|
+| P50 (author) | 729 | 100% | avg 7.3/MS |
+| P571 (inception) | — | 96% | Hebrew century parsing: מאה ט"ז → 1550 |
+| P6216 (copyright) | — | 100% | Public domain for pre-1900 works |
+| P136 (genre) | — | 53% | 100% of MSS with genre data; 50 QID mappings |
+| P921 (main subject) | 91 | 46% | 30 LCSH + 13 Bible + 14 Talmud QID mappings |
+| P1071 (location) | — | 79% | KIMA place authority |
+| P127 (owned by) | 53 | 43% | Provenance NER |
+| P11603 (transcribed by) | 20 | 18% | NER + role classification |
+| Avg statements/MS | 20.9 | — | |
+
+### 19. Genre and subject QID mappings live in property_mapping.py
+
+All genre and subject term to Wikidata QID mappings are centralized in `converter/wikidata/property_mapping.py`:
+
+- `GENRE_TO_QID` — 50 entries (10 HMO ontology types + 40 MARC genre/form strings)
+- `SUBJECT_TO_QID` — 30 LCSH subject headings
+- `BIBLE_BOOK_TO_QID` — 13 Bible books
+- `TALMUD_TRACTATE_TO_QID` — 14 Talmud Bavli tractates
+
+When adding new QID mappings, add them to the appropriate dict in this file. Do not hardcode QIDs in `item_builder.py`.
+
+### 20. Hebrew century date parsing in date_to_wikidata()
+
+`date_to_wikidata()` in `property_mapping.py` handles Hebrew century strings (e.g., `מאה ט"ז` = 16th century = 1550). The `_HEBREW_ORDINAL_TO_INT` dict maps Hebrew ordinals to century numbers. CSV double-quote escaping (`""`) is cleaned before parsing. Coverage went from 22% to 96% of manuscripts after implementing this.
+
+### 21. Wikidata value types must match property constraints
+
+Wikidata properties have strict value type constraints. Common pitfalls:
+
+- `P8189` (NLI J9U ID) and `P214` (VIAF ID) require `external-id`, not `string`
+- `P5816` (state of conservation) requires `item` QIDs, not free-text strings
+- `P527` (has parts) requires `item` QIDs, not work title strings
+- `P195` (collection) requires `item` QIDs, not collection name strings
+
+When a property expects an `item` but only a string is available, skip the claim rather than uploading an invalid type.

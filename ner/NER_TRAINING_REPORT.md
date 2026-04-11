@@ -516,15 +516,25 @@ Running all 3 NER models on 100 manuscripts with the richest metadata:
 Extend VIAF/Mazal authority matching to resolve OWNER entities to Wikidata QIDs.
 Currently only ~15% of owners get authority matches (compared to ~40% for authors).
 
-### 9.2 Hebrew Date Resolution
+### 9.2 Hebrew Date Resolution (Completed — v1.8)
 
-Integrate the existing `date_resolver.py` to convert DATE entities (Hebrew numerals,
-Seleucid calendar, etc.) into ISO 8601 dates for P580/P582 qualifiers.
+~~Integrate the existing `date_resolver.py` to convert DATE entities (Hebrew numerals,
+Seleucid calendar, etc.) into ISO 8601 dates for P580/P582 qualifiers.~~
 
-### 9.3 Subject Term to QID Mapping
+**Done:** `date_to_wikidata()` in `converter/wikidata/property_mapping.py` now parses
+Hebrew century strings (e.g., `מאה ט"ז` = 16th century → midpoint year 1550) with
+Wikidata century precision (precision=7). Handles single centuries, century ranges,
+English centuries, and Gregorian years. P571 coverage went from 22% to 96%.
 
-Map MARC 650$a subject headings to Wikidata QIDs for P921 (main subject) claims.
-Currently only canonical references (Bible books, Talmud tractates) are mapped.
+### 9.3 Subject Term to QID Mapping (Completed — v1.8)
+
+~~Map MARC 650$a subject headings to Wikidata QIDs for P921 (main subject) claims.
+Currently only canonical references (Bible books, Talmud tractates) are mapped.~~
+
+**Done:** Added 30 LCSH subject headings to `SUBJECT_TO_QID` in `property_mapping.py`,
+plus 13 Bible book QIDs and 14 Talmud tractate QIDs. P921 claims increased from 56
+to 91 (46% of manuscripts). Also added 50 genre-to-QID mappings for P136 (100% of
+manuscripts with genre data now have valid claims).
 
 ### 9.4 Multi-Entity Performance Evaluation
 
@@ -635,6 +645,24 @@ Running all 3 NER models on 100 manuscripts with richest MARC metadata:
 | Provenance claims (P127) per MS | 0 | 0 | 0.42 (42 total) |
 | Contents claims (P527/P1574) per MS | 0 | 0 | 0 (no 505 in subset) |
 | Wikidata statements per MS | ~8 | ~18 | ~19 |
+
+**Wikidata Property Coverage (v1.8, after builder improvements):**
+
+| Property | Claims | MS Coverage | Notes |
+|----------|--------|-------------|-------|
+| P50 (author) | 729 | 100% | avg 7.3 claims/MS |
+| P571 (inception) | — | 96% | Hebrew century parsing (was 22%) |
+| P6216 (copyright) | — | 100% | Public domain for pre-1900 works |
+| P136 (genre) | — | 53% | 100% of MSS with genre data (was 14%); 50 QID mappings |
+| P921 (main subject) | 91 | 46% | 30 LCSH + 13 Bible + 14 Talmud QIDs (was 56 claims) |
+| P1071 (location) | — | 79% | KIMA place authority |
+| P127 (owned by) | 53 | 43% | Provenance NER |
+| P11603 (transcribed by) | 20 | 18% | NER + role classification |
+| **Avg statements/MS** | **20.9** | — | |
+
+Key v1.8 improvements: Hebrew century date parsing (P571 22%→96%), genre QID
+mappings (P136 14%→100% of genre data), LCSH subject mappings (P921 56→91 claims),
+external-id type fix (P8189/P214), P5816/P527/P195 type guards.
 
 ### 10.7 Hardware and Training Configuration
 
