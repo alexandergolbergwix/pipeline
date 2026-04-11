@@ -513,6 +513,26 @@ class AuthorityWorker(StageWorker):
             viaf_uri=viaf_uri,
         )
 
+        # Enrich with dates and preferred names from Mazal DB
+        if mazal_id and mazal:
+            details = mazal.get_person_details(mazal_id)
+            if details.get("dates"):
+                match_info["dates"] = details["dates"]
+                # Parse "1488-1575" → birth_year, death_year
+                import re  # noqa: PLC0415
+                parts = re.split(r"[-–]", details["dates"].strip())
+                for p in parts:
+                    p = p.strip().rstrip("?")
+                    if p and p.isdigit():
+                        yr = int(p)
+                        if 100 < yr < 2100:
+                            if "birth_year" not in match_info:
+                                match_info["birth_year"] = yr
+                            else:
+                                match_info["death_year"] = yr
+            if details.get("preferred_name_lat"):
+                match_info["preferred_name_lat"] = details["preferred_name_lat"]
+
         counts = self._count_match_result(match_info)
         match_info.update(counts)
 

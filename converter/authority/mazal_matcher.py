@@ -254,6 +254,36 @@ class MazalMatcher:
         return "\n".join(lines)
 
 
+    def get_person_details(self, nli_id: str) -> dict[str, str]:
+        """Get detailed person information from the Mazal authority DB.
+
+        Args:
+            nli_id: NLI authority ID (mazal_id).
+
+        Returns:
+            Dict with dates, preferred_name_heb, preferred_name_lat, aleph_id.
+        """
+        if not self.is_available or not self._index:
+            return {}
+        try:
+            conn = self._index._conn
+            row = conn.execute(
+                "SELECT dates, preferred_name_heb, preferred_name_lat, aleph_id "
+                "FROM authorities WHERE nli_id = ?",
+                (nli_id,),
+            ).fetchone()
+            if row:
+                return {
+                    "dates": row[0] or "",
+                    "preferred_name_heb": row[1] or "",
+                    "preferred_name_lat": row[2] or "",
+                    "aleph_id": row[3] or "",
+                }
+        except Exception as exc:
+            logger.debug("Failed to get details for %s: %s", nli_id, exc)
+        return {}
+
+
 def create_matcher(index_path: str = None) -> Optional[MazalMatcher]:
     """Create a MazalMatcher instance if the index exists.
     
