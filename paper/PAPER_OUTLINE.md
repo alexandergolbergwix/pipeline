@@ -25,7 +25,7 @@ Department of Information Science and Applied Artificial Intelligence, Bar-Ilan 
 
 ## Abstract (~250 words)
 
-Transforming library catalogs into Linked Open Data is critical for connecting isolated cultural heritage collections, yet automated conversion from MARC records to Wikidata achieves typically low coverage due to the heterogeneity of bibliographic data and the gap between structured metadata fields and unstructured note fields. We present a multi-strategy pipeline for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96% date coverage, 100% genre coverage, an average of ~22.9 Wikidata statements per manuscript and ~6.5 statements per person entity — compared to ~5 statements achievable with rule-based mapping alone.
+Transforming library catalogs into Linked Open Data is critical for connecting isolated cultural heritage collections, yet automated conversion from MARC records to Wikidata achieves typically low coverage due to the heterogeneity of bibliographic data and the gap between structured metadata fields and unstructured note fields. We present a multi-strategy pipeline for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96% date coverage, 100% genre coverage, an average of ~22.9 Wikidata statements per manuscript and 6.4 statements per person entity — compared to ~5 statements achievable with rule-based mapping alone.
 
 Our approach combines five complementary strategies: (A) three domain-specific NER models trained via distant supervision from MARC structured fields, achieving 85.7%, 95.9%, and 99.99% F1 for person, provenance, and contents extraction respectively; (B) rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping; (C) multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D) VIAF cluster harvesting for cross-referencing external identifiers (GND, LCCN, ISNI, BnF); and (E) property-level data type validation against the WikiProject Manuscripts Data Model.
 
@@ -53,7 +53,7 @@ We evaluate our system end-to-end on 100 Hebrew manuscripts from the National Li
 3. VIAF cluster harvesting for automatic cross-referencing of GND, LCCN, ISNI, and BnF identifiers
 4. First end-to-end evaluation measuring triple-level coverage from MARC to Wikidata
 5. First SLM vs LLM comparison for cultural heritage metadata enrichment
-6. Complete open-source system processing 123K records without manual annotation, producing ~22.9 statements/manuscript and ~6.5 statements/person
+6. Complete open-source system processing 123K records without manual annotation, producing ~22.9 statements/manuscript and 6.4 statements/person
 
 ---
 
@@ -236,24 +236,37 @@ RDF Graph (HMO ontology)    +    Wikidata Upload (WikibaseIntegrator)
 
 *(GPT-4 numbers are estimates — actual experiments needed)*
 
-### 6.1b Person Entity Properties (v1.9)
+### 6.1b Person Entity Properties (verified on 570 persons)
 
-| Property | Coverage | Strategy |
-|----------|----------|----------|
-| P31 (instance of) | 100% | Rule (Q5 human / Q43229 org) |
-| P106 (occupation) | ~80% | Role mapping |
-| P8189 (NLI J9U ID) | ~65% | Mazal authority |
-| P214 (VIAF ID) | ~35% | VIAF name search |
-| P21 (sex/gender) | 100% | Heuristic (historical Hebrew MS) |
-| P1343 (described by) | 100% | Hardcoded (Ktiv catalog) |
-| P1412 (language) | 100% | Hardcoded (Hebrew) |
-| P1559 (native name) | 100% | From Hebrew name |
-| P227 (GND) | ~20% | VIAF cluster harvesting |
-| P244 (LCCN) | ~20% | VIAF cluster harvesting |
-| P213 (ISNI) | ~15% | VIAF cluster harvesting |
-| P268 (BnF) | ~10% | VIAF cluster harvesting |
-| P569/P570 (dates) | ~25% | Mazal DB |
-| **Avg stmts/person** | **~6.5** | Combined |
+| Property | Count | Coverage | Strategy |
+|----------|-------|----------|----------|
+| P31 (instance of) | 570 | 100% | Rule (Q5 human / Q43229 org) |
+| P106 (occupation) | 314 | 55% | Role mapping |
+| P8189 (NLI J9U ID) | — | ~65% | Mazal authority |
+| P214 (VIAF ID) | 142 | 25% | VIAF name search |
+| P21 (sex/gender) | 332 | 58% | Heuristic (non-org persons) |
+| P1343 (described by) | 570 | 100% | Hardcoded (Ktiv catalog) |
+| P1412 (language) | 332 | 58% | Hardcoded (Hebrew, non-org) |
+| P1559 (native name) | 332 | 58% | From Hebrew name (non-org) |
+| P227 (GND) | 68 | 12% | VIAF cluster harvesting |
+| P244 (LCCN) | 104 | 18% | VIAF cluster harvesting |
+| P213 (ISNI) | 129 | 23% | VIAF cluster harvesting |
+| P268 (BnF) | 29 | 5% | VIAF cluster harvesting |
+| P569/P570 (dates) | 12 | ~2% | Mazal DB |
+| **Avg stmts/person** | — | **6.4** | Combined |
+
+### 6.1c Upload Summary (pilot: 100 manuscripts)
+
+| Metric | Value |
+|--------|-------|
+| Total items uploaded | 670 |
+| Persons | 570 |
+| Manuscripts | 100 |
+| Created (new entities) | 363 |
+| Updated (new claims added) | 108 |
+| Unchanged (already complete) | 199 |
+| Failed | 0 |
+| Duplicate claims | 0 (MERGE_REFS_OR_APPEND) |
 
 ### 6.2 NER Model Performance
 
@@ -278,14 +291,14 @@ RDF Graph (HMO ontology)    +    Wikidata Upload (WikibaseIntegrator)
 
 | Configuration | Avg Stmts/MS | Avg Stmts/Person | P571 | P50 | P127 |
 |---------------|-------------|------------------|------|-----|------|
-| Full pipeline (v1.9) | ~22.9 | ~6.5 | 96% | 7.3/MS | 43% |
+| Full pipeline (v1.9) | ~22.9 | 6.4 | 96% | 7.3/MS | 43% |
 | - VIAF cluster harvesting | ~22.9 | ~4.5 | 96% | 7.3/MS | 43% |
-| - P17/P131 hardcoded | ~20.9 | ~6.5 | 96% | 7.3/MS | 43% |
-| - Provenance NER | ~21.5 | ~6.5 | 96% | 7.3/MS | 0% |
-| - Contents NER | ~22.9 | ~6.5 | 96% | 7.3/MS | 43% |
-| - Person NER | ~16.0 | ~6.5 | 96% | 1/MS | 0% |
-| - Hebrew date parsing | ~21.5 | ~6.5 | 22% | 7.3/MS | 43% |
-| - Genre mapping | ~22.2 | ~6.5 | 96% | 7.3/MS | 43% |
+| - P17/P131 hardcoded | ~20.9 | 6.4 | 96% | 7.3/MS | 43% |
+| - Provenance NER | ~21.5 | 6.4 | 96% | 7.3/MS | 0% |
+| - Contents NER | ~22.9 | 6.4 | 96% | 7.3/MS | 43% |
+| - Person NER | ~16.0 | 6.4 | 96% | 1/MS | 0% |
+| - Hebrew date parsing | ~21.5 | 6.4 | 22% | 7.3/MS | 43% |
+| - Genre mapping | ~22.2 | 6.4 | 96% | 7.3/MS | 43% |
 | Rule-only (no NER, no LOD) | ~8.0 | ~2.0 | 22% | 1/MS | 0% |
 
 ---
@@ -324,7 +337,7 @@ We presented a multi-strategy pipeline for automated MARC-to-Wikidata conversion
 
 The key insight is that different data types require different extraction strategies: NER for free-text entity extraction, rule-based parsing for date normalization and QID mapping, authority linking for identifier resolution, and LOD enrichment via VIAF cluster harvesting for maximizing inter-entity linking. No single approach achieves optimal coverage — the multi-strategy combination is essential.
 
-Our open-source system processes 123,621 NLI records without manual annotation, generating an average of ~22.9 Wikidata statements per manuscript across 30+ properties and ~6.5 statements per person entity with up to 4 cross-referenced international authority identifiers. A pilot upload of 670 items (570 persons + 100 manuscripts) to Wikidata demonstrates zero-duplicate claim-level diffing via ActionIfExists.MERGE_REFS_OR_APPEND. This work establishes the feasibility of large-scale automated catalog-to-LOD conversion for cultural heritage institutions worldwide.
+Our open-source system processes 123,621 NLI records without manual annotation, generating an average of ~22.9 Wikidata statements per manuscript across 30+ properties and 6.4 statements per person entity with up to 4 cross-referenced international authority identifiers (LCCN: 104, ISNI: 129, GND: 68, BnF: 29 across 570 persons). A verified pilot upload of 670 items (570 persons + 100 manuscripts) to Wikidata achieved 0 failures and 0 duplicate claims via ActionIfExists.MERGE_REFS_OR_APPEND. This work establishes the feasibility of large-scale automated catalog-to-LOD conversion for cultural heritage institutions worldwide.
 
 ---
 
