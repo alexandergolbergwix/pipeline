@@ -293,7 +293,7 @@ The pipeline uses three NER models. Keep these F1 scores current:
 
 Provenance v2 was trained on 12,100 samples (28.4% multi-entity augmented) with `max_length=128`. The v1 model (93.96% F1, `max_length=64`) is superseded.
 
-### 18. Wikidata property coverage (100 richest manuscripts, v1.8)
+### 18. Wikidata property coverage (100 richest manuscripts, v1.9)
 
 Per-property coverage from `WikidataItemBuilder` on 100 manuscripts:
 
@@ -307,7 +307,27 @@ Per-property coverage from `WikidataItemBuilder` on 100 manuscripts:
 | P1071 (location) | — | 79% | KIMA place authority |
 | P127 (owned by) | 53 | 43% | Provenance NER |
 | P11603 (transcribed by) | 20 | 18% | NER + role classification |
-| Avg statements/MS | 20.9 | — | |
+| P17 (country) | — | 100% | Israel (hardcoded for NLI) |
+| P131 (located in) | — | 100% | Jerusalem (hardcoded for NLI) |
+| Avg statements/MS | ~22.9 | — | |
+
+Person entity properties (v1.9):
+
+| Property | Coverage | Notes |
+|---|---|---|
+| P31 (instance of) | 100% | Q5 (human) or Q43229 (organization) |
+| P106 (occupation) | ~80% | From role mapping |
+| P8189 (NLI J9U ID) | ~65% | From Mazal authority match |
+| P214 (VIAF ID) | ~35% | From VIAF name matching |
+| P21 (sex/gender) | 100% | Q6581097 (male) for non-orgs |
+| P1343 (described by) | 100% | Q118384267 (Ktiv) |
+| P1412 (language) | 100% | Q9288 (Hebrew) for non-orgs |
+| P1559 (native name) | 100% | Hebrew name for non-orgs |
+| P227 (GND) | ~20% | VIAF cluster harvesting |
+| P244 (LCCN) | ~20% | VIAF cluster harvesting |
+| P213 (ISNI) | ~15% | VIAF cluster harvesting |
+| P268 (BnF) | ~10% | VIAF cluster harvesting |
+| Avg statements/person | ~6.5 | Was 4.2 in v1.8 |
 
 ### 19. Genre and subject QID mappings live in property_mapping.py
 

@@ -883,17 +883,23 @@ with MazalMatcher() as matcher:
 
 The Mazal index database is stored at \filepath{pipeline/converter/authority/mazal\_index.db} (983\,MB). It contains records for persons, places, works, and corporate bodies extracted from the NLI authority file system.
 
-\subsection{VIAF Integration (Planned)}
+\subsection{VIAF Integration}
 
-The Virtual International Authority File (VIAF) aggregates authority records from national libraries worldwide. VIAF integration will use the VIAF API to:
+The Virtual International Authority File (VIAF) aggregates authority records from national libraries worldwide. VIAF integration uses the VIAF SRU/JSON API in two phases:
 
-\begin{itemize}
-\item Search for person and corporate body records by name
-\item Retrieve VIAF cluster IDs for matched entities
-\item Access cross-references to national authority files (Library of Congress, BnF, DNB, etc.)
-\end{itemize}
+\begin{enumerate}
+\item \textbf{Name matching} --- searches personal-name headings via \code{https://viaf.org/viaf/search} (SRU with CQL, \code{Accept: application/json} header). Rate-limited to 2 requests/second. Returns VIAF cluster URIs for matched entities.
+\item \textbf{Cluster harvesting} --- fetches \code{https://viaf.org/viaf/\{id\}/viaf.json} for each matched cluster and extracts cross-referenced authority identifiers:
+  \begin{description}[leftmargin=1.5cm]
+  \item[P227] GND ID (Deutsche Nationalbibliothek)
+  \item[P244] LCCN (Library of Congress)
+  \item[P268] BnF ID (Biblioth\`{e}que nationale de France)
+  \item[P213] ISNI (International Standard Name Identifier)
+  \end{description}
+  Results are cached per-instance. Expected yield: 2--4 additional external identifiers per person with a VIAF match ($\sim$35\% of persons).
+\end{enumerate}
 
-The VIAF API endpoint (\code{https://viaf.org/viaf/search}) supports SRU (Search/Retrieve via URL) queries with CQL (Contextual Query Language).
+Implementation: \code{VIAFMatcher} class in \filepath{converter/authority/viaf\_matcher.py} with \code{match\_person()} and \code{get\_cluster\_identifiers()} methods. Enabled by default in the authority stage.
 
 \subsection{Library of Congress Name Authority File (Planned)}
 
@@ -1675,11 +1681,11 @@ The final stage of the pipeline uploads validated RDF data to Wikidata, making H
 \endhead
 \hline
 \endfoot
-F4\_Manifestation\_Singleton & Q87167 (manuscript) & P195 (collection), P921 (main subject), P186 (material), P1104 (pages), P127 (owned by), P6216 (copyright), P8189 (NLI ID, external-id), P571 (inception), P1071 (location), P11603 (transcribed by) \\
+F4\_Manifestation\_Singleton & Q87167 (manuscript) & P195 (collection), P17 (country: Israel), P131 (located in: Jerusalem), P921 (main subject), P186 (material), P1104 (pages), P127 (owned by), P6216 (copyright), P8189 (NLI ID, external-id), P571 (inception), P1071 (location), P11603 (transcribed by) \\
 \hline
 F1\_Work & Q47461344 (written work) & P50 (author), P407 (language of work), P136 (genre, 50 QID mappings) \\
 \hline
-E21\_Person & Q5 (human) & P569/P570 (birth/death), P106 (occupation), P214 (VIAF, external-id) \\
+E21\_Person & Q5 (human) & P569/P570 (birth/death), P106 (occupation), P214 (VIAF, external-id), P8189 (NLI ID, external-id), P21 (gender), P1343 (described by Ktiv), P1412 (Hebrew language), P1559 (native name), P227 (GND), P244 (LCCN), P213 (ISNI), P268 (BnF) \\
 \hline
 E53\_Place & Q515 (city) etc. & P625 (coordinates), P17 (country) \\
 \hline

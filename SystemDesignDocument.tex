@@ -780,7 +780,7 @@ Settings are stored via \code{QSettings} using \code{QSettings.Format.IniFormat}
 \hline
 \code{wikidata\_token} & \code{str} & \code{""} & OAuth token (stored encrypted) \\
 \hline
-\code{log\_level} & \code{str} & \code{INFO} & Python logging level \\
+\code{log\_level} & \code{str} & \code{INFO} & Python logging level; file logs rotated daily with 30-day retention via \code{TimedRotatingFileHandler} \\
 \hline
 \code{first\_run\_done} & \code{bool} & \code{false} & Suppresses setup wizard after first run \\
 \hline
@@ -1317,6 +1317,8 @@ v1.6 & Multi-model NER + GUI polish & 3-model NER system (person + provenance + 
 v1.7 & Wikidata upload hardening & OAuth~2.0 support (\code{consumer\_key|consumer\_secret}); SPARQL reconciliation removed (uses authority IDs instead); rate limiting: 1.5s edit delay + 30s batch pause every 45 items; batch mode ON by default; null-safe \code{entity\_status} signal; \code{worker.wait()} before QThread GC; provenance NER v2 model (95.91\% F1, multi-entity augmented) & Apr 2026 \\
 \hline
 v1.8 & Wikidata coverage improvements & Hebrew century date parsing (P571 22\%$\to$96\%); 50 genre$\to$QID mappings (P136 14\%$\to$100\% of genre data); 30 LCSH subject$\to$QID mappings (P921 56$\to$91 claims); external-id type fix for P8189/P214; P5816/P527/P195 type guards (skip invalid value types); avg 20.9 statements/MS on 100-record pilot & Apr 2026 \\
+\hline
+v1.9 & Maximum LOD enrichment & VIAF cluster harvesting: GND (P227), LC (P244), ISNI (P213), BnF (P268) extracted from VIAF JSON for persons with VIAF IDs; person properties: P1412 (Hebrew language), P1559 (native name); manuscript properties: P17 (Israel), P131 (Jerusalem); expected avg: persons 4.2$\to$6.5, MSS 20.9$\to$22.9 stmts; daily log rotation with \code{TimedRotatingFileHandler} (30-day TTL) & Apr 2026 \\
 \hline
 \end{longtable}
 
