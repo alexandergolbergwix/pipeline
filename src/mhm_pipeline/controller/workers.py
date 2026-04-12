@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1041,6 +1042,11 @@ class WikidataUploadWorker(StageWorker):
         self._batch_mode = batch_mode
 
     def run(self) -> None:  # noqa: C901
+        # SAFETY: Force dry_run in CI environments to prevent accidental uploads
+        if os.environ.get("CI") and not self._dry_run:
+            logger.warning("SAFETY: Forcing dry_run=True in CI environment")
+            self._dry_run = True
+
         try:
             from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
             from converter.wikidata.quickstatements import QuickStatementsExporter  # noqa: PLC0415
