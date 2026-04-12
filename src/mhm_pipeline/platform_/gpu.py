@@ -40,8 +40,10 @@ def get_device(override: str | None = None) -> str:
             _DEVICE = "cuda"
         else:
             _DEVICE = "cpu"
-    except ImportError:
-        logger.warning("torch not installed — defaulting to cpu")
+    except (ImportError, OSError, RuntimeError, Exception):
+        # ImportError: torch not installed
+        # OSError/RuntimeError: DLL load failure on Windows CI (no GPU drivers)
+        logger.warning("torch not available — defaulting to cpu")
         _DEVICE = "cpu"
 
     logger.info("Compute device selected: %s", _DEVICE)
