@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -733,6 +734,25 @@ class KnowledgeGraphView(QWidget):
         self._edge_labels_cb.toggled.connect(self._on_toggle_edge_labels)
         toolbar.addWidget(self._edge_labels_cb)
 
+        # Depth slider — controls neighbor hops in cluster expansion
+        toolbar.addWidget(QLabel("Depth:"))
+        self._depth_slider = QSpinBox()
+        self._depth_slider.setRange(0, 3)
+        self._depth_slider.setValue(1)
+        self._depth_slider.setToolTip("Neighbor expansion depth (0 = type only, 1 = +neighbors)")
+        self._depth_slider.setFixedWidth(50)
+        toolbar.addWidget(self._depth_slider)
+
+        # Max nodes spinner
+        toolbar.addWidget(QLabel("Max:"))
+        self._max_nodes_spin = QSpinBox()
+        self._max_nodes_spin.setRange(50, 2000)
+        self._max_nodes_spin.setValue(300)
+        self._max_nodes_spin.setSingleStep(100)
+        self._max_nodes_spin.setToolTip("Maximum nodes to render")
+        self._max_nodes_spin.setFixedWidth(70)
+        toolbar.addWidget(self._max_nodes_spin)
+
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
@@ -1323,14 +1343,24 @@ class KnowledgeGraphView(QWidget):
         if not hasattr(self, "_store") or not self._store:
             return
 
+        depth = self._depth_slider.value()
+        max_total = self._max_nodes_spin.value()
         total = self._store.get_type_count(node_type)
+        limit = min(50, total)
+
         self._show_loading(
-            f"Loading {node_type} nodes ({total} total, showing top 50 + neighbors)..."
+            f"Loading {node_type} ({total} total, showing {limit} + {depth}-hop neighbors, max {max_total})..."
         )
         QApplication.processEvents()
 
-        graph_json = self._store.get_type_subgraph(node_type, limit=50, max_total=300)
+        if depth == 0:
+            # Type-only view — no neighbors
+            graph_json = self._store.get_type_subgraph(node_type, limit=limit, max_total=limit)
+        else:
+            graph_json = self._store.get_type_subgraph(node_type, limit=limit, max_total=max_total)
+
         self._mode = "neighborhood"
+        self._back_btn.show()
         self._render_json(graph_json)
 
     def _on_back_to_summary(self) -> None:
