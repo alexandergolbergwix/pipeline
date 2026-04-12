@@ -16,6 +16,16 @@ import time
 
 import requests
 
+# SAFETY: Only touch items in our range
+OUR_QID_MIN = 138900000
+
+
+def is_our_item(qid: str) -> bool:
+    try:
+        return int(qid[1:]) >= OUR_QID_MIN
+    except (ValueError, IndexError):
+        return False
+
 API = "https://www.wikidata.org/w/api.php"
 SPARQL = "https://query.wikidata.org/sparql"
 
@@ -132,6 +142,9 @@ def main() -> None:
 
         for i, item in enumerate(items):
             qid = item["qid"]
+            if not is_our_item(qid):
+                print(f"  [{i+1}/{len(items)}] {qid} — SKIPPED (not our item)")
+                continue
             print(f"  [{i+1}/{len(items)}] {qid} ({item['count']} values)...", end=" ", flush=True)
 
             try:

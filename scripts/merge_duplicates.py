@@ -1,5 +1,8 @@
 """Merge duplicate Wikidata items created by the MHM pipeline.
 
+SAFETY: Only operates on items in our QID range (Q138900000+).
+Any merge where from_id has a numeric part < 138900000 is BLOCKED.
+
 Usage:
     PYTHONPATH=src:. .venv/bin/python scripts/merge_duplicates.py <bearer_token> [--merges-only|--blanks-only]
 """
@@ -8,6 +11,9 @@ from __future__ import annotations
 
 import json
 import sys
+
+# SAFETY: Our items are in this range. NEVER touch items below this.
+OUR_QID_MIN = 138900000
 import time
 
 import requests
@@ -32,7 +38,17 @@ def refresh_csrf(s: requests.Session) -> str:
     return resp.json()["query"]["tokens"]["csrftoken"]
 
 
+def is_our_item(qid: str) -> bool:
+    """Check if a QID is in our range (Q138900000+)."""
+    try:
+        return int(qid[1:]) >= OUR_QID_MIN
+    except (ValueError, IndexError):
+        return False
+
+
 def merge(s: requests.Session, csrf: str, from_id: str, to_id: str) -> dict:
+    if not is_our_item(from_id):
+        return {"error": {"code": "safety-block", "info": f"{from_id} is NOT our item (< Q{OUR_QID_MIN})"}}
     return s.post(API, data={
         "action": "wbmergeitems", "fromid": from_id, "toid": to_id,
         "token": csrf, "ignoreconflicts": "description|sitelink|statement",
@@ -42,6 +58,8 @@ def merge(s: requests.Session, csrf: str, from_id: str, to_id: str) -> dict:
 
 
 def blank(s: requests.Session, csrf: str, qid: str) -> dict:
+    if not is_our_item(qid):
+        return {"error": {"code": "safety-block", "info": f"{qid} is NOT our item (< Q{OUR_QID_MIN})"}}
     return s.post(API, data={
         "action": "wbeditentity", "id": qid, "clear": "true",
         "data": json.dumps({
