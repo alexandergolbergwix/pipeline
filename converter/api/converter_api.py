@@ -685,7 +685,7 @@ if __name__ == "__main__":
         )
         print(result)
     elif args.command == "annotate":
-        with open(args.annotations) as f:
+        with open(args.annotations, encoding="utf-8") as f:
             annotations = json.load(f)
         result = add_annotations(args.ttl, annotations, args.output)
         print(json.dumps(result, indent=2))

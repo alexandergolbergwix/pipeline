@@ -736,9 +736,25 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", f"Could not load TTL for exploration:\n{e}")
         elif clicked == self._dialog_buttons.get("folder"):
-            subprocess.run(["open", "-R", output_path])
+            import sys as _sys
+
+            if _sys.platform == "darwin":
+                subprocess.run(["open", "-R", output_path])
+            elif _sys.platform == "win32":
+                subprocess.run(["explorer", "/select,", output_path])
+            else:
+                subprocess.run(["xdg-open", str(Path(output_path).parent)])
         elif clicked == self._dialog_buttons.get("report") and report_path:
-            subprocess.run(["open", report_path])
+            import sys as _sys
+
+            if _sys.platform == "darwin":
+                subprocess.run(["open", report_path])
+            elif _sys.platform == "win32":
+                import os
+
+                os.startfile(report_path)  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", report_path])
 
     def _on_error(self, error_msg: str):
         self.convert_btn.setEnabled(True)
