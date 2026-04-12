@@ -983,11 +983,10 @@ class KnowledgeGraphView(QWidget):
     def _render_json(self, graph_json: dict[str, list[dict[str, object]]]) -> None:
         """Render a Cytoscape.js JSON into the web view."""
         self._graph_json = graph_json
-        self._node_types = {
-            n["data"]["nodeType"]
-            for n in graph_json["nodes"]
-            if n["data"].get("nodeType")  # type: ignore[index, attr-defined]
-        }
+        from typing import Any, cast  # noqa: PLC0415
+
+        nodes: list[Any] = cast(list, graph_json["nodes"])
+        self._node_types = {n["data"]["nodeType"] for n in nodes if n["data"].get("nodeType")}
         self._rebuild_filter_checkboxes()
 
         n_vis = len(graph_json["nodes"])
