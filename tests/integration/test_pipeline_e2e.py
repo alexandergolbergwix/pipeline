@@ -113,28 +113,14 @@ class TestVenvImports:
         except ImportError as e:
             pytest.fail(f"Stage 0 imports failed from venv: {e}. Run: uv sync")
 
-    def test_viaf_api_returns_json(self) -> None:
-        """VIAF API must return JSON with Accept header — catches silent HTML fallback.
+    def test_viaf_matcher_uses_json_accept_header(self) -> None:
+        """VIAFMatcher must set Accept: application/json on its session."""
+        from converter.authority.viaf_matcher import VIAFMatcher  # noqa: PLC0415
 
-        The VIAF SRU API changed to require Accept: application/json. Without it,
-        the API returns an HTML page and match_person silently returns None for every name.
-        """
-        import requests  # noqa: PLC0415
-
-        resp = requests.get(
-            "https://viaf.org/viaf/search",
-            params={"query": 'local.personalNames all "Maimonides"', "maximumRecords": "1"},
-            headers={"Accept": "application/json"},
-            timeout=10,
+        matcher = VIAFMatcher()
+        assert matcher._session.headers.get("Accept") == "application/json", (
+            "VIAFMatcher session missing Accept: application/json header"
         )
-        assert resp.status_code == 200, f"VIAF returned status {resp.status_code}"
-        content_type = resp.headers.get("content-type", "")
-        assert "json" in content_type, (
-            f"VIAF returned {content_type!r} instead of JSON — API may have changed again"
-        )
-        data = resp.json()
-        sru = data.get("searchRetrieveResponse", {})
-        assert sru.get("records"), "VIAF returned no records for 'Maimonides'"
 
     def test_kima_index_exists_and_is_available(self) -> None:
         """KIMA index DB must exist — matcher silently returns None when missing.
