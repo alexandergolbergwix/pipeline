@@ -90,15 +90,6 @@ document.getElementById('stats').textContent =
 var cy = window.cy = cytoscape({
   container: document.getElementById('cy'),
   elements: graphData.nodes.concat(graphData.edges),
-  // WebGL renderer requires GPU — fall back to canvas if unavailable
-  renderer: (function() {
-    try {
-      var c = document.createElement('canvas');
-      var gl = c.getContext('webgl2') || c.getContext('webgl');
-      if (gl) return { name: 'webgl' };
-    } catch(e) {}
-    return { name: 'canvas' };
-  })(),
   style: [
     {
       selector: 'node',
