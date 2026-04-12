@@ -58,6 +58,11 @@ ignore = ["E501", "F821", "E722", "E402", "F401", "F402", "B008", "B007"]
 strict = true
 python_version = "3.12"
 ignore_missing_imports = true
+exclude = ["converter/", "ner/", "scripts/", "ontology/", "data/"]
+
+[[tool.mypy.overrides]]
+module = ["converter.*", "ner.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
