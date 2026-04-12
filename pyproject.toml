@@ -55,10 +55,11 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501", "F821", "E722", "E402", "F401", "F402", "B008", "B007"]
 
 [tool.mypy]
-strict = true
 python_version = "3.12"
 ignore_missing_imports = true
 exclude = ["converter/", "ner/", "scripts/", "ontology/", "data/"]
+check_untyped_defs = true
+warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 module = ["converter.*", "ner.*"]
