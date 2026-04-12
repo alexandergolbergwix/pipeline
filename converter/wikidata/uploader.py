@@ -368,16 +368,54 @@ class WikidataUploader:
             logger.warning("Failed to build reference snak %s: %s", prop, exc)
             return None
 
+    def _is_our_item(self, qid: str) -> bool:
+        """Check if an existing Wikidata item was created by the MHM Pipeline.
+
+        Checks whether the item has P1343 (described by source) = Q118384267 (Ktiv),
+        which is a marker we add to all items we create. If the item doesn't have
+        this marker, it was NOT created by us and should NOT be modified.
+
+        This prevents the pipeline from accidentally modifying established items
+        that happen to share identifiers with our entities.
+        """
+        try:
+            wbi = self._init_wbi()
+            existing = wbi.item.get(qid)
+            for claim in existing.claims.get("P1343") or []:
+                mainsnak = claim.mainsnak
+                if hasattr(mainsnak, 'datavalue') and "Q118384267" in str(mainsnak.datavalue):
+                    return True
+            return False
+        except Exception:
+            return False
+
     def upload_item(self, item: WikidataItem) -> UploadResult:
         """Upload a single item to Wikidata with retry logic and smart diffing.
 
         For existing items: fetches current claims, compares with new claims,
         and only writes if there are actual changes (avoids duplicates).
 
+        SAFETY: Only modifies existing items that were created by the MHM Pipeline
+        (verified by checking for P1343=Q118384267 marker). If an existing item
+        was NOT created by us, we skip it entirely to avoid modifying community items.
+
         Returns:
             UploadResult with QID and status.
         """
         self._init_wbi()
+
+        # SAFETY: If this item has an existing_qid, verify it's OUR item before modifying
+        if item.existing_qid and not self._is_our_item(item.existing_qid):
+            logger.warning(
+                "SAFETY: Skipping %s — existing item %s was NOT created by MHM Pipeline",
+                item.local_id, item.existing_qid,
+            )
+            return UploadResult(
+                local_id=item.local_id,
+                qid=item.existing_qid,
+                status="skipped",
+                message=f"Skipped {item.existing_qid} — not created by MHM Pipeline (safety guard)",
+            )
 
         last_error = ""
         for attempt in range(1, _MAX_RETRIES + 1):
@@ -474,7 +512,8 @@ class WikidataUploader:
             batch_count += 1
 
             # Remember the QID for future resolution (both new and existing items)
-            if result.qid and result.status in ("success", "exists"):
+            # Also track "skipped" items so __LOCAL: references still resolve
+            if result.qid and result.status in ("success", "exists", "skipped", "updated"):
                 created_qids[item.local_id] = result.qid
 
             if entity_cb:
