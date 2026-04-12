@@ -282,18 +282,49 @@ class WikidataReconciler:
 
         return None
 
-    def reconcile_person(
-        self, name: str, viaf_uri: str | None, nli_id: str | None,
+    def reconcile_person_by_external_id(
+        self, prop: str, ext_id: str,
     ) -> str | None:
-        """Reconcile a person by VIAF first, then NLI ID.
+        """Check if a person item exists via any external-id property.
 
         Args:
-            name: Person name (used for logging only).
-            viaf_uri: VIAF URI if available.
-            nli_id: NLI/Mazal authority ID if available.
+            prop: Wikidata property ID (e.g., "P244" for LCCN).
+            ext_id: The external identifier value.
 
         Returns:
             QID if found, None otherwise.
+        """
+        cache_key = f"person:{prop}:{ext_id}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sparql = f"""
+        SELECT ?item WHERE {{
+          ?item wdt:{prop} "{ext_id}" .
+        }} LIMIT 1
+        """
+        results = self._query(sparql)
+        qid = None
+        if results:
+            uri = results[0].get("item", {}).get("value", "")
+            qid = extract_wikidata_qid(uri)
+
+        self._cache[cache_key] = qid
+        return qid
+
+    def reconcile_person(
+        self,
+        name: str,
+        viaf_uri: str | None,
+        nli_id: str | None,
+        lc_id: str | None = None,
+        gnd_id: str | None = None,
+        isni: str | None = None,
+    ) -> str | None:
+        """Reconcile a person by all available identifiers.
+
+        Checks in order: VIAF → NLI → LCCN → GND → ISNI.
+        Returns QID on first match.
         """
         if viaf_uri:
             viaf_id = extract_viaf_id(viaf_uri)
@@ -304,6 +335,22 @@ class WikidataReconciler:
 
         if nli_id:
             qid = self.reconcile_person_by_nli_id(nli_id)
+            if qid:
+                return qid
+
+        # Check cluster-harvested identifiers
+        if lc_id:
+            qid = self.reconcile_person_by_external_id("P244", lc_id)
+            if qid:
+                return qid
+
+        if gnd_id:
+            qid = self.reconcile_person_by_external_id("P227", gnd_id)
+            if qid:
+                return qid
+
+        if isni:
+            qid = self.reconcile_person_by_external_id("P213", isni)
             if qid:
                 return qid
 
@@ -398,7 +445,12 @@ class WikidataReconciler:
                 if person_key in persons_seen:
                     continue
 
-                person_qid = self.reconcile_person(name, viaf_uri, mazal_id)
+                person_qid = self.reconcile_person(
+                    name, viaf_uri, mazal_id,
+                    lc_id=match.get("lc_id"),
+                    gnd_id=match.get("gnd_id"),
+                    isni=match.get("isni"),
+                )
                 person_result = ReconciliationResult(
                     entity_type="person",
                     local_id=person_key,
