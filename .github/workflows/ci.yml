@@ -40,6 +40,12 @@ jobs:
       - name: Type check (mypy)
         run: uv run mypy src/
 
-      - name: Tests
-        run: uv run pytest -x
+      - name: Tests (unit only on Windows — Qt/torch hang without display)
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            uv run pytest tests/unit/ -x
+          else
+            uv run pytest -x
+          fi
+        shell: bash
         timeout-minutes: 10
