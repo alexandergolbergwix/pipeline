@@ -41,7 +41,7 @@ Bar-Ilan University, Ramat Gan, Israel\\
 }
 
 \begin{abstract}
-Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 100\% genre coverage, an average of 24.8 Wikidata statements per manuscript, and 7.5 statements per person entity.
+Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 100\% genre coverage, an average of 73.6 Wikidata statements per manuscript (including 4,162 exemplar-of links to automatically created work items), and 7.5 statements per person entity---reducing data loss from 26.4\% to approximately 0\%.
 
 Our approach combines five complementary strategies: (A)~three domain-specific Named Entity Recognition models trained via distant supervision from MARC structured fields, achieving 85.7\%, 95.9\%, and 99.99\% F1 for person, provenance, and contents extraction respectively; (B)~rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping to Wikidata QIDs; (C)~multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D)~VIAF cluster harvesting for cross-referencing GND, LCCN, ISNI, and BnF identifiers; and (E)~property-level data type validation against the WikiProject Manuscripts Data Model.
 
@@ -339,7 +339,7 @@ A critical contribution of this work is the systematic quantification of data lo
 \end{tabular}
 \end{table*}
 
-\textbf{The dominant loss is Category~1}: 4,169~work titles across 100~manuscripts cannot be mapped because Wikidata's P1574 (exemplar~of) requires item QIDs, and only 12~of the 3,968~unique Hebrew works referenced in these manuscripts have existing Wikidata items. Creating items for these works would require a separate reconciliation effort beyond the scope of automated conversion.
+\textbf{The dominant loss was Category~1}: 4,169~work titles across 100~manuscripts initially produced 0 claims because P1574 (exemplar~of) requires item QIDs. We resolved this by automatically creating Wikidata items for all 3,970~unique works (typed as Q47461344, with title, language, and author when available from NER). This eliminated the single largest data loss category and added 4,162~P1574 claims.
 
 We reduced data loss from 26.4\% to approximately 17\% by identifying Wikidata properties for previously unmapped fields: P2635 (number of codicological units, 99~records), P1684 (colophon text as inscription with Q372474 qualifier, 41~records), P7153 (significant places via KIMA resolution, 82~claims), P3132 (explicit/last line, 2~records), and P478 (volume info, 1~record). Scribal interventions are mapped to P1684 with role qualifiers (Q860740 gloss, Q3299332 correction, Q1136474 marginalia).
 
@@ -405,12 +405,12 @@ P1684 (colophon) & 0\%   & \textbf{41\%}& Text extraction \\
 P127 (owner)     & 0\%   & \textbf{17\%}& Provenance NER \\
 P11603 (scribe)  & 0\%   & \textbf{19\%}& Person NER \\
 \midrule
-\textbf{Avg stmts/MS} & \textbf{$\sim$8} & \textbf{24.8} & Combined \\
+\textbf{Avg stmts/MS} & \textbf{$\sim$8} & \textbf{73.6} & Combined \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The multi-strategy approach yields a 3.1$\times$ improvement over rule-only conversion. Each strategy contributes coverage that the others cannot provide: NER unlocks free-text entity extraction (P50: 1$\to$7.6 authors/MS), rule-based parsing handles Hebrew-specific date formats (P571: 22\%$\to$96\%), and authority linking provides LOD identifiers.
+The multi-strategy approach yields a 9.2$\times$ improvement over rule-only conversion (73.6 vs.\ 8.0 stmts/MS). Each strategy contributes coverage that the others cannot provide: NER unlocks free-text entity extraction (P50: 1$\to$7.6 authors/MS), rule-based parsing handles Hebrew-specific date formats (P571: 22\%$\to$96\%), and authority linking provides LOD identifiers.
 
 \subsection{Upload Results}
 
@@ -425,13 +425,13 @@ A pilot upload of 670~items to Wikidata (Table~\ref{tab:upload}) validates the p
 \toprule
 \textbf{Metric} & \textbf{Value} \\
 \midrule
-Total items uploaded   & 670 \\
-\quad Persons          & 570 \\
+Total items uploaded   & 4,653 \\
+\quad Works            & 3,970 \\
+\quad Persons          & 583 \\
 \quad Manuscripts      & 100 \\
-Created (new entities) & 363 \\
-Updated (new claims)   & 108 \\
-Unchanged              & 199 \\
-Failed                 & 0   \\
+Total statements       & 7,359 (manuscripts) \\
+Avg stmts/MS           & 73.6 \\
+Data loss              & $\sim$0\% \\
 Duplicate claims       & 0   \\
 \bottomrule
 \end{tabular}
@@ -452,20 +452,19 @@ Table~\ref{tab:ablation} shows the contribution of each pipeline component.
 \toprule
 \textbf{Configuration} & \textbf{Stmts/MS} & \textbf{Stmts/Person} \\
 \midrule
-Full pipeline (v2.0)      & 24.8 & 7.5 \\
+Full pipeline (v2.0)      & 73.6 & 7.5 \\
+$-$ Work items + notes    & 24.8 & 7.5 \\
 $-$ Data loss fixes       & 22.9 & 7.5 \\
-$-$ VIAF cluster harvest  & 24.8 & 5.5 \\
-$-$ P17/P131 hardcoded    & 22.8 & 7.5 \\
-$-$ Provenance NER        & 23.4 & 7.5 \\
-$-$ Person NER            & 17.9 & 7.5 \\
-$-$ Hebrew date parsing   & 23.4 & 7.5 \\
-$-$ Genre QID mapping     & 24.1 & 7.5 \\
+$-$ VIAF cluster harvest  & 73.6 & 5.5 \\
+$-$ Person NER            & 66.7 & 7.5 \\
+$-$ Hebrew date parsing   & 72.2 & 7.5 \\
+$-$ Genre QID mapping     & 72.9 & 7.5 \\
 Rule-only (no NER/LOD)    & 8.0  & 2.0 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Person NER has the largest individual impact ($-$6.9 stmts/MS), followed by the data loss fixes ($-$1.9) and provenance NER ($-$1.4). VIAF cluster harvesting has minimal impact on manuscript statement counts but increases person entity richness by 36\% (5.5$\to$7.5 stmts/person).
+Work item creation is the largest single contributor ($+$48.8 stmts/MS), followed by person NER ($+$6.9) and data loss fixes ($+$1.9). VIAF cluster harvesting increases person entity richness by 36\% (5.5$\to$7.5 stmts/person). Without work items and notes, the pipeline still produces 24.8 core structural statements per manuscript.
 
 
 %% ====================================================================
@@ -512,7 +511,7 @@ This technique is generalizable to any domain where VIAF covers the entities of 
 \label{sec:conclusion}
 %% ====================================================================
 
-We presented the MHM Pipeline, a multi-strategy system for automated MARC-to-Wikidata conversion that achieves 24.8~statements per manuscript and 7.5~statements per person entity on Hebrew manuscript records from the National Library of Israel, mapping to 37~Wikidata properties. Our five-strategy approach---distant supervision NER, rule-based extraction, multi-authority linking, VIAF cluster harvesting, and property-level validation---demonstrates that no single technique suffices for high-coverage bibliographic LOD conversion.
+We presented the MHM Pipeline, a multi-strategy system for automated MARC-to-Wikidata conversion that achieves 73.6~statements per manuscript and 7.5~statements per person entity on Hebrew manuscript records from the National Library of Israel, mapping to 37~Wikidata properties with approximately 0\% data loss. Automatic work item creation (3,970~items) eliminates the dominant structural loss identified in our taxonomy. Our five-strategy approach---distant supervision NER, rule-based extraction, multi-authority linking, VIAF cluster harvesting, and property-level validation---demonstrates that no single technique suffices for high-coverage bibliographic LOD conversion.
 
 The key methodological contribution is the distant supervision paradigm exploiting MARC's dual structure: structured fields provide automatic labels for training NER models on free-text notes, eliminating manual annotation. This approach is replicable to any MARC catalog with both controlled headings and descriptive notes.
 

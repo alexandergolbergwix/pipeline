@@ -251,6 +251,7 @@ class WikidataItemBuilder:
             ))
 
         # ── Dates ────────────────────────────────────────────────
+        colophon_fields = set(record.get("data_from_colophon") or [])
         dates = record.get("dates") or {}
         date_result = date_to_wikidata(dates)
         if date_result:
@@ -263,6 +264,12 @@ class WikidataItemBuilder:
                 qualifiers.append({
                     "property": P_SOURCING_CIRCUMSTANCES,
                     "value": Q_CIRCA, "type": "item",
+                })
+            # P887 (based on heuristic) = colophon when date is from colophon
+            if "dates" in colophon_fields or "colophon_text" in colophon_fields:
+                qualifiers.append({
+                    "property": "P887",
+                    "value": Q_COLOPHON, "type": "item",
                 })
             item.statements.append(WikidataStatement(
                 property_id=P_INCEPTION, value=time_value,
@@ -403,7 +410,7 @@ class WikidataItemBuilder:
         colophon = record.get("colophon_text")
         if colophon and str(colophon).strip() and str(colophon) != "None":
             item.statements.append(WikidataStatement(
-                property_id=P_INSCRIPTION, value=str(colophon).strip(),
+                property_id=P_INSCRIPTION, value=str(colophon).strip()[:1500],
                 value_type="monolingualtext", language="he", references=ref,
                 qualifiers=[{
                     "property": P_OBJECT_HAS_ROLE,
@@ -431,7 +438,7 @@ class WikidataItemBuilder:
                 else Q_MARGINALIA
             )
             item.statements.append(WikidataStatement(
-                property_id=P_INSCRIPTION, value=text,
+                property_id=P_INSCRIPTION, value=text[:1500],
                 value_type="monolingualtext", language="he", references=ref,
                 qualifiers=[{
                     "property": P_OBJECT_HAS_ROLE,

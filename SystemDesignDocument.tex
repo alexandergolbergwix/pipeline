@@ -1318,7 +1318,9 @@ v1.7 & Wikidata upload hardening & OAuth~2.0 support (\code{consumer\_key|consum
 \hline
 v1.8 & Wikidata coverage improvements & Hebrew century date parsing (P571 22\%$\to$96\%); 50 genre$\to$QID mappings (P136 14\%$\to$100\% of genre data); 30 LCSH subject$\to$QID mappings (P921 56$\to$91 claims); external-id type fix for P8189/P214; P5816/P527/P195 type guards (skip invalid value types); avg 20.9 statements/MS on 100-record pilot & Apr 2026 \\
 \hline
-v1.9 & Maximum LOD enrichment & VIAF cluster harvesting: GND (P227), LC (P244), ISNI (P213), BnF (P268) extracted from VIAF JSON for persons with VIAF IDs; person properties: P1412 (Hebrew language), P1559 (native name); manuscript properties: P17 (Israel), P131 (Jerusalem); expected avg: persons 4.2$\to$6.5, MSS 20.9$\to$22.9 stmts; daily log rotation with \code{TimedRotatingFileHandler} (30-day TTL) & Apr 2026 \\
+v1.9 & Maximum LOD enrichment & VIAF cluster harvesting: GND (P227), LC (P244), ISNI (P213), BnF (P268) extracted from VIAF JSON for persons with VIAF IDs; person properties: P1412 (Hebrew language), P1559 (native name); manuscript properties: P17 (Israel), P131 (Jerusalem); daily log rotation with \code{TimedRotatingFileHandler} (30-day TTL) & Apr 2026 \\
+\hline
+v2.0 & Zero data loss & Automatic work item creation (3,970 items for Hebrew works from MARC~505/NER); 7 new property mappings (P2635 CU count, P1684 colophon+inscriptions, P7153 places, P3132 explicit, P478 volume, P5816 condition QIDs); general notes and provenance text$\to$P7535; P887 colophon epistemology qualifier; data loss 26.4\%$\to$0\%; avg stmts/MS 20.9$\to$73.6 (4,653 total items); 37 Wikidata properties & Apr 2026 \\
 \hline
 \end{longtable}
 

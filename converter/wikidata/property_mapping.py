@@ -145,6 +145,9 @@ P_VOLUME = "P478"
 # Significant place (associated, not creation location)
 P_SIGNIFICANT_PLACE = "P7153"
 
+# Epistemological provenance
+P_BASED_ON_HEURISTIC = "P887"
+
 # ── Wikidata QIDs ────────────────────────────────────────────────────
 
 # Type classifications

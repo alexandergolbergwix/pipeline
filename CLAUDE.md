@@ -311,7 +311,12 @@ Per-property coverage from `WikidataItemBuilder` on 100 manuscripts:
 | P11603 (transcribed by) | 20 | 18% | NER + role classification |
 | P17 (country) | — | 100% | Israel (hardcoded for NLI) |
 | P131 (located in) | — | 100% | Jerusalem (hardcoded for NLI) |
-| Avg statements/MS | ~22.9 | — | |
+| P1574 (exemplar of) | 4,162 | 100% | Auto-created work items (3,970) |
+| P7535 (notes+prov) | 701 | 100% | MARC 500 notes + 561 provenance text |
+| P2635 (CU count) | 99 | 99% | Codicological units count |
+| P1684 (inscription) | 41 | 41% | Colophon text + scribal interventions |
+| P7153 (sig. place) | 82 | 82% | Related places via KIMA |
+| Avg statements/MS | 73.6 | — | v2.0 (was 22.9 in v1.9) |
 
 Person entity properties (v1.9):
 
@@ -329,7 +334,7 @@ Person entity properties (v1.9):
 | P244 (LCCN) | ~20% | VIAF cluster harvesting |
 | P213 (ISNI) | ~15% | VIAF cluster harvesting |
 | P268 (BnF) | ~10% | VIAF cluster harvesting |
-| Avg statements/person | ~6.5 | Was 4.2 in v1.8 |
+| Avg statements/person | 7.5 | Was 4.2 in v1.8 |
 
 ### 19. Genre and subject QID mappings live in property_mapping.py
 
