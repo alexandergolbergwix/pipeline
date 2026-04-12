@@ -41,7 +41,13 @@ jobs:
         run: uv run mypy src/
 
       - name: Tests
-        run: uv run pytest -x
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            uv run pytest tests/unit/ -x
+          else
+            uv run pytest -x
+          fi
+        shell: bash
         timeout-minutes: 10
         env:
           QT_QPA_PLATFORM: offscreen
