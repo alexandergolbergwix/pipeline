@@ -122,7 +122,14 @@
       "Bash(uv lock:*)",
       "Read(//opt/homebrew/**)",
       "Bash(.venv/bin/uv lock:*)",
-      "Bash(ls .venv/bin/python*)"
+      "Bash(ls .venv/bin/python*)",
+      "Bash(ls -lt ~/Library/Logs/DiagnosticReports/MHM*)",
+      "Bash(find /Users/alexandergo/Desktop -name \"*.tsv\" -exec wc -l {} \\\\;)",
+      "Bash(find /Users/alexandergo/Documents/Doctorat/pipeline/data -name \"*.tsv\" -exec wc -l {} \\\\;)",
+      "Bash(find /Users/alexandergo/Desktop -name \"*.ttl\" -exec ls -la {} \\\\;)",
+      "Bash(find /Users/alexandergo/Desktop/100richets -name \"*.tsv\" -exec ls -la {} \\\\;)",
+      "Bash(find /Users/alexandergo/Documents/Doctorat/pipeline -name \"*.py\" -type f -exec grep -l \"graph_template.html\\\\|JS_CYTOSCAPE\\\\|cytoscape\" {} \\\\;)",
+      "Bash(curl -sL \"https://unpkg.com/cytoscape@3.31.0/dist/cytoscape.min.js\" -o /Users/alexandergo/Documents/Doctorat/pipeline/src/mhm_pipeline/gui/assets/cytoscape.min.js)"
     ],
     "additionalDirectories": [
       "/Users/alexandergo/Desktop/100richets",

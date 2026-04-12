@@ -1323,10 +1323,13 @@ class KnowledgeGraphView(QWidget):
         if not hasattr(self, "_store") or not self._store:
             return
 
-        self._show_loading(f"Loading {node_type} nodes...")
+        total = self._store.get_type_count(node_type)
+        self._show_loading(
+            f"Loading {node_type} nodes ({total} total, showing top 50 + neighbors)..."
+        )
         QApplication.processEvents()
 
-        graph_json = self._store.get_type_subgraph(node_type, limit=100)
+        graph_json = self._store.get_type_subgraph(node_type, limit=50, max_total=300)
         self._mode = "neighborhood"
         self._render_json(graph_json)
 

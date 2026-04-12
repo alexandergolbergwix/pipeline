@@ -38,8 +38,9 @@ class GraphBuilder:
     def __init__(
         self,
         uri_generator: UriGenerator | None = None,
-        add_epistemological_status: bool = True,
-        add_cataloging_view: bool = True,
+        add_epistemological_status: bool = False,
+        add_cataloging_view: bool = False,
+        visualization_mode: bool = False,
     ):
         """Initialize the graph builder.
 
@@ -47,10 +48,15 @@ class GraphBuilder:
             uri_generator: Optional custom URI generator
             add_epistemological_status: Whether to add epistemological metadata
             add_cataloging_view: Whether to add cataloging paradigm view
+            visualization_mode: If True, disable all boilerplate nodes for lean rendering
         """
         self.uri_gen = uri_generator or UriGenerator()
-        self.add_epistemological_status = add_epistemological_status
-        self.add_cataloging_view = add_cataloging_view
+        if visualization_mode:
+            self.add_epistemological_status = False
+            self.add_cataloging_view = False
+        else:
+            self.add_epistemological_status = add_epistemological_status
+            self.add_cataloging_view = add_cataloging_view
 
     def build_graph(self, data: ExtractedData, control_number: str) -> Graph:
         """Build complete RDF graph from extracted data.

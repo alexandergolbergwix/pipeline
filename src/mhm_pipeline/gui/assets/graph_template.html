@@ -90,6 +90,7 @@ document.getElementById('stats').textContent =
 var cy = window.cy = cytoscape({
   container: document.getElementById('cy'),
   elements: graphData.nodes.concat(graphData.edges),
+  renderer: { name: 'webgl' },
   style: [
     {
       selector: 'node',
@@ -171,6 +172,27 @@ cy.nodes().forEach(function(n) {
   var d = n.degree();
   var size = Math.max(25, Math.min(80, 20 + d * 4));
   n.style({ 'width': size, 'height': size });
+});
+
+// Semantic zoom — adaptive detail based on zoom level
+cy.on('zoom', function() {
+  var z = cy.zoom();
+  if (z < 0.15) {
+    cy.batch(function() {
+      cy.nodes().style('label', '');
+      cy.edges().style('display', 'none');
+    });
+  } else if (z < 0.5) {
+    cy.batch(function() {
+      cy.nodes().style('label', 'data(label)');
+      cy.edges().style({'display': 'element', 'label': ''});
+    });
+  } else {
+    cy.batch(function() {
+      cy.nodes().style('label', 'data(label)');
+      cy.edges().style({'display': 'element', 'label': 'data(label)'});
+    });
+  }
 });
 
 // Edge hover highlight (labels are always visible, but emphasize on hover)

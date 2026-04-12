@@ -348,33 +348,53 @@ class GraphStore:
 
         return self._build_subgraph_json(visited, center_uri)
 
+    def get_type_count(self, node_type: str) -> int:
+        """Return total count of nodes of a given type."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM nodes WHERE node_type = ?",
+            (node_type,),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
     def get_type_subgraph(
         self,
         node_type: str,
-        limit: int = 100,
+        limit: int = 50,
+        max_total: int = 300,
     ) -> dict[str, list[dict[str, object]]]:
-        """Return nodes of a type + their 1-hop neighbors as Cytoscape.js JSON."""
-        # Get target type nodes
+        """Return nodes of a type + their 1-hop neighbors as Cytoscape.js JSON.
+
+        Caps total rendered nodes to max_total to prevent UI freeze.
+        Prioritizes most-connected nodes for richer visualization.
+        """
+        # Get most-connected nodes of this type (richest subgraph)
         rows = self._conn.execute(
-            "SELECT uri FROM nodes WHERE node_type = ? LIMIT ?",
+            """SELECT n.uri, COUNT(e.id) as degree
+               FROM nodes n
+               LEFT JOIN edges e ON n.uri = e.source OR n.uri = e.target
+               WHERE n.node_type = ?
+               GROUP BY n.uri
+               ORDER BY degree DESC
+               LIMIT ?""",
             (node_type, limit),
         ).fetchall()
         target_uris = {r["uri"] for r in rows}
 
-        # Get 1-hop neighbors
+        # Get 1-hop neighbors but cap total to prevent freeze
+        neighbor_uris: set[str] = set()
         if target_uris:
-            placeholders = ",".join("?" * len(target_uris))
-            out_rows = self._conn.execute(
-                f"SELECT target FROM edges WHERE source IN ({placeholders})",
-                list(target_uris),
-            ).fetchall()
-            in_rows = self._conn.execute(
-                f"SELECT source FROM edges WHERE target IN ({placeholders})",
-                list(target_uris),
-            ).fetchall()
-            neighbor_uris = {r["target"] for r in out_rows} | {r["source"] for r in in_rows}
-        else:
-            neighbor_uris = set()
+            remaining = max_total - len(target_uris)
+            if remaining > 0:
+                placeholders = ",".join("?" * len(target_uris))
+                out_rows = self._conn.execute(
+                    f"SELECT target FROM edges WHERE source IN ({placeholders}) LIMIT ?",
+                    [*list(target_uris), remaining],
+                ).fetchall()
+                in_rows = self._conn.execute(
+                    f"SELECT source FROM edges WHERE target IN ({placeholders}) LIMIT ?",
+                    [*list(target_uris), max(0, remaining - len(out_rows))],
+                ).fetchall()
+                neighbor_uris = {r["target"] for r in out_rows} | {r["source"] for r in in_rows}
 
         all_uris = target_uris | neighbor_uris
         return self._build_subgraph_json(all_uris)
