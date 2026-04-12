@@ -164,7 +164,7 @@ class PipelineController(QObject):
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
             return RdfBuildWorker(
-                input_path=self._resolve_input(0, kwargs),
+                input_path=self._resolve_input(2, kwargs),  # Stage 2 = authority_enriched.json
                 output_dir=output_dir,
                 rdf_format=str(kwargs.get("rdf_format", "Turtle")),
             )
