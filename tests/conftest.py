@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 import pytest
+
+# Force offscreen Qt rendering in CI (no display server on Windows/Linux runners)
+if os.environ.get("CI"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 class _BlockedHTTP(Exception):

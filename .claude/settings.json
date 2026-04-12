@@ -118,7 +118,11 @@
       "Bash(grep -A5 \"ruff\" .github/workflows/*.yml)",
       "Bash(grep -v \"^warning\\\\|^$\\\\|^Found\")",
       "Bash(.venv/bin/mypy src/)",
-      "Bash(PYTHONPATH=src:. .venv/bin/mypy src/)"
+      "Bash(PYTHONPATH=src:. .venv/bin/mypy src/)",
+      "Bash(uv lock:*)",
+      "Read(//opt/homebrew/**)",
+      "Bash(.venv/bin/uv lock:*)",
+      "Bash(ls .venv/bin/python*)"
     ],
     "additionalDirectories": [
       "/Users/alexandergo/Desktop/100richets",
