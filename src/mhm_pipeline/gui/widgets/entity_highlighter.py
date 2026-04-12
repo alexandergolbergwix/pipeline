@@ -9,19 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-
 
 # =============================================================================
 # Pure Functions for Entity Highlighting
@@ -61,7 +58,7 @@ def build_highlighted_span(text: str, bg_color: str, text_color: str) -> str:
     """
     return (
         f'<span style="background-color: {bg_color}; '
-        f'color: {text_color}; padding: 2px 4px; '
+        f"color: {text_color}; padding: 2px 4px; "
         f'border-radius: 3px; font-weight: 500;">'
         f"{text}</span>"
     )
@@ -79,9 +76,7 @@ def sort_entities_by_position(entities: list[Entity]) -> list[Entity]:
     return sorted(entities, key=lambda e: e.start)
 
 
-def calculate_text_segments(
-    text: str, entities: list[Entity]
-) -> list[tuple[str, Entity | None]]:
+def calculate_text_segments(text: str, entities: list[Entity]) -> list[tuple[str, Entity | None]]:
     """Break text into segments, pairing each with its entity (or None for plain text).
 
     Args:
@@ -134,13 +129,9 @@ def build_highlighted_html(
         if entity is None:
             html_parts.append(escape(segment_text))
         else:
-            bg_color, text_color = get_entity_colors(
-                entity, role_colors, entity_colors
-            )
+            bg_color, text_color = get_entity_colors(entity, role_colors, entity_colors)
             escaped_entity_text = escape(segment_text)
-            html_parts.append(
-                build_highlighted_span(escaped_entity_text, bg_color, text_color)
-            )
+            html_parts.append(build_highlighted_span(escaped_entity_text, bg_color, text_color))
 
     return "".join(html_parts)
 
@@ -187,10 +178,7 @@ def build_entity_display_text(entity: Entity) -> str:
     Returns:
         Formatted display string with icon, text, type, and optional role
     """
-    return (
-        f"{entity.text}  →  {entity.type}"
-        + (f" ({entity.role})" if entity.role else "")
-    )
+    return f"{entity.text}  →  {entity.type}" + (f" ({entity.role})" if entity.role else "")
 
 
 def build_entity_tooltip(entity: Entity) -> str:
@@ -217,9 +205,7 @@ def build_entity_tooltip(entity: Entity) -> str:
     return "\n".join(parts)
 
 
-def filter_entities_by_roles(
-    entities: list[Entity], selected_roles: set[str]
-) -> list[Entity]:
+def filter_entities_by_roles(entities: list[Entity], selected_roles: set[str]) -> list[Entity]:
     """Filter entities to only include those matching selected roles.
 
     Args:
@@ -232,11 +218,7 @@ def filter_entities_by_roles(
     if not selected_roles:
         return list(entities)
 
-    return [
-        entity
-        for entity in entities
-        if not entity.role or entity.role in selected_roles
-    ]
+    return [entity for entity in entities if not entity.role or entity.role in selected_roles]
 
 
 def create_entity_from_record(ent: dict) -> Entity | None:
@@ -278,10 +260,10 @@ def build_record_header_html(control_number: str) -> str:
     """
     return (
         f'<div style="background-color: #6b7280; color: white; '
-        f'padding: 4px 8px; margin-top: 8px; margin-bottom: 4px; '
+        f"padding: 4px 8px; margin-top: 8px; margin-bottom: 4px; "
         f'font-weight: bold; font-size: 12px; border-radius: 3px;">'
-        f'Control Number: {escape(str(control_number))}'
-        f'</div>\n'
+        f"Control Number: {escape(str(control_number))}"
+        f"</div>\n"
     )
 
 
@@ -297,7 +279,7 @@ def build_record_content_html(html_content: str) -> str:
     return (
         f'<div style="margin-bottom: 16px; padding: 8px; '
         f'background-color: #f9fafb; color: #1f2937; border-radius: 4px;">'
-        f'{html_content}</div>\n'
+        f"{html_content}</div>\n"
     )
 
 
@@ -313,8 +295,8 @@ def build_no_text_message(entity_count: int) -> str:
     return (
         f'<div style="margin-bottom: 16px; padding: 8px; '
         f'background-color: #f9fafb; border-radius: 4px; color: #4b5563;">'
-        f'[No text available - {entity_count} entities extracted]'
-        f'</div>\n'
+        f"[No text available - {entity_count} entities extracted]"
+        f"</div>\n"
     )
 
 
@@ -325,10 +307,10 @@ def build_no_entities_message() -> str:
         HTML div element with the message
     """
     return (
-        f'<div style="margin-bottom: 16px; padding: 8px; '
-        f'background-color: #f9fafb; border-radius: 4px; color: #6b7280;">'
-        f'[No entities found]'
-        f'</div>\n'
+        '<div style="margin-bottom: 16px; padding: 8px; '
+        'background-color: #f9fafb; border-radius: 4px; color: #6b7280;">'
+        "[No entities found]"
+        "</div>\n"
     )
 
 
@@ -547,16 +529,12 @@ class EntityHighlighter(QWidget):
         Returns:
             HTML string with styled span elements around entities
         """
-        html_content = build_highlighted_html(
-            text, entities, self.ROLE_COLORS, self.ENTITY_COLORS
-        )
+        html_content = build_highlighted_html(text, entities, self.ROLE_COLORS, self.ENTITY_COLORS)
         return wrap_in_div(html_content)
 
     def _build_highlighted_html_inner(self, text: str, entities: list[Entity]) -> str:
         """Build HTML string with highlighted entity spans (no wrapper div)."""
-        return build_highlighted_html(
-            text, entities, self.ROLE_COLORS, self.ENTITY_COLORS
-        )
+        return build_highlighted_html(text, entities, self.ROLE_COLORS, self.ENTITY_COLORS)
 
     def _populate_entity_list(self, entities: list[Entity]) -> None:
         """Populate the entity list widget with formatted items.
@@ -570,9 +548,7 @@ class EntityHighlighter(QWidget):
             icon = get_entity_icon(entity, self.ROLE_ICONS, self.DEFAULT_ICON)
             display_text = f"{icon} {build_entity_display_text(entity)}"
             tooltip = build_entity_tooltip(entity)
-            bg_color, _ = get_entity_colors(
-                entity, self.ROLE_COLORS, self.ENTITY_COLORS
-            )
+            bg_color, _ = get_entity_colors(entity, self.ROLE_COLORS, self.ENTITY_COLORS)
 
             item = QListWidgetItem(display_text)
             item.setToolTip(tooltip)
@@ -630,9 +606,7 @@ class EntityHighlighter(QWidget):
         # Re-populate entity list with filtered entities
         self._entity_list.clear()
 
-        filtered_entities = filter_entities_by_roles(
-            self._current_entities, selected_roles
-        )
+        filtered_entities = filter_entities_by_roles(self._current_entities, selected_roles)
         self._populate_entity_list(filtered_entities)
 
         # Update header with filter info
@@ -641,9 +615,7 @@ class EntityHighlighter(QWidget):
                 f"Entities Found ({len(filtered_entities)} of {len(self._current_entities)} entities)"
             )
         else:
-            self._header_label.setText(
-                f"Entities Found ({len(self._current_entities)} entities)"
-            )
+            self._header_label.setText(f"Entities Found ({len(self._current_entities)} entities)")
 
         # Rebuild text highlighting with filtered entities dimmed
         if hasattr(self, "_current_text") and self._current_text:
@@ -676,9 +648,7 @@ class EntityHighlighter(QWidget):
                 bg_color, text_color = get_entity_colors(
                     entity, self.ROLE_COLORS, self.ENTITY_COLORS
                 )
-                html_parts.append(
-                    build_highlighted_span(escaped_text, bg_color, text_color)
-                )
+                html_parts.append(build_highlighted_span(escaped_text, bg_color, text_color))
 
         self._text_edit.setHtml(wrap_in_div("".join(html_parts)))
 
@@ -711,9 +681,7 @@ class EntityHighlighter(QWidget):
             html_parts.append(build_record_header_html(control_number))
 
             if entities:
-                record_entities, all_entities = process_record_entities(
-                    record, all_entities
-                )
+                record_entities, all_entities = process_record_entities(record, all_entities)
 
                 if text:
                     html_content = self._build_highlighted_html_inner(text, record_entities)

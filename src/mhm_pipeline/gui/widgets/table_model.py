@@ -23,7 +23,9 @@ class PipelineTableModel(QAbstractTableModel):
     """Flat table model backed by a list of tuples. No widget items created."""
 
     def __init__(
-        self, headers: list[str], parent: QTableView | None = None,
+        self,
+        headers: list[str],
+        parent: QTableView | None = None,
     ) -> None:
         super().__init__(parent)
         self._headers = headers
@@ -51,7 +53,9 @@ class PipelineTableModel(QAbstractTableModel):
         return len(self._headers)
 
     def data(
-        self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole,
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
     ) -> str | None:
         if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
             return None
@@ -60,7 +64,9 @@ class PipelineTableModel(QAbstractTableModel):
         return str(row[col]) if col < len(row) else None
 
     def headerData(
-        self, section: int, orientation: Qt.Orientation,
+        self,
+        section: int,
+        orientation: Qt.Orientation,
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> str | None:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
@@ -81,7 +87,9 @@ class PipelineTableView(QWidget):
     """
 
     def __init__(
-        self, headers: list[str], parent: QWidget | None = None,
+        self,
+        headers: list[str],
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
 
@@ -142,9 +150,8 @@ class PipelineTableView(QWidget):
 
     def _on_filter(self, text: str) -> None:
         from PyQt6.QtCore import QRegularExpression
-        self._proxy.setFilterRegularExpression(
-            QRegularExpression(QRegularExpression.escape(text))
-        )
+
+        self._proxy.setFilterRegularExpression(QRegularExpression(QRegularExpression.escape(text)))
         self._update_count()
 
     def _update_count(self) -> None:

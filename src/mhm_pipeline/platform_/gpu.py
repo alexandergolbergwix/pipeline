@@ -33,6 +33,7 @@ def get_device(override: str | None = None) -> str:
 
     try:
         import torch  # noqa: PLC0415
+
         if torch.backends.mps.is_available():
             _DEVICE = "mps"
         elif torch.cuda.is_available():

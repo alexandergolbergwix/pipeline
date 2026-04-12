@@ -3,26 +3,23 @@
 from .annotation_importer import (
     AnnotationImporter,
     AnnotationType,
-    CertaintyAnnotation,
-    TextTraditionAnnotation,
-    ScribalInterventionAnnotation,
     CanonicalReferenceAnnotation,
-    TextualRelationshipAnnotation,
+    CertaintyAnnotation,
     ForeignUnitAnnotation,
+    ScribalInterventionAnnotation,
+    TextTraditionAnnotation,
+    TextualRelationshipAnnotation,
     create_sample_annotation_files,
 )
 
 __all__ = [
-    'AnnotationImporter',
-    'AnnotationType',
-    'CertaintyAnnotation',
-    'TextTraditionAnnotation',
-    'ScribalInterventionAnnotation',
-    'CanonicalReferenceAnnotation',
-    'TextualRelationshipAnnotation',
-    'ForeignUnitAnnotation',
-    'create_sample_annotation_files',
+    "AnnotationImporter",
+    "AnnotationType",
+    "CertaintyAnnotation",
+    "TextTraditionAnnotation",
+    "ScribalInterventionAnnotation",
+    "CanonicalReferenceAnnotation",
+    "TextualRelationshipAnnotation",
+    "ForeignUnitAnnotation",
+    "create_sample_annotation_files",
 ]
-
-
-

@@ -1,4 +1,5 @@
 """QThread workers for each pipeline stage."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -61,7 +62,7 @@ class MarcParseWorker(StageWorker):
             reader = UnifiedReader()
             all_records = list(reader.read_file(self._input_path))
             end = self._end if self._end > 0 else len(all_records)
-            records = all_records[self._start:end]
+            records = all_records[self._start : end]
             total = len(records)
             if total == 0:
                 self.error.emit("No records found in input file")
@@ -105,6 +106,7 @@ def _split_provenance_text(text: str) -> list[str]:
     quotes, and parenthetical boundaries.
     """
     import re  # noqa: PLC0415
+
     segments: list[str] = []
     for pipe_seg in text.split("|"):
         pipe_seg = pipe_seg.strip()
@@ -164,9 +166,7 @@ def _adjust_entity_positions(
     return entities
 
 
-def _process_text_segment(
-    pipeline: object, text: str, offset: int
-) -> list[dict[str, object]]:
+def _process_text_segment(pipeline: object, text: str, offset: int) -> list[dict[str, object]]:
     """Process one text segment and return position-adjusted entities."""
     segment_entities = pipeline.process_text(text)
     return _adjust_entity_positions(segment_entities, offset)
@@ -204,6 +204,7 @@ class NerWorker(StageWorker):
     def _resolve_model_path(explicit: str, env_var: str, fallback: str) -> str:
         """Resolve model path from explicit arg, env var, or fallback."""
         import os  # noqa: PLC0415
+
         if explicit:
             return explicit
         from_env = os.environ.get(env_var, "")
@@ -249,9 +250,11 @@ class NerWorker(StageWorker):
             )
             if prov_path:
                 from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
                 self.log_line.emit("Loading provenance NER model...")
                 provenance_pipeline = NERInferencePipeline(
-                    model_path=prov_path, device=self._device,
+                    model_path=prov_path,
+                    device=self._device,
                 )
 
             # 3. Contents NER (optional)
@@ -263,9 +266,11 @@ class NerWorker(StageWorker):
             )
             if cont_path:
                 from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
                 self.log_line.emit("Loading contents NER model...")
                 contents_pipeline = NERInferencePipeline(
-                    model_path=cont_path, device=self._device,
+                    model_path=cont_path,
+                    device=self._device,
                 )
 
             models_loaded = 1 + (1 if provenance_pipeline else 0) + (1 if contents_pipeline else 0)
@@ -302,7 +307,7 @@ class NerWorker(StageWorker):
 
                 # Contents NER on MARC 505
                 if contents_pipeline:
-                    for content in (record.get("contents") or []):
+                    for content in record.get("contents") or []:
                         if isinstance(content, dict):
                             parts = []
                             if content.get("folio_range"):
@@ -325,11 +330,13 @@ class NerWorker(StageWorker):
                             except Exception as cont_exc:
                                 logger.warning("Contents NER error: %s", cont_exc)
 
-                results.append({
-                    "_control_number": record.get("_control_number"),
-                    "text": "\n".join(texts),
-                    "entities": all_entities,
-                })
+                results.append(
+                    {
+                        "_control_number": record.get("_control_number"),
+                        "text": "\n".join(texts),
+                        "entities": all_entities,
+                    }
+                )
                 self.progress.emit(int((idx + 1) / total * 100))
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -381,9 +388,9 @@ class AuthorityWorker(StageWorker):
         mazal_db_path: str = "",
     ) -> None:
         super().__init__()
-        self._input_path = input_path       # MARC extract (stage 0 output)
+        self._input_path = input_path  # MARC extract (stage 0 output)
         self._output_dir = output_dir
-        self._ner_path = ner_path           # NER results (stage 1 output, optional)
+        self._ner_path = ner_path  # NER results (stage 1 output, optional)
         self._enable_viaf = enable_viaf
         self._enable_kima = enable_kima
         self._kima_db_path = kima_db_path or None
@@ -441,8 +448,8 @@ class AuthorityWorker(StageWorker):
     def _match_against_authorities(
         self,
         name: str,
-        mazal: "MazalMatcher",
-        viaf: "VIAFMatcher | None",
+        mazal: MazalMatcher,
+        viaf: VIAFMatcher | None,
     ) -> tuple[str | None, str | None]:
         """Match a name against Mazal and optionally VIAF authorities.
 
@@ -459,8 +466,8 @@ class AuthorityWorker(StageWorker):
     def _match_ner_entity(
         self,
         entity: dict,
-        mazal: "MazalMatcher",
-        viaf: "VIAFMatcher | None",
+        mazal: MazalMatcher,
+        viaf: VIAFMatcher | None,
     ) -> dict[str, int]:
         """Match a single NER entity against authority databases.
 
@@ -471,7 +478,9 @@ class AuthorityWorker(StageWorker):
         if self._has_valid_name(entity, "person"):
             name = str(entity.get("person", "")).strip()
         # OWNER and WORK_AUTHOR entities from provenance/contents NER
-        elif entity.get("type") in ("OWNER", "WORK_AUTHOR") and self._has_valid_name(entity, "text"):
+        elif entity.get("type") in ("OWNER", "WORK_AUTHOR") and self._has_valid_name(
+            entity, "text"
+        ):
             name = str(entity.get("text", "")).strip()
         else:
             return {"counted": 0, "matched": 0}
@@ -489,8 +498,8 @@ class AuthorityWorker(StageWorker):
         person: dict,
         role: str,
         field: str,
-        mazal: "MazalMatcher",
-        viaf: "VIAFMatcher | None",
+        mazal: MazalMatcher,
+        viaf: VIAFMatcher | None,
     ) -> dict[str, object] | None:
         """Match a single MARC person entry (author or contributor).
 
@@ -516,6 +525,7 @@ class AuthorityWorker(StageWorker):
         # Harvest VIAF cluster identifiers (GND, LC, ISNI, BnF)
         if viaf_uri and viaf:
             import re as _re  # noqa: PLC0415
+
             viaf_id_match = _re.search(r"/viaf/(\d+)", viaf_uri)
             if viaf_id_match:
                 cluster = viaf.get_cluster_identifiers(viaf_id_match.group(1))
@@ -535,6 +545,7 @@ class AuthorityWorker(StageWorker):
                 match_info["dates"] = details["dates"]
                 # Parse "1488-1575" → birth_year, death_year
                 import re  # noqa: PLC0415
+
                 parts = re.split(r"[-–]", details["dates"].strip())
                 for p in parts:
                     p = p.strip().rstrip("?")
@@ -557,8 +568,8 @@ class AuthorityWorker(StageWorker):
         self,
         control_number: str,
         marc_by_cn: dict[str, dict[str, object]],
-        mazal: "MazalMatcher",
-        viaf: "VIAFMatcher | None",
+        mazal: MazalMatcher,
+        viaf: VIAFMatcher | None,
     ) -> list[dict[str, object]]:
         """Match all persons from MARC record (authors and contributors).
 
@@ -601,7 +612,7 @@ class AuthorityWorker(StageWorker):
         self,
         control_number: str,
         marc_by_cn: dict[str, dict[str, object]],
-        kima: "KimaMatcher | None",
+        kima: KimaMatcher | None,
     ) -> dict[str, str] | None:
         """Match places from MARC record against KIMA authority.
 
@@ -614,9 +625,7 @@ class AuthorityWorker(StageWorker):
             return None
 
         marc_rec = marc_by_cn[control_number]
-        places: list[str] = [
-            str(p) for p in (marc_rec.get("related_places") or []) if p
-        ]
+        places: list[str] = [str(p) for p in (marc_rec.get("related_places") or []) if p]
 
         if not places:
             return None
@@ -639,10 +648,7 @@ class AuthorityWorker(StageWorker):
         ner_records: list[dict[str, object]] = json.loads(
             self._ner_path.read_text(encoding="utf-8"),
         )
-        ner_by_cn = {
-            str(r.get("_control_number", "")): r
-            for r in ner_records
-        }
+        ner_by_cn = {str(r.get("_control_number", "")): r for r in ner_records}
         self.log_line.emit(f"Loaded {len(ner_by_cn)} NER records for entity merging")
         return ner_by_cn
 
@@ -665,7 +671,7 @@ class AuthorityWorker(StageWorker):
                 enriched += 1
         return enriched
 
-    def _init_viaf(self, viaf_matcher_class: type) -> "VIAFMatcher | None":
+    def _init_viaf(self, viaf_matcher_class: type) -> VIAFMatcher | None:
         """Initialize VIAF matcher if enabled."""
         if not self._enable_viaf:
             return None
@@ -675,7 +681,7 @@ class AuthorityWorker(StageWorker):
     def _init_kima(
         self,
         kima_matcher_class: type,
-    ) -> "KimaMatcher | None":
+    ) -> KimaMatcher | None:
         """Initialize KIMA matcher if enabled."""
         if not self._enable_kima:
             return None
@@ -684,9 +690,9 @@ class AuthorityWorker(StageWorker):
 
     def run(self) -> None:
         try:
+            from converter.authority.kima_matcher import KimaMatcher
             from converter.authority.mazal_matcher import MazalMatcher
             from converter.authority.viaf_matcher import VIAFMatcher
-            from converter.authority.kima_matcher import KimaMatcher
 
             # ── load MARC extract (primary input) ────────────────────
             self.log_line.emit(f"Loading MARC extract from {self._input_path.name}")
@@ -712,7 +718,9 @@ class AuthorityWorker(StageWorker):
             # ── initialise matchers ───────────────────────────────────
             self.log_line.emit("Loading Mazal authority index")
             mazal = MazalMatcher(index_path=self._mazal_db_path)
-            self.log_line.emit(f"Mazal index available: {mazal.is_available} (path: {mazal.index_path})")
+            self.log_line.emit(
+                f"Mazal index available: {mazal.is_available} (path: {mazal.index_path})"
+            )
 
             viaf = self._init_viaf(VIAFMatcher)
             kima = self._init_kima(KimaMatcher)
@@ -746,7 +754,9 @@ class AuthorityWorker(StageWorker):
                 self.progress.emit(int((idx + 1) / total * 100))
 
             # Log summary
-            self.log_line.emit(f"Authority matching: {total_matched}/{total_entities} entities matched")
+            self.log_line.emit(
+                f"Authority matching: {total_matched}/{total_entities} entities matched"
+            )
 
             mazal.close()
             if kima is not None:
@@ -765,29 +775,24 @@ class AuthorityWorker(StageWorker):
 
             # summary
             n_viaf = sum(
-                1 for r in records
-                for e in (r.get("entities") or [])
-                if e.get("viaf_uri")
+                1 for r in records for e in (r.get("entities") or []) if e.get("viaf_uri")
             ) + sum(
-                1 for r in records
+                1
+                for r in records
                 for e in (r.get("marc_authority_matches") or [])
                 if e.get("viaf_uri")
             )
             n_mazal = sum(
-                1 for r in records
-                for e in (r.get("entities") or [])
-                if e.get("mazal_id")
+                1 for r in records for e in (r.get("entities") or []) if e.get("mazal_id")
             ) + sum(
-                1 for r in records
+                1
+                for r in records
                 for e in (r.get("marc_authority_matches") or [])
                 if e.get("mazal_id")
             )
             n_kima = sum(1 for r in records if r.get("kima_places"))
             n_ner = sum(1 for r in records if r.get("entities"))
-            n_marc_matched = sum(
-                len(r.get("marc_authority_matches", []))
-                for r in records
-            )
+            n_marc_matched = sum(len(r.get("marc_authority_matches", [])) for r in records)
             self.log_line.emit(
                 f"Authority matching complete — {total} records | "
                 f"NER enriched: {n_ner} | "
@@ -854,15 +859,11 @@ class MazalIndexWorker(StageWorker):
                     for name in record.get("names_heb", []):
                         norm = MazalIndex.normalize_name(name)
                         if norm:
-                            index.insert_name_variant(
-                                norm, nli_id, record["entity_type"], "heb"
-                            )
+                            index.insert_name_variant(norm, nli_id, record["entity_type"], "heb")
                     for name in record.get("names_lat", []):
                         norm = MazalIndex.normalize_name(name)
                         if norm:
-                            index.insert_name_variant(
-                                norm, nli_id, record["entity_type"], "lat"
-                            )
+                            index.insert_name_variant(norm, nli_id, record["entity_type"], "lat")
                     total_records += 1
                     if total_records % 10_000 == 0:
                         index.conn.commit()
@@ -900,9 +901,7 @@ class KimaIndexWorker(StageWorker):
         try:
             from converter.authority.kima_index import build_kima_index
 
-            self.log_line.emit(
-                f"Building KIMA index from {self._tsv_dir} → {self._db_path}"
-            )
+            self.log_line.emit(f"Building KIMA index from {self._tsv_dir} → {self._db_path}")
 
             def _progress(pct: int) -> None:
                 self.progress.emit(pct)
@@ -928,9 +927,7 @@ class KimaIndexWorker(StageWorker):
 class RdfBuildWorker(StageWorker):
     """Build RDF graph from MARC records and serialize to Turtle."""
 
-    def __init__(
-        self, input_path: Path, output_dir: Path, rdf_format: str = "Turtle"
-    ) -> None:
+    def __init__(self, input_path: Path, output_dir: Path, rdf_format: str = "Turtle") -> None:
         super().__init__()
         self._input_path = input_path
         self._output_dir = output_dir
@@ -954,9 +951,7 @@ class RdfBuildWorker(StageWorker):
             output_path = self._output_dir / f"output{ext}"
             graph.serialize(destination=str(output_path), format=fmt)
 
-            self.log_line.emit(
-                f"RDF graph built — {len(graph)} triples"
-            )
+            self.log_line.emit(f"RDF graph built — {len(graph)} triples")
             self.progress.emit(100)
             self.finished.emit(output_path)
         except Exception as exc:
@@ -1104,6 +1099,7 @@ class WikidataUploadWorker(StageWorker):
             if items_with_nli:
                 try:
                     from converter.wikidata.reconciler import WikidataReconciler  # noqa: PLC0415
+
                     reconciler = WikidataReconciler()
                     self.log_line.emit(f"  SPARQL: checking {len(items_with_nli)} NLI IDs...")
                     batch_qids = reconciler.reconcile_batch_by_nli_id(items_with_nli)
@@ -1116,7 +1112,9 @@ class WikidataUploadWorker(StageWorker):
 
             n_existing = sum(1 for i in items if i.existing_qid)
             n_new = len(items) - n_existing
-            self.log_line.emit(f"Reconciliation: {n_existing} existing + {n_new} new = {len(items)} total")
+            self.log_line.emit(
+                f"Reconciliation: {n_existing} existing + {n_new} new = {len(items)} total"
+            )
             self.progress.emit(45)
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -1134,13 +1132,15 @@ class WikidataUploadWorker(StageWorker):
                 summary_path = self._output_dir / "wikidata_items.json"
                 summary = []
                 for item in items:
-                    summary.append({
-                        "local_id": item.local_id,
-                        "entity_type": item.entity_type,
-                        "labels": item.labels,
-                        "existing_qid": item.existing_qid,
-                        "statements_count": len(item.statements),
-                    })
+                    summary.append(
+                        {
+                            "local_id": item.local_id,
+                            "entity_type": item.entity_type,
+                            "labels": item.labels,
+                            "existing_qid": item.existing_qid,
+                            "statements_count": len(item.statements),
+                        }
+                    )
                 summary_path.write_text(
                     json.dumps(summary, ensure_ascii=False, indent=2),
                     encoding="utf-8",
@@ -1162,7 +1162,10 @@ class WikidataUploadWorker(StageWorker):
                 )
 
                 def _entity_cb(
-                    local_id: str, status: str, qid: str | None, msg: str | None,
+                    local_id: str,
+                    status: str,
+                    qid: str | None,
+                    msg: str | None,
                 ) -> None:
                     self.entity_status.emit(
                         str(local_id or ""),
@@ -1183,7 +1186,7 @@ class WikidataUploadWorker(StageWorker):
                 updated = sum(1 for r in results if r.status == "updated")
                 unchanged = sum(1 for r in results if r.status == "exists")
                 failed = sum(1 for r in results if r.status == "failed")
-                success = created + updated + unchanged
+                created + updated + unchanged
 
                 output_path = self._output_dir / "upload_results.json"
                 result_data = [

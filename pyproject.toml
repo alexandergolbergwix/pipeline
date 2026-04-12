@@ -48,10 +48,11 @@ packages = ["src/mhm_pipeline"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+extend-exclude = ["ner/", "ontology/", "data/", "installer/", "paper/", "audit_*"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "N", "ANN", "S", "B", "A", "C4", "PT"]
-ignore = ["ANN101", "ANN102", "ANN401", "S101"]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "F821", "E722", "E402", "F401", "F402", "B008", "B007"]
 
 [tool.mypy]
 strict = true

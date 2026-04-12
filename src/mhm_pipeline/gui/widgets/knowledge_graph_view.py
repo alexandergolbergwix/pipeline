@@ -11,7 +11,6 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -62,15 +61,15 @@ _TYPE_MAP: dict[str, str] = {
 }
 
 _NODE_COLORS: dict[str, dict[str, str]] = {
-    "manuscript":         {"bg": "#dbeafe", "border": "#3b82f6"},
-    "person":             {"bg": "#fce7f3", "border": "#ec4899"},
-    "work":               {"bg": "#dcfce7", "border": "#22c55e"},
-    "expression":         {"bg": "#ccfbf1", "border": "#14b8a6"},
-    "place":              {"bg": "#fef3c7", "border": "#eab308"},
+    "manuscript": {"bg": "#dbeafe", "border": "#3b82f6"},
+    "person": {"bg": "#fce7f3", "border": "#ec4899"},
+    "work": {"bg": "#dcfce7", "border": "#22c55e"},
+    "expression": {"bg": "#ccfbf1", "border": "#14b8a6"},
+    "place": {"bg": "#fef3c7", "border": "#eab308"},
     "codicological_unit": {"bg": "#ffedd5", "border": "#f97316"},
-    "event":              {"bg": "#ede9fe", "border": "#8b5cf6"},
-    "organization":       {"bg": "#e0e7ff", "border": "#6366f1"},
-    "default":            {"bg": "#f3f4f6", "border": "#6b7280"},
+    "event": {"bg": "#ede9fe", "border": "#8b5cf6"},
+    "organization": {"bg": "#e0e7ff", "border": "#6366f1"},
+    "default": {"bg": "#f3f4f6", "border": "#6b7280"},
 }
 
 
@@ -85,9 +84,9 @@ class RdfToJsonConverter:
     """
 
     @staticmethod
-    def convert(graph: "rdflib.Graph") -> dict[str, list[dict[str, object]]]:
+    def convert(graph: rdflib.Graph) -> dict[str, list[dict[str, object]]]:
         """Return ``{"nodes": [...], "edges": [...]}`` for Cytoscape.js."""
-        from rdflib import RDF, RDFS, BNode, Literal, URIRef  # noqa: PLC0415
+        from rdflib import RDF, RDFS, Literal  # noqa: PLC0415
 
         # Collect types and labels
         node_types: dict[str, str] = {}
@@ -100,9 +99,7 @@ class RdfToJsonConverter:
 
             if isinstance(o, Literal):
                 # Store literals as properties on the subject
-                node_props.setdefault(s_id, {}).setdefault(
-                    _shorten_uri(p_str), []
-                ).append(str(o))
+                node_props.setdefault(s_id, {}).setdefault(_shorten_uri(p_str), []).append(str(o))
                 if p == RDFS.label:
                     node_labels[s_id] = str(o)
                 continue
@@ -125,14 +122,16 @@ class RdfToJsonConverter:
             node_ids.add(s_id)
             node_ids.add(o_id)
             if p != RDF.type:
-                edges.append({
-                    "data": {
-                        "id": f"e_{len(edges)}",
-                        "source": s_id,
-                        "target": o_id,
-                        "label": _shorten_uri(str(p)),
+                edges.append(
+                    {
+                        "data": {
+                            "id": f"e_{len(edges)}",
+                            "source": s_id,
+                            "target": o_id,
+                            "label": _shorten_uri(str(p)),
+                        }
                     }
-                })
+                )
 
         # Build nodes
         nodes: list[dict[str, object]] = []
@@ -140,21 +139,23 @@ class RdfToJsonConverter:
             ntype = node_types.get(nid, _infer_type_from_uri(nid))
             colors = _NODE_COLORS.get(ntype, _NODE_COLORS["default"])
             label = node_labels.get(nid, _local_name(nid))
-            nodes.append({
-                "data": {
-                    "id": nid,
-                    "label": label[:40],
-                    "nodeType": ntype,
-                    "bgColor": colors["bg"],
-                    "borderColor": colors["border"],
-                    "properties": node_props.get(nid, {}),
+            nodes.append(
+                {
+                    "data": {
+                        "id": nid,
+                        "label": label[:40],
+                        "nodeType": ntype,
+                        "bgColor": colors["bg"],
+                        "borderColor": colors["border"],
+                        "properties": node_props.get(nid, {}),
+                    }
                 }
-            })
+            )
 
         return {"nodes": nodes, "edges": edges}
 
     @staticmethod
-    def convert_summary(graph: "rdflib.Graph") -> dict[str, list[dict[str, object]]]:
+    def convert_summary(graph: rdflib.Graph) -> dict[str, list[dict[str, object]]]:
         """Build an aggregated summary: one node per type category.
 
         Shows ~10 nodes (one per ontology class), with edge counts between
@@ -193,43 +194,47 @@ class RdfToJsonConverter:
         nodes: list[dict[str, object]] = []
         for cat, count in cat_counts.items():
             colors = _NODE_COLORS.get(cat, _NODE_COLORS["default"])
-            nodes.append({
-                "data": {
-                    "id": f"cluster_{cat}",
-                    "label": f"{cat.replace('_', ' ').title()}\n({count})",
-                    "nodeType": cat,
-                    "bgColor": colors["bg"],
-                    "borderColor": colors["border"],
-                    "properties": {"count": [str(count)]},
-                    "isCluster": True,
-                    "memberCount": count,
+            nodes.append(
+                {
+                    "data": {
+                        "id": f"cluster_{cat}",
+                        "label": f"{cat.replace('_', ' ').title()}\n({count})",
+                        "nodeType": cat,
+                        "bgColor": colors["bg"],
+                        "borderColor": colors["border"],
+                        "properties": {"count": [str(count)]},
+                        "isCluster": True,
+                        "memberCount": count,
+                    }
                 }
-            })
+            )
 
         # Build summary edges
         edges: list[dict[str, object]] = []
         for (src, tgt), count in edge_counts.items():
-            edges.append({
-                "data": {
-                    "id": f"ce_{src}_{tgt}",
-                    "source": f"cluster_{src}",
-                    "target": f"cluster_{tgt}",
-                    "label": str(count),
+            edges.append(
+                {
+                    "data": {
+                        "id": f"ce_{src}_{tgt}",
+                        "source": f"cluster_{src}",
+                        "target": f"cluster_{tgt}",
+                        "label": str(count),
+                    }
                 }
-            })
+            )
 
         return {"nodes": nodes, "edges": edges}
 
     @staticmethod
     def convert_neighborhood(
-        graph: "rdflib.Graph",
+        graph: rdflib.Graph,
         center_uri: str,
         hops: int = 1,
     ) -> dict[str, list[dict[str, object]]]:
         """Extract the N-hop neighborhood around a single node."""
         from rdflib import RDF, RDFS, Literal, URIRef  # noqa: PLC0415
 
-        center = URIRef(center_uri)
+        URIRef(center_uri)
         visited: set[str] = {center_uri}
         frontier: set[str] = {center_uri}
 
@@ -261,7 +266,8 @@ class RdfToJsonConverter:
                 continue
             if isinstance(o, Literal):
                 node_props.setdefault(s_id, {}).setdefault(
-                    _shorten_uri(str(p)), [],
+                    _shorten_uri(str(p)),
+                    [],
                 ).append(str(o))
                 if p == RDFS.label:
                     node_labels[s_id] = str(o)
@@ -281,14 +287,16 @@ class RdfToJsonConverter:
             if s_id in visited and o_id in visited:
                 edge_nodes.add(s_id)
                 edge_nodes.add(o_id)
-                edges.append({
-                    "data": {
-                        "id": f"e_{len(edges)}",
-                        "source": s_id,
-                        "target": o_id,
-                        "label": _shorten_uri(str(p)),
+                edges.append(
+                    {
+                        "data": {
+                            "id": f"e_{len(edges)}",
+                            "source": s_id,
+                            "target": o_id,
+                            "label": _shorten_uri(str(p)),
+                        }
                     }
-                })
+                )
 
         nodes: list[dict[str, object]] = []
         for nid in edge_nodes:
@@ -296,28 +304,31 @@ class RdfToJsonConverter:
             colors = _NODE_COLORS.get(ntype, _NODE_COLORS["default"])
             label = node_labels.get(nid, _local_name(nid))
             is_center = nid == center_uri
-            nodes.append({
-                "data": {
-                    "id": nid,
-                    "label": label[:40],
-                    "nodeType": ntype,
-                    "bgColor": colors["bg"],
-                    "borderColor": "#f59e0b" if is_center else colors["border"],
-                    "properties": node_props.get(nid, {}),
+            nodes.append(
+                {
+                    "data": {
+                        "id": nid,
+                        "label": label[:40],
+                        "nodeType": ntype,
+                        "bgColor": colors["bg"],
+                        "borderColor": "#f59e0b" if is_center else colors["border"],
+                        "properties": node_props.get(nid, {}),
+                    }
                 }
-            })
+            )
 
         return {"nodes": nodes, "edges": edges}
 
     @staticmethod
     def get_members_of_type(
-        graph: "rdflib.Graph", category: str,
+        graph: rdflib.Graph,
+        category: str,
     ) -> list[tuple[str, str]]:
         """Return (uri, label) pairs for all nodes of a given type category."""
         from rdflib import RDF, RDFS, Literal  # noqa: PLC0415
 
         members: list[tuple[str, str]] = []
-        for s, p, o in graph.triples((None, RDF.type, None)):
+        for s, _p, o in graph.triples((None, RDF.type, None)):
             local = _local_name(str(o))
             cat = _TYPE_MAP.get(local, "default")
             if cat == category:
@@ -349,10 +360,17 @@ def _infer_type_from_uri(uri: str) -> str:
     """Guess node type from URI patterns when no rdf:type is available."""
     uri_lower = uri.lower()
     for keyword, category in [
-        ("person", "person"), ("ms_", "manuscript"), ("manuscript", "manuscript"),
-        ("work", "work"), ("expression", "expression"), ("place", "place"),
-        ("cu_", "codicological_unit"), ("event", "event"), ("creation", "event"),
-        ("production", "event"), ("group", "organization"),
+        ("person", "person"),
+        ("ms_", "manuscript"),
+        ("manuscript", "manuscript"),
+        ("work", "work"),
+        ("expression", "expression"),
+        ("place", "place"),
+        ("cu_", "codicological_unit"),
+        ("event", "event"),
+        ("creation", "event"),
+        ("production", "event"),
+        ("group", "organization"),
     ]:
         if keyword in uri_lower:
             return category
@@ -365,9 +383,9 @@ def _infer_type_from_uri(uri: str) -> str:
 class _GraphBridge(QObject):
     """Bridge object exposed to JavaScript via QWebChannel."""
 
-    node_selected = pyqtSignal(str, str)   # (node_id, json_properties)
-    edge_selected = pyqtSignal(str, str)   # (edge_id, json_data)
-    cluster_expand = pyqtSignal(str)       # (node_type category)
+    node_selected = pyqtSignal(str, str)  # (node_id, json_properties)
+    edge_selected = pyqtSignal(str, str)  # (edge_id, json_data)
+    cluster_expand = pyqtSignal(str)  # (node_type category)
 
     @pyqtSlot(str, str)
     def onNodeSelected(self, node_id: str, properties_json: str) -> None:  # noqa: N802
@@ -483,7 +501,7 @@ class _EntityDetailPanel(QWidget):
 
     _MAX_VISIBLE_ROWS = 15  # Show first N rows, then "Show more..."
 
-    def show_entity(self, uri: str, store: "GraphStore") -> None:
+    def show_entity(self, uri: str, store: GraphStore) -> None:
         """Load and display all data for the given entity URI."""
         from mhm_pipeline.gui import theme  # noqa: PLC0415
 
@@ -493,17 +511,14 @@ class _EntityDetailPanel(QWidget):
         nc = theme.node_color(ntype)
 
         self._title_label.setText(label)
-        self._title_label.setStyleSheet(
-            f"font-weight: bold; font-size: 13px; color: {nc.text};"
-        )
+        self._title_label.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {nc.text};")
         self._type_label.setText(
             f'<span style="background:{nc.bg}; color:{nc.text}; '
             f'padding:2px 8px; border-radius:3px; font-size:10px;">'
-            f'{ntype.replace("_", " ").title()}</span>'
+            f"{ntype.replace('_', ' ').title()}</span>"
         )
         self._uri_label.setText(
-            f'<span style="color:{theme.ui("subtext")}; font-size:10px;">'
-            f'{_local_name(uri)}</span>'
+            f'<span style="color:{theme.ui("subtext")}; font-size:10px;">{_local_name(uri)}</span>'
         )
 
         # Properties
@@ -532,7 +547,10 @@ class _EntityDetailPanel(QWidget):
         self._outgoing_section.clear_body()
         self._outgoing_section.set_title(f"Outgoing ({len(outgoing)})")
         self._add_edge_rows_paginated(
-            self._outgoing_section, outgoing, "→", theme,
+            self._outgoing_section,
+            outgoing,
+            "→",
+            theme,
         )
 
         # Incoming relationships (paginated)
@@ -540,7 +558,10 @@ class _EntityDetailPanel(QWidget):
         self._incoming_section.clear_body()
         self._incoming_section.set_title(f"Incoming ({len(incoming)})")
         self._add_edge_rows_paginated(
-            self._incoming_section, incoming, "←", theme,
+            self._incoming_section,
+            incoming,
+            "←",
+            theme,
         )
 
         # Authority links
@@ -550,7 +571,7 @@ class _EntityDetailPanel(QWidget):
             self._authority_section.show()
             for key, val in authority_links:
                 icon = "🌐" if "viaf" in val.lower() else "🏛️" if val.startswith("987") else "📚"
-                lbl = QLabel(f'{icon} <b>{key}</b>: {val}')
+                lbl = QLabel(f"{icon} <b>{key}</b>: {val}")
                 lbl.setWordWrap(True)
                 lbl.setStyleSheet("font-size: 10px;")
                 self._authority_section.add_widget(lbl)
@@ -568,8 +589,13 @@ class _EntityDetailPanel(QWidget):
         visible = edges[: self._MAX_VISIBLE_ROWS]
         for edge in visible:
             self._add_edge_row(
-                section, edge["predicate"],
-                edge["uri"], edge["label"], edge["type"], arrow, theme,
+                section,
+                edge["predicate"],
+                edge["uri"],
+                edge["label"],
+                edge["type"],
+                arrow,
+                theme,
             )
         remaining = len(edges) - len(visible)
         if remaining > 0:
@@ -581,35 +607,48 @@ class _EntityDetailPanel(QWidget):
             )
             more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
-            def expand(checked: bool, s: _CollapsibleSection = section,
-                       all_edges: list[dict[str, str]] = edges,
-                       btn: QPushButton = more_btn) -> None:
+            def expand(
+                checked: bool,
+                s: _CollapsibleSection = section,
+                all_edges: list[dict[str, str]] = edges,
+                btn: QPushButton = more_btn,
+            ) -> None:
                 btn.hide()
                 for edge in all_edges[self._MAX_VISIBLE_ROWS :]:
                     self._add_edge_row(
-                        s, edge["predicate"],
-                        edge["uri"], edge["label"], edge["type"], arrow, theme,
+                        s,
+                        edge["predicate"],
+                        edge["uri"],
+                        edge["label"],
+                        edge["type"],
+                        arrow,
+                        theme,
                     )
 
             more_btn.clicked.connect(expand)
             section.add_widget(more_btn)
 
     def _add_edge_row(
-        self, section: _CollapsibleSection, predicate: str,
-        target_uri: str, target_label: str, target_type: str,
-        arrow: str, theme: object,
+        self,
+        section: _CollapsibleSection,
+        predicate: str,
+        target_uri: str,
+        target_label: str,
+        target_type: str,
+        arrow: str,
+        theme: object,
     ) -> None:
         """Add a clickable relationship row to a section."""
         nc = theme.node_color(target_type)
-        btn = QPushButton(
-            f'{predicate} {arrow} {target_label[:35]}'
-        )
+        btn = QPushButton(f"{predicate} {arrow} {target_label[:35]}")
         btn.setStyleSheet(
             f"QPushButton {{ text-align: left; border: none; padding: 2px 4px; "
             f"font-size: 10px; color: {nc.text}; }}"
             f"QPushButton:hover {{ background-color: {nc.bg}; border-radius: 3px; }}"
         )
-        btn.setToolTip(f"{predicate} {arrow} {target_label}\nType: {target_type}\nURI: {_local_name(target_uri)}")
+        btn.setToolTip(
+            f"{predicate} {arrow} {target_label}\nType: {target_type}\nURI: {_local_name(target_uri)}"
+        )
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda checked, u=target_uri: self.navigate_to_node.emit(u))
         section.add_widget(btn)
@@ -780,9 +819,7 @@ class KnowledgeGraphView(QWidget):
         overlay_layout.addWidget(self._loading_title)
 
         self._loading_detail = QLabel("")
-        self._loading_detail.setStyleSheet(
-            "font-size: 12px; background: transparent;"
-        )
+        self._loading_detail.setStyleSheet("font-size: 12px; background: transparent;")
         self._loading_detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         overlay_layout.addWidget(self._loading_detail)
 
@@ -807,8 +844,10 @@ class KnowledgeGraphView(QWidget):
         except Exception as exc:
             logger.error("Failed to create WebEngine view: %s", exc, exc_info=True)
             self._web_view = None
-            lbl = QLabel(f"Graph viewer failed to initialize:\n{exc}\n\n"
-                         "Try: uv pip install 'PyQt6-WebEngine==6.10.0'")
+            lbl = QLabel(
+                f"Graph viewer failed to initialize:\n{exc}\n\n"
+                "Try: uv pip install 'PyQt6-WebEngine==6.10.0'"
+            )
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setWordWrap(True)
             self._web_layout.addWidget(lbl)
@@ -826,8 +865,12 @@ class KnowledgeGraphView(QWidget):
         text = "#cdd6f4" if dark else "#1f2937"
         sub = "#a6adc8" if dark else "#6b7280"
         self._loading_overlay.setStyleSheet(f"background-color: {bg}; border-radius: 8px;")
-        self._loading_title.setStyleSheet(f"color: {text}; font-size: 18px; font-weight: bold; background: transparent;")
-        self._loading_detail.setStyleSheet(f"color: {sub}; font-size: 12px; background: transparent;")
+        self._loading_title.setStyleSheet(
+            f"color: {text}; font-size: 18px; font-weight: bold; background: transparent;"
+        )
+        self._loading_detail.setStyleSheet(
+            f"color: {sub}; font-size: 12px; background: transparent;"
+        )
 
         self._loading_overlay.setGeometry(self.rect())
         self._loading_detail.setText(message)
@@ -851,7 +894,7 @@ class KnowledgeGraphView(QWidget):
         self._pending_ttl = ttl_path
         QTimer.singleShot(50, self._do_build_store)
 
-    def load_graph(self, graph: "rdflib.Graph") -> None:
+    def load_graph(self, graph: rdflib.Graph) -> None:
         """Load an rdflib Graph by writing it to a temp file first.
 
         This avoids holding the rdflib graph in memory — it's serialized
@@ -866,6 +909,7 @@ class KnowledgeGraphView(QWidget):
         self._show_loading("Preparing graph...")
         fd, tmp_path = tempfile.mkstemp(suffix=".ttl", prefix="graph_")
         import os  # noqa: PLC0415
+
         os.close(fd)
 
         graph.serialize(destination=tmp_path, format="turtle")
@@ -897,6 +941,7 @@ class KnowledgeGraphView(QWidget):
 
         # Force garbage collection
         import gc  # noqa: PLC0415
+
         gc.collect()
 
         stats = self._store.get_stats()
@@ -927,9 +972,7 @@ class KnowledgeGraphView(QWidget):
         """Render a Cytoscape.js JSON into the web view."""
         self._graph_json = graph_json
         self._node_types = {
-            n["data"]["nodeType"]
-            for n in graph_json["nodes"]
-            if n["data"].get("nodeType")
+            n["data"]["nodeType"] for n in graph_json["nodes"] if n["data"].get("nodeType")
         }
         self._rebuild_filter_checkboxes()
 
@@ -1040,7 +1083,6 @@ class KnowledgeGraphView(QWidget):
         """
         self._web_view.page().runJavaScript(js)
 
-
     # ── HTML builder ─────────────────────────────────────────────────
 
     def _build_html_file_refs(self, graph_json: dict[str, list[dict[str, object]]]) -> str:
@@ -1049,23 +1091,26 @@ class KnowledgeGraphView(QWidget):
         This avoids the setHtml() crash on macOS caused by large inline JS.
         The JS files are copied to the same temp directory as the HTML.
         """
-        from mhm_pipeline.gui.widgets.base_visualization_widget import is_dark_mode  # noqa: PLC0415
 
         template_path = _ASSETS_DIR / "graph_template.html"
         template = template_path.read_text(encoding="utf-8")
 
         # Use <script src="..."> references instead of inlining
         template = template.replace(
-            "<!-- JS_CYTOSCAPE -->", '<script src="cytoscape.min.js"></script>',
+            "<!-- JS_CYTOSCAPE -->",
+            '<script src="cytoscape.min.js"></script>',
         )
         template = template.replace(
-            "<!-- JS_DAGRE -->", '<script src="dagre.min.js"></script>',
+            "<!-- JS_DAGRE -->",
+            '<script src="dagre.min.js"></script>',
         )
         template = template.replace(
-            "<!-- JS_CYTOSCAPE_DAGRE -->", '<script src="cytoscape-dagre.js"></script>',
+            "<!-- JS_CYTOSCAPE_DAGRE -->",
+            '<script src="cytoscape-dagre.js"></script>',
         )
         template = template.replace(
-            "<!-- JS_QWEBCHANNEL -->", '<script src="qwebchannel.js"></script>',
+            "<!-- JS_QWEBCHANNEL -->",
+            '<script src="qwebchannel.js"></script>',
         )
 
         # Inject theme and data
@@ -1100,9 +1145,7 @@ class KnowledgeGraphView(QWidget):
             cb.setStyleSheet(f"QCheckBox {{ color: {colors['border']}; font-weight: bold; }}")
             self._filter_checkboxes[ntype] = cb
             # Insert before the stretch
-            self._filter_layout.insertWidget(
-                self._filter_layout.count() - 1, cb
-            )
+            self._filter_layout.insertWidget(self._filter_layout.count() - 1, cb)
 
     # ── Slots ────────────────────────────────────────────────────────
 
@@ -1150,7 +1193,7 @@ class KnowledgeGraphView(QWidget):
         self._adv_text.clear()
 
         # Show chip
-        chip = QPushButton(f"{prop} {op_text} \"{text}\"  ×")
+        chip = QPushButton(f'{prop} {op_text} "{text}"  ×')
         chip.setStyleSheet(
             "QPushButton { background: #374151; color: #e5e7eb; border-radius: 10px; "
             "padding: 2px 10px; border: 1px solid #6b7280; font-size: 11px; }"
@@ -1207,7 +1250,7 @@ class KnowledgeGraphView(QWidget):
                 if item and item.widget():
                     item.widget().deleteLater()
             for i, (prop, op, text) in enumerate(self._active_filters):
-                chip = QPushButton(f"{prop} {op} \"{text}\"  ×")
+                chip = QPushButton(f'{prop} {op} "{text}"  ×')
                 chip.setStyleSheet(
                     "QPushButton { background: #374151; color: #e5e7eb; border-radius: 10px; "
                     "padding: 2px 10px; border: 1px solid #6b7280; font-size: 11px; }"
@@ -1230,9 +1273,7 @@ class KnowledgeGraphView(QWidget):
         if self._web_view is None:
             return
         visible = [t for t, cb in self._filter_checkboxes.items() if cb.isChecked()]
-        self._web_view.page().runJavaScript(
-            f"window.filterByTypes({json.dumps(visible)});"
-        )
+        self._web_view.page().runJavaScript(f"window.filterByTypes({json.dumps(visible)});")
 
     def _on_node_selected(self, node_id: str, properties_json: str) -> None:
         store = getattr(self, "_store", None)

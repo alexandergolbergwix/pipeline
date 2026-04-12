@@ -36,7 +36,6 @@ from converter.wikidata.property_mapping import (
     P_DESCRIBED_AT_URL,
     P_EXEMPLAR_OF,
     P_GENRE,
-    P_HAS_PARTS,
     P_HEIGHT,
     P_IIIF_MANIFEST,
     P_INCEPTION,
@@ -56,18 +55,15 @@ from converter.wikidata.property_mapping import (
     P_OCCUPATION,
     P_ON_FOCUS_LIST,
     P_OWNED_BY,
-    P_PART_OF,
     P_SCRIPT_STYLE,
     P_SIGNIFICANT_PLACE,
     P_SOURCING_CIRCUMSTANCES,
     P_START_TIME,
     P_TITLE,
-    P_TRANSCRIBED_BY,
     P_VIAF_ID,
     P_VOLUME,
     P_WIDTH,
     P_WRITING_SYSTEM,
-    PRECISION_DAY,
     PRECISION_YEAR,
     Q_AUTHOR_OCCUPATION,
     Q_CIRCA,
@@ -75,9 +71,7 @@ from converter.wikidata.property_mapping import (
     Q_COLOPHON,
     Q_COMMENTATOR_OCCUPATION,
     Q_CORRECTION,
-    Q_DAMAGED,
     Q_GLOSS,
-    Q_GOOD_CONDITION,
     Q_HEBREW_ALPHABET,
     Q_HUMAN,
     Q_ILLUMINATED_MANUSCRIPT,
@@ -205,39 +199,70 @@ class WikidataItemBuilder:
 
         # ── Core identity ────────────────────────────────────────
         instance_qid = self._determine_instance_type(record)
-        item.statements.append(WikidataStatement(
-            property_id=P_INSTANCE_OF, value=instance_qid,
-            value_type="item", references=ref,
-        ))
-        item.statements.append(WikidataStatement(
-            property_id=P_COLLECTION, value=Q_NLI,
-            value_type="item", references=ref,
-        ))
+        item.statements.append(
+            WikidataStatement(
+                property_id=P_INSTANCE_OF,
+                value=instance_qid,
+                value_type="item",
+                references=ref,
+            )
+        )
+        item.statements.append(
+            WikidataStatement(
+                property_id=P_COLLECTION,
+                value=Q_NLI,
+                value_type="item",
+                references=ref,
+            )
+        )
         # P17 = country (Israel — all NLI manuscripts are held in Israel)
-        item.statements.append(WikidataStatement(
-            property_id="P17", value="Q801", value_type="item", references=ref,
-        ))
+        item.statements.append(
+            WikidataStatement(
+                property_id="P17",
+                value="Q801",
+                value_type="item",
+                references=ref,
+            )
+        )
         # P131 = located in administrative entity (Jerusalem)
-        item.statements.append(WikidataStatement(
-            property_id="P131", value="Q1218", value_type="item", references=ref,
-        ))
+        item.statements.append(
+            WikidataStatement(
+                property_id="P131",
+                value="Q1218",
+                value_type="item",
+                references=ref,
+            )
+        )
 
         shelfmark = record.get("shelfmark")
         if shelfmark:
-            item.statements.append(WikidataStatement(
-                property_id=P_INVENTORY_NUMBER, value=str(shelfmark),
-                value_type="string", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_INVENTORY_NUMBER,
+                    value=str(shelfmark),
+                    value_type="string",
+                    references=ref,
+                )
+            )
         if control_number:
-            item.statements.append(WikidataStatement(
-                property_id=P_NLI_J9U_ID, value=nli_j9u_id(control_number),
-                value_type="external-id", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_NLI_J9U_ID,
+                    value=nli_j9u_id(control_number),
+                    value_type="external-id",
+                    references=ref,
+                )
+            )
         if title:
-            item.statements.append(WikidataStatement(
-                property_id=P_TITLE, value=title,
-                value_type="monolingualtext", language="he", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_TITLE,
+                    value=title,
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                )
+            )
 
         # ── Language & writing system ────────────────────────────
         self._add_languages(item, record, ref)
@@ -245,10 +270,14 @@ class WikidataItemBuilder:
         # ── Script type (paleographic) ───────────────────────────
         script_type = record.get("script_type")
         if script_type and str(script_type) in SCRIPT_TYPE_TO_QID:
-            item.statements.append(WikidataStatement(
-                property_id=P_SCRIPT_STYLE, value=SCRIPT_TYPE_TO_QID[str(script_type)],
-                value_type="item", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_SCRIPT_STYLE,
+                    value=SCRIPT_TYPE_TO_QID[str(script_type)],
+                    value_type="item",
+                    references=ref,
+                )
+            )
 
         # ── Dates ────────────────────────────────────────────────
         colophon_fields = set(record.get("data_from_colophon") or [])
@@ -261,31 +290,46 @@ class WikidataItemBuilder:
             cert_levels = record.get("certainty_levels") or {}
             date_cert = cert_levels.get("date", "")
             if date_cert and date_cert != "Certain":
-                qualifiers.append({
-                    "property": P_SOURCING_CIRCUMSTANCES,
-                    "value": Q_CIRCA, "type": "item",
-                })
+                qualifiers.append(
+                    {
+                        "property": P_SOURCING_CIRCUMSTANCES,
+                        "value": Q_CIRCA,
+                        "type": "item",
+                    }
+                )
             # P887 (based on heuristic) = colophon when date is from colophon
             if "dates" in colophon_fields or "colophon_text" in colophon_fields:
-                qualifiers.append({
-                    "property": "P887",
-                    "value": Q_COLOPHON, "type": "item",
-                })
-            item.statements.append(WikidataStatement(
-                property_id=P_INCEPTION, value=time_value,
-                value_type="time", precision=precision,
-                qualifiers=qualifiers, references=ref,
-            ))
+                qualifiers.append(
+                    {
+                        "property": "P887",
+                        "value": Q_COLOPHON,
+                        "type": "item",
+                    }
+                )
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_INCEPTION,
+                    value=time_value,
+                    value_type="time",
+                    precision=precision,
+                    qualifiers=qualifiers,
+                    references=ref,
+                )
+            )
 
         # ── Location of creation (KIMA places → Wikidata QIDs) ──
         kima_places = record.get("kima_places") or {}
         for _place_name, wikidata_uri in kima_places.items():
             qid = extract_wikidata_qid(str(wikidata_uri))
             if qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_LOCATION_OF_CREATION, value=qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_LOCATION_OF_CREATION,
+                        value=qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
 
         # ── Physical description ─────────────────────────────────
         self._add_physical_description(item, record, ref)
@@ -293,25 +337,37 @@ class WikidataItemBuilder:
         # ── Digital access ───────────────────────────────────────
         digital_url = record.get("digital_url")
         if digital_url:
-            item.statements.append(WikidataStatement(
-                property_id=P_DESCRIBED_AT_URL, value=str(digital_url),
-                value_type="url", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_DESCRIBED_AT_URL,
+                    value=str(digital_url),
+                    value_type="url",
+                    references=ref,
+                )
+            )
         iiif_url = record.get("iiif_manifest_url")
         if iiif_url:
-            item.statements.append(WikidataStatement(
-                property_id=P_IIIF_MANIFEST, value=str(iiif_url),
-                value_type="url", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_IIIF_MANIFEST,
+                    value=str(iiif_url),
+                    value_type="url",
+                    references=ref,
+                )
+            )
 
         # ── Genres ───────────────────────────────────────────────
-        for genre in (record.get("genres") or []):
+        for genre in record.get("genres") or []:
             qid = GENRE_TO_QID.get(str(genre))
             if qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_GENRE, value=qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_GENRE,
+                        value=qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
 
         # ── Subjects from canonical_references → P921 ────────────
         self._add_canonical_subjects(item, record, ref)
@@ -323,30 +379,45 @@ class WikidataItemBuilder:
         incipit = record.get("has_incipit")
         if incipit and str(incipit).strip() and str(incipit) != "None":
             from converter.wikidata.property_mapping import P_FIRST_LINE  # noqa: PLC0415
-            item.statements.append(WikidataStatement(
-                property_id=P_FIRST_LINE, value=str(incipit).strip().strip('"'),
-                value_type="monolingualtext", language="he", references=ref,
-            ))
+
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_FIRST_LINE,
+                    value=str(incipit).strip().strip('"'),
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                )
+            )
 
         # ── Explicit (last line of text) → P3132 ───────────────
         explicit = record.get("has_explicit")
         if explicit and str(explicit).strip() and str(explicit) != "None":
-            item.statements.append(WikidataStatement(
-                property_id=P_LAST_LINE, value=str(explicit).strip().strip('"'),
-                value_type="monolingualtext", language="he", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_LAST_LINE,
+                    value=str(explicit).strip().strip('"'),
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                )
+            )
 
         # ── Condition → P5816 (keyword → QID mapping + date parsing)
-        for cond_note in (record.get("condition_notes") or []):
+        for cond_note in record.get("condition_notes") or []:
             cond_text = str(cond_note).strip()
             # Try keyword → QID
             matched = False
             for keyword, qid in CONDITION_TO_QID.items():
                 if keyword in cond_text.lower():
-                    item.statements.append(WikidataStatement(
-                        property_id=P_CONDITION, value=qid,
-                        value_type="item", references=ref,
-                    ))
+                    item.statements.append(
+                        WikidataStatement(
+                            property_id=P_CONDITION,
+                            value=qid,
+                            value_type="item",
+                            references=ref,
+                        )
+                    )
                     matched = True
                     break
             if matched:
@@ -356,41 +427,62 @@ class WikidataItemBuilder:
             if date_match:
                 y, m, d = date_match.groups()
                 from converter.wikidata.property_mapping import Q_RESTORED  # noqa: PLC0415
-                item.statements.append(WikidataStatement(
-                    property_id=P_CONDITION, value=Q_RESTORED,
-                    value_type="item", references=ref,
-                    qualifiers=[{
-                        "property": "P585",
-                        "value": f"+{y}-{m}-{d}T00:00:00Z", "type": "time",
-                    }],
-                ))
+
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_CONDITION,
+                        value=Q_RESTORED,
+                        value_type="item",
+                        references=ref,
+                        qualifiers=[
+                            {
+                                "property": "P585",
+                                "value": f"+{y}-{m}-{d}T00:00:00Z",
+                                "type": "time",
+                            }
+                        ],
+                    )
+                )
 
         # ── Catalog references ───────────────────────────────────
-        for cat_ref in (record.get("catalog_references") or []):
+        for cat_ref in record.get("catalog_references") or []:
             cat_name = cat_ref.get("catalog", "") if isinstance(cat_ref, dict) else str(cat_ref)
             if cat_name:
-                item.statements.append(WikidataStatement(
-                    property_id=P_CATALOG_CODE, value=str(cat_name),
-                    value_type="string", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_CATALOG_CODE,
+                        value=str(cat_name),
+                        value_type="string",
+                        references=ref,
+                    )
+                )
 
         # ── Summary (MARC 520) → P7535 ─────────────────────────
         summary = record.get("summary")
         if summary and str(summary).strip() and str(summary) != "None":
-            item.statements.append(WikidataStatement(
-                property_id="P7535", value=str(summary),
-                value_type="monolingualtext", language="he", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id="P7535",
+                    value=str(summary),
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                )
+            )
 
         # ── Rights (MARC 540) → P6216 ───────────────────────────
         # Historical Hebrew manuscripts are public domain (pre-1900 works).
         # Rights statements from NLI describe digital copy access, not copyright.
         rights = record.get("rights_statement")
         if rights and str(rights).strip() and str(rights) != "None":
-            item.statements.append(WikidataStatement(
-                property_id="P6216", value="Q19652",
-                value_type="item", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id="P6216",
+                    value="Q19652",
+                    value_type="item",
+                    references=ref,
+                )
+            )
 
         # ── Person claims (authors, scribes, owners from MARC + NER) ──
         self._add_person_claims(item, record, ref)
@@ -401,25 +493,37 @@ class WikidataItemBuilder:
         # ── Number of codicological units → P2635 ───────────────
         codic_units = record.get("codicological_units") or []
         if len(codic_units) > 1:
-            item.statements.append(WikidataStatement(
-                property_id=P_NUMBER_OF_PARTS, value=len(codic_units),
-                value_type="quantity", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_NUMBER_OF_PARTS,
+                    value=len(codic_units),
+                    value_type="quantity",
+                    references=ref,
+                )
+            )
 
         # ── Colophon text → P1684 (inscription) ─────────────────
         colophon = record.get("colophon_text")
         if colophon and str(colophon).strip() and str(colophon) != "None":
-            item.statements.append(WikidataStatement(
-                property_id=P_INSCRIPTION, value=str(colophon).strip()[:1500],
-                value_type="monolingualtext", language="he", references=ref,
-                qualifiers=[{
-                    "property": P_OBJECT_HAS_ROLE,
-                    "value": Q_COLOPHON, "type": "item",
-                }],
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_INSCRIPTION,
+                    value=str(colophon).strip()[:1500],
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                    qualifiers=[
+                        {
+                            "property": P_OBJECT_HAS_ROLE,
+                            "value": Q_COLOPHON,
+                            "type": "item",
+                        }
+                    ],
+                )
+            )
 
         # ── Scribal interventions → P1684 (inscription) ─────────
-        for intervention in (record.get("scribal_interventions") or []):
+        for intervention in record.get("scribal_interventions") or []:
             text = (
                 str(intervention.get("text", "")).strip()
                 if isinstance(intervention, dict)
@@ -428,102 +532,149 @@ class WikidataItemBuilder:
             if not text or text == "None":
                 continue
             int_type = (
-                str(intervention.get("type", "")).lower()
-                if isinstance(intervention, dict)
-                else ""
+                str(intervention.get("type", "")).lower() if isinstance(intervention, dict) else ""
             )
             role_qid = (
-                Q_GLOSS if "gloss" in int_type
-                else Q_CORRECTION if "correct" in int_type
+                Q_GLOSS
+                if "gloss" in int_type
+                else Q_CORRECTION
+                if "correct" in int_type
                 else Q_MARGINALIA
             )
-            item.statements.append(WikidataStatement(
-                property_id=P_INSCRIPTION, value=text[:1500],
-                value_type="monolingualtext", language="he", references=ref,
-                qualifiers=[{
-                    "property": P_OBJECT_HAS_ROLE,
-                    "value": role_qid, "type": "item",
-                }],
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_INSCRIPTION,
+                    value=text[:1500],
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                    qualifiers=[
+                        {
+                            "property": P_OBJECT_HAS_ROLE,
+                            "value": role_qid,
+                            "type": "item",
+                        }
+                    ],
+                )
+            )
 
         # ── Volume info → P478 ──────────────────────────────────
         vol_info = record.get("volume_info")
         if vol_info and str(vol_info).strip() and str(vol_info) != "None":
-            item.statements.append(WikidataStatement(
-                property_id=P_VOLUME, value=str(vol_info).strip(),
-                value_type="string", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_VOLUME,
+                    value=str(vol_info).strip(),
+                    value_type="string",
+                    references=ref,
+                )
+            )
 
         # ── Related places → P7153 (significant place) ──────────
-        for place_name in (record.get("related_places") or []):
+        for place_name in record.get("related_places") or []:
             for _name, uri in (record.get("kima_places") or {}).items():
                 if place_name.strip() in _name or _name in place_name.strip():
                     qid = extract_wikidata_qid(str(uri))
                     if qid:
-                        item.statements.append(WikidataStatement(
-                            property_id=P_SIGNIFICANT_PLACE, value=qid,
-                            value_type="item", references=ref,
-                        ))
+                        item.statements.append(
+                            WikidataStatement(
+                                property_id=P_SIGNIFICANT_PLACE,
+                                value=qid,
+                                value_type="item",
+                                references=ref,
+                            )
+                        )
                         break
 
         # ── General notes (MARC 500) → P7535 ────────────────────
-        for note in (record.get("notes") or []):
+        for note in record.get("notes") or []:
             note_text = str(note).strip()
             if note_text and note_text != "None" and len(note_text) > 5:
-                item.statements.append(WikidataStatement(
-                    property_id="P7535", value=note_text[:1500],
-                    value_type="monolingualtext", language="he", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id="P7535",
+                        value=note_text[:1500],
+                        value_type="monolingualtext",
+                        language="he",
+                        references=ref,
+                    )
+                )
 
         # ── Provenance raw text (MARC 561) → P7535 + provenance qualifier
         prov_text = record.get("provenance")
         if prov_text and str(prov_text).strip() and str(prov_text) != "None":
-            item.statements.append(WikidataStatement(
-                property_id="P7535", value=str(prov_text).strip()[:1500],
-                value_type="monolingualtext", language="he", references=ref,
-                qualifiers=[{
-                    "property": P_OBJECT_HAS_ROLE,
-                    "value": "Q1145267", "type": "item",  # provenance
-                }],
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id="P7535",
+                    value=str(prov_text).strip()[:1500],
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
+                    qualifiers=[
+                        {
+                            "property": P_OBJECT_HAS_ROLE,
+                            "value": "Q1145267",
+                            "type": "item",  # provenance
+                        }
+                    ],
+                )
+            )
 
         # ── Multiple scribal hands → P7535 note ─────────────────
         if record.get("has_multiple_hands"):
-            item.statements.append(WikidataStatement(
-                property_id="P7535", value="Written in multiple scribal hands",
-                value_type="monolingualtext", language="en", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id="P7535",
+                    value="Written in multiple scribal hands",
+                    value_type="monolingualtext",
+                    language="en",
+                    references=ref,
+                )
+            )
 
         # ── Related works → P1574 via work items ────────────────
-        for rw in (record.get("related_works") or []):
+        for rw in record.get("related_works") or []:
             rw_title = rw.get("title", "") if isinstance(rw, dict) else str(rw)
             rw_title = rw_title.strip().strip('".')
             if not rw_title:
                 continue
             rw_qid = KNOWN_WORK_QIDS.get(rw_title)
             if rw_qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_EXEMPLAR_OF, value=rw_qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_EXEMPLAR_OF,
+                        value=rw_qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
             else:
                 rw_item = self._get_or_create_work(rw_title, None, record)
-                item.statements.append(WikidataStatement(
-                    property_id=P_EXEMPLAR_OF,
-                    value=f"__LOCAL:{rw_item.local_id}",
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_EXEMPLAR_OF,
+                        value=f"__LOCAL:{rw_item.local_id}",
+                        value_type="item",
+                        references=ref,
+                    )
+                )
 
         # ── WikiProject Manuscripts ──────────────────────────────
-        item.statements.append(WikidataStatement(
-            property_id=P_ON_FOCUS_LIST, value=Q_WIKIPROJECT_MANUSCRIPTS,
-            value_type="item",
-        ))
+        item.statements.append(
+            WikidataStatement(
+                property_id=P_ON_FOCUS_LIST,
+                value=Q_WIKIPROJECT_MANUSCRIPTS,
+                value_type="item",
+            )
+        )
 
         return item
 
     def _set_labels(
-        self, item: WikidataItem, record: dict[str, object], title: str,
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
+        title: str,
     ) -> None:
         """Set labels, descriptions, and aliases for a manuscript item."""
         if title:
@@ -537,7 +688,7 @@ class WikidataItemBuilder:
                 item.aliases.setdefault("he", []).append(title)
 
         # Variant titles as aliases
-        for vt in (record.get("variant_titles") or []):
+        for vt in record.get("variant_titles") or []:
             item.aliases.setdefault("he", []).append(str(vt))
 
         # Description
@@ -560,7 +711,9 @@ class WikidataItemBuilder:
         return Q_MANUSCRIPT
 
     def _add_languages(
-        self, item: WikidataItem, record: dict[str, object],
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
         ref: list[dict[str, str]],
     ) -> None:
         """Add P407 language and P282 writing system statements."""
@@ -568,51 +721,81 @@ class WikidataItemBuilder:
         for lang_code in langs:
             qid = LANG_TO_QID.get(str(lang_code))
             if qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_LANGUAGE, value=qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_LANGUAGE,
+                        value=qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
         if any(str(c) in ("heb", "arc", "yid", "lad", "jrb", "jpr") for c in langs):
-            item.statements.append(WikidataStatement(
-                property_id=P_WRITING_SYSTEM, value=Q_HEBREW_ALPHABET,
-                value_type="item", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_WRITING_SYSTEM,
+                    value=Q_HEBREW_ALPHABET,
+                    value_type="item",
+                    references=ref,
+                )
+            )
 
     def _add_physical_description(
-        self, item: WikidataItem, record: dict[str, object],
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
         ref: list[dict[str, str]],
     ) -> None:
         """Add material, dimensions, folio count."""
-        for material in (record.get("materials") or []):
+        for material in record.get("materials") or []:
             qid = MATERIAL_TO_QID.get(str(material))
             if qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_MATERIAL, value=qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_MATERIAL,
+                        value=qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
         height = record.get("height_mm")
         if height and float(height) > 0:
-            item.statements.append(WikidataStatement(
-                property_id=P_HEIGHT, value=float(height),
-                value_type="quantity", unit="mm", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_HEIGHT,
+                    value=float(height),
+                    value_type="quantity",
+                    unit="mm",
+                    references=ref,
+                )
+            )
         width = record.get("width_mm")
         if width and float(width) > 0:
-            item.statements.append(WikidataStatement(
-                property_id=P_WIDTH, value=float(width),
-                value_type="quantity", unit="mm", references=ref,
-            ))
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_WIDTH,
+                    value=float(width),
+                    value_type="quantity",
+                    unit="mm",
+                    references=ref,
+                )
+            )
         extent = record.get("extent")
         if extent:
             folio_match = re.search(r"(\d+)", str(extent))
             if folio_match:
-                item.statements.append(WikidataStatement(
-                    property_id=P_NUMBER_OF_PAGES, value=int(folio_match.group(1)),
-                    value_type="quantity", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_NUMBER_OF_PAGES,
+                        value=int(folio_match.group(1)),
+                        value_type="quantity",
+                        references=ref,
+                    )
+                )
 
     def _add_contents(
-        self, item: WikidataItem, record: dict[str, object],
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
         ref: list[dict[str, str]],
     ) -> None:
         """Add P1574 (exemplar of) for contained works.
@@ -623,8 +806,10 @@ class WikidataItemBuilder:
         seen_works: set[str] = set()
 
         # From structured MARC 505 data
-        for content in (record.get("contents") or []):
-            work_title = str(content.get("title", "")) if isinstance(content, dict) else str(content)
+        for content in record.get("contents") or []:
+            work_title = (
+                str(content.get("title", "")) if isinstance(content, dict) else str(content)
+            )
             if not work_title or not work_title.strip():
                 continue
             work_title = work_title.strip()
@@ -634,24 +819,36 @@ class WikidataItemBuilder:
 
             qualifiers: list[dict[str, object]] = []
             if isinstance(content, dict) and content.get("folio_range"):
-                qualifiers.append({
-                    "property": "P958", "value": str(content["folio_range"]),
-                    "type": "string",
-                })
+                qualifiers.append(
+                    {
+                        "property": "P958",
+                        "value": str(content["folio_range"]),
+                        "type": "string",
+                    }
+                )
 
             work_qid = KNOWN_WORK_QIDS.get(work_title)
             if work_qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_EXEMPLAR_OF, value=work_qid,
-                    value_type="item", qualifiers=qualifiers, references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_EXEMPLAR_OF,
+                        value=work_qid,
+                        value_type="item",
+                        qualifiers=qualifiers,
+                        references=ref,
+                    )
+                )
             else:
                 work_item = self._get_or_create_work(work_title, None, record)
-                item.statements.append(WikidataStatement(
-                    property_id=P_EXEMPLAR_OF,
-                    value=f"__LOCAL:{work_item.local_id}",
-                    value_type="item", qualifiers=qualifiers, references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_EXEMPLAR_OF,
+                        value=f"__LOCAL:{work_item.local_id}",
+                        value_type="item",
+                        qualifiers=qualifiers,
+                        references=ref,
+                    )
+                )
 
         # From NER-extracted contents entities (WORK + FOLIO)
         entities = record.get("entities") or []
@@ -671,18 +868,25 @@ class WikidataItemBuilder:
             # Find associated folio entity (nearest by position)
             for folio in folios:
                 if abs(folio.get("end", 0) - work.get("start", 0)) < 3:
-                    qualifiers_ner.append({
-                        "property": "P958",
-                        "value": str(folio.get("text", "")).strip(":"),
-                        "type": "string",
-                    })
+                    qualifiers_ner.append(
+                        {
+                            "property": "P958",
+                            "value": str(folio.get("text", "")).strip(":"),
+                            "type": "string",
+                        }
+                    )
                     break
 
             if work_qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_EXEMPLAR_OF, value=work_qid,
-                    value_type="item", qualifiers=qualifiers_ner, references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_EXEMPLAR_OF,
+                        value=work_qid,
+                        value_type="item",
+                        qualifiers=qualifiers_ner,
+                        references=ref,
+                    )
+                )
             else:
                 # Find associated WORK_AUTHOR entity by position proximity
                 work_authors = [e for e in cont_entities if e.get("type") == "WORK_AUTHOR"]
@@ -692,14 +896,20 @@ class WikidataItemBuilder:
                         author_name = str(wa.get("text", "")).strip()
                         break
                 work_item = self._get_or_create_work(work_title, author_name, record)
-                item.statements.append(WikidataStatement(
-                    property_id=P_EXEMPLAR_OF,
-                    value=f"__LOCAL:{work_item.local_id}",
-                    value_type="item", qualifiers=qualifiers_ner, references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_EXEMPLAR_OF,
+                        value=f"__LOCAL:{work_item.local_id}",
+                        value_type="item",
+                        qualifiers=qualifiers_ner,
+                        references=ref,
+                    )
+                )
 
     def _add_canonical_subjects(
-        self, item: WikidataItem, record: dict[str, object],
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
         ref: list[dict[str, str]],
     ) -> None:
         """Add P921 (main subject) from canonical_references.
@@ -707,12 +917,15 @@ class WikidataItemBuilder:
         Maps Bible book names and Talmud Bavli tractate names to Wikidata QIDs.
         """
         from converter.wikidata.property_mapping import (  # noqa: PLC0415
-            BIBLE_BOOK_TO_QID, SUBJECT_TO_QID, TALMUD_TRACTATE_TO_QID,
+            BIBLE_BOOK_TO_QID,
+            SUBJECT_TO_QID,
+            TALMUD_TRACTATE_TO_QID,
         )
+
         seen_qids: set[str] = set()
 
         # From canonical references (Bible books, Talmud tractates)
-        for cr in (record.get("canonical_references") or []):
+        for cr in record.get("canonical_references") or []:
             hierarchy = cr.get("hierarchy", "")
             qid = None
             if hierarchy == "Bible":
@@ -723,46 +936,67 @@ class WikidataItemBuilder:
                 qid = TALMUD_TRACTATE_TO_QID.get(tractate)
             if qid and qid not in seen_qids:
                 seen_qids.add(qid)
-                item.statements.append(WikidataStatement(
-                    property_id=P_MAIN_SUBJECT, value=qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_MAIN_SUBJECT,
+                        value=qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
 
         # From LCSH subject headings
-        for subj in (record.get("subjects") or []):
+        for subj in record.get("subjects") or []:
             term = subj.get("term", "") if isinstance(subj, dict) else str(subj)
             if not term:
                 continue
             qid = SUBJECT_TO_QID.get(term)
             if qid and qid not in seen_qids:
                 seen_qids.add(qid)
-                item.statements.append(WikidataStatement(
-                    property_id=P_MAIN_SUBJECT, value=qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_MAIN_SUBJECT,
+                        value=qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
             elif not qid and term.strip():
                 # Person names as subjects → create person item, link via P921
                 person = self._get_or_create_person(
-                    term.strip(), None, None, "subject", record,
+                    term.strip(),
+                    None,
+                    None,
+                    "subject",
+                    record,
                 )
                 p_key = _person_key(term.strip(), None, None)
                 resolved = self._person_qids.get(p_key) or person.existing_qid
                 if resolved and resolved not in seen_qids:
                     seen_qids.add(resolved)
-                    item.statements.append(WikidataStatement(
-                        property_id=P_MAIN_SUBJECT, value=resolved,
-                        value_type="item", references=ref,
-                    ))
+                    item.statements.append(
+                        WikidataStatement(
+                            property_id=P_MAIN_SUBJECT,
+                            value=resolved,
+                            value_type="item",
+                            references=ref,
+                        )
+                    )
                 elif person.local_id not in seen_qids:
                     seen_qids.add(person.local_id)
-                    item.statements.append(WikidataStatement(
-                        property_id=P_MAIN_SUBJECT,
-                        value=f"__LOCAL:{person.local_id}",
-                        value_type="item", references=ref,
-                    ))
+                    item.statements.append(
+                        WikidataStatement(
+                            property_id=P_MAIN_SUBJECT,
+                            value=f"__LOCAL:{person.local_id}",
+                            value_type="item",
+                            references=ref,
+                        )
+                    )
 
     def _add_provenance_claims(
-        self, item: WikidataItem, record: dict[str, object],
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
         ref: list[dict[str, str]],
     ) -> None:
         """Add provenance claims from NER-extracted MARC 561 entities.
@@ -789,11 +1023,13 @@ class WikidataItemBuilder:
             year_match = re.search(r"(\d{4})", date_text)
             if year_match:
                 year = int(year_match.group(1))
-                date_qualifiers.append({
-                    "property": P_START_TIME,
-                    "value": f"+{year:04d}-00-00T00:00:00Z",
-                    "type": "time",
-                })
+                date_qualifiers.append(
+                    {
+                        "property": P_START_TIME,
+                        "value": f"+{year:04d}-00-00T00:00:00Z",
+                        "type": "time",
+                    }
+                )
 
         seen_owners: set[str] = set()
         for owner in owners:
@@ -807,26 +1043,43 @@ class WikidataItemBuilder:
             key = _person_key(owner_name, viaf_uri, mazal_id)
 
             person_item = self._get_or_create_person(
-                owner_name, viaf_uri, mazal_id, "OWNER", record,
+                owner_name,
+                viaf_uri,
+                mazal_id,
+                "OWNER",
+                record,
             )
             resolved_qid = self._person_qids.get(key) or person_item.existing_qid
 
             # Attach date qualifiers to the ownership statement
             owner_qualifiers = list(date_qualifiers)  # Copy shared dates
             if resolved_qid:
-                item.statements.append(WikidataStatement(
-                    property_id=P_OWNED_BY, value=resolved_qid,
-                    value_type="item", qualifiers=owner_qualifiers, references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_OWNED_BY,
+                        value=resolved_qid,
+                        value_type="item",
+                        qualifiers=owner_qualifiers,
+                        references=ref,
+                    )
+                )
             else:
-                owner_qualifiers.append({
-                    "property": P_OBJECT_NAMED_AS,
-                    "value": owner_name, "type": "string",
-                })
-                item.statements.append(WikidataStatement(
-                    property_id=P_OWNED_BY, value=f"__LOCAL:{person_item.local_id}",
-                    value_type="item", qualifiers=owner_qualifiers, references=ref,
-                ))
+                owner_qualifiers.append(
+                    {
+                        "property": P_OBJECT_NAMED_AS,
+                        "value": owner_name,
+                        "type": "string",
+                    }
+                )
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_OWNED_BY,
+                        value=f"__LOCAL:{person_item.local_id}",
+                        value_type="item",
+                        qualifiers=owner_qualifiers,
+                        references=ref,
+                    )
+                )
 
         seen_colls: set[str] = set()
         for coll in collections:
@@ -839,7 +1092,9 @@ class WikidataItemBuilder:
             # reconciliation to Wikidata institution QIDs.
 
     def _add_person_claims(
-        self, item: WikidataItem, record: dict[str, object],
+        self,
+        item: WikidataItem,
+        record: dict[str, object],
         ref: list[dict[str, str]],
     ) -> None:
         """Add person-related claims using resolved Wikidata QIDs.
@@ -860,7 +1115,10 @@ class WikidataItemBuilder:
         seen_person_keys: set[str] = set()
 
         def _add_person_statement(
-            name: str, role: str, viaf_uri: str | None, mazal_id: str | None,
+            name: str,
+            role: str,
+            viaf_uri: str | None,
+            mazal_id: str | None,
         ) -> None:
             if not name:
                 return
@@ -878,29 +1136,43 @@ class WikidataItemBuilder:
             # For scribes/owners → direct claim on manuscript
             # For authors → P50 on MS as fallback (proper model uses Work item)
             if resolved_qid:
-                item.statements.append(WikidataStatement(
-                    property_id=pid, value=resolved_qid,
-                    value_type="item", references=ref,
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=pid,
+                        value=resolved_qid,
+                        value_type="item",
+                        references=ref,
+                    )
+                )
             else:
-                item.statements.append(WikidataStatement(
-                    property_id=pid, value=f"__LOCAL:{person_item.local_id}",
-                    value_type="item", references=ref,
-                    qualifiers=[{"property": P_OBJECT_NAMED_AS, "value": name, "type": "string"}],
-                ))
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=pid,
+                        value=f"__LOCAL:{person_item.local_id}",
+                        value_type="item",
+                        references=ref,
+                        qualifiers=[
+                            {"property": P_OBJECT_NAMED_AS, "value": name, "type": "string"}
+                        ],
+                    )
+                )
 
         # From MARC authority matches (structured name fields 100/700/etc.)
-        for match in (record.get("marc_authority_matches") or []):
+        for match in record.get("marc_authority_matches") or []:
             _add_person_statement(
-                str(match.get("name", "")), str(match.get("role", "")),
-                match.get("viaf_uri"), match.get("mazal_id"),
+                str(match.get("name", "")),
+                str(match.get("role", "")),
+                match.get("viaf_uri"),
+                match.get("mazal_id"),
             )
 
         # From NER entities (extracted from note fields)
-        for entity in (record.get("entities") or []):
+        for entity in record.get("entities") or []:
             _add_person_statement(
-                str(entity.get("person", "")), str(entity.get("role", "")),
-                entity.get("viaf_uri"), entity.get("mazal_id"),
+                str(entity.get("person", "")),
+                str(entity.get("role", "")),
+                entity.get("viaf_uri"),
+                entity.get("mazal_id"),
             )
 
     def _get_or_create_person(
@@ -924,11 +1196,13 @@ class WikidataItemBuilder:
             kw in name.lower()
             for kw in ("library", "museum", "university", "institute", "ספרייה", "מכון")
         )
-        person.statements.append(WikidataStatement(
-            property_id=P_INSTANCE_OF,
-            value=Q_ORGANIZATION if is_org else Q_HUMAN,
-            value_type="item",
-        ))
+        person.statements.append(
+            WikidataStatement(
+                property_id=P_INSTANCE_OF,
+                value=Q_ORGANIZATION if is_org else Q_HUMAN,
+                value_type="item",
+            )
+        )
 
         # Extract dates: first try direct authority ID match, then name match
         birth_year = None
@@ -936,7 +1210,7 @@ class WikidataItemBuilder:
         dates_str = ""
 
         # Strategy 1: Match by authority ID (most reliable)
-        for match in (source_record.get("marc_authority_matches") or []):
+        for match in source_record.get("marc_authority_matches") or []:
             mid = str(match.get("mazal_id", ""))
             vid = str(match.get("viaf_uri", ""))
             if (mazal_id and mid == mazal_id) or (viaf_uri and vid == viaf_uri):
@@ -984,89 +1258,134 @@ class WikidataItemBuilder:
 
         # P569/P570 = birth/death dates
         if birth_year and not is_org:
-            person.statements.append(WikidataStatement(
-                property_id=P_DATE_OF_BIRTH,
-                value=f"+{int(birth_year):04d}-00-00T00:00:00Z",
-                value_type="time", precision=PRECISION_YEAR,
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id=P_DATE_OF_BIRTH,
+                    value=f"+{int(birth_year):04d}-00-00T00:00:00Z",
+                    value_type="time",
+                    precision=PRECISION_YEAR,
+                )
+            )
         if death_year and not is_org:
-            person.statements.append(WikidataStatement(
-                property_id=P_DATE_OF_DEATH,
-                value=f"+{int(death_year):04d}-00-00T00:00:00Z",
-                value_type="time", precision=PRECISION_YEAR,
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id=P_DATE_OF_DEATH,
+                    value=f"+{int(death_year):04d}-00-00T00:00:00Z",
+                    value_type="time",
+                    precision=PRECISION_YEAR,
+                )
+            )
 
         # P106 = occupation (from role)
         occupation_qid = _ROLE_TO_OCCUPATION.get(role)
         if occupation_qid and not is_org:
-            person.statements.append(WikidataStatement(
-                property_id=P_OCCUPATION, value=occupation_qid,
-                value_type="item",
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id=P_OCCUPATION,
+                    value=occupation_qid,
+                    value_type="item",
+                )
+            )
 
         # P214 = VIAF ID (critical for LOD linking)
         viaf_id = extract_viaf_id(str(viaf_uri)) if viaf_uri else None
         if viaf_id:
-            person.statements.append(WikidataStatement(
-                property_id=P_VIAF_ID, value=viaf_id, value_type="external-id",
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id=P_VIAF_ID,
+                    value=viaf_id,
+                    value_type="external-id",
+                )
+            )
 
         # P8189 = NLI J9U ID (links to Mazal authority)
         if mazal_id:
-            person.statements.append(WikidataStatement(
-                property_id=P_NLI_J9U_ID, value=str(mazal_id), value_type="external-id",
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id=P_NLI_J9U_ID,
+                    value=str(mazal_id),
+                    value_type="external-id",
+                )
+            )
 
         # P21 = sex or gender (male for historical Hebrew manuscript persons)
         # Nearly all historical manuscript authors/scribes were male
         if not is_org:
-            person.statements.append(WikidataStatement(
-                property_id="P21", value="Q6581097", value_type="item",  # male
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id="P21",
+                    value="Q6581097",
+                    value_type="item",  # male
+                )
+            )
 
         # P1343 = described by source (link to NLI/Ktiv catalog)
-        person.statements.append(WikidataStatement(
-            property_id="P1343", value="Q118384267", value_type="item",  # Ktiv
-        ))
+        person.statements.append(
+            WikidataStatement(
+                property_id="P1343",
+                value="Q118384267",
+                value_type="item",  # Ktiv
+            )
+        )
 
         # P1412 = languages spoken, written or signed (Hebrew)
         if not is_org:
-            person.statements.append(WikidataStatement(
-                property_id="P1412", value="Q9288", value_type="item",  # Hebrew
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id="P1412",
+                    value="Q9288",
+                    value_type="item",  # Hebrew
+                )
+            )
 
         # P1559 = name in native language (Hebrew)
         if name and not is_org:
-            person.statements.append(WikidataStatement(
-                property_id="P1559", value=name,
-                value_type="monolingualtext", language="he",
-            ))
+            person.statements.append(
+                WikidataStatement(
+                    property_id="P1559",
+                    value=name,
+                    value_type="monolingualtext",
+                    language="he",
+                )
+            )
 
         # Additional authority IDs from VIAF cluster harvesting
-        for match in (source_record.get("marc_authority_matches") or []):
+        for match in source_record.get("marc_authority_matches") or []:
             mid = str(match.get("mazal_id", ""))
             vid = str(match.get("viaf_uri", ""))
             if (mazal_id and mid == mazal_id) or (viaf_uri and vid == viaf_uri):
                 if match.get("gnd_id"):
-                    person.statements.append(WikidataStatement(
-                        property_id="P227", value=str(match["gnd_id"]),
-                        value_type="external-id",
-                    ))
+                    person.statements.append(
+                        WikidataStatement(
+                            property_id="P227",
+                            value=str(match["gnd_id"]),
+                            value_type="external-id",
+                        )
+                    )
                 if match.get("lc_id"):
-                    person.statements.append(WikidataStatement(
-                        property_id="P244", value=str(match["lc_id"]),
-                        value_type="external-id",
-                    ))
+                    person.statements.append(
+                        WikidataStatement(
+                            property_id="P244",
+                            value=str(match["lc_id"]),
+                            value_type="external-id",
+                        )
+                    )
                 if match.get("isni"):
-                    person.statements.append(WikidataStatement(
-                        property_id="P213", value=str(match["isni"]),
-                        value_type="external-id",
-                    ))
+                    person.statements.append(
+                        WikidataStatement(
+                            property_id="P213",
+                            value=str(match["isni"]),
+                            value_type="external-id",
+                        )
+                    )
                 if match.get("bnf_id"):
-                    person.statements.append(WikidataStatement(
-                        property_id="P268", value=str(match["bnf_id"]),
-                        value_type="external-id",
-                    ))
+                    person.statements.append(
+                        WikidataStatement(
+                            property_id="P268",
+                            value=str(match["bnf_id"]),
+                            value_type="external-id",
+                        )
+                    )
                 break
 
         self._person_items[key] = person
@@ -1087,16 +1406,28 @@ class WikidataItemBuilder:
         work.labels["he"] = title
         work.descriptions["en"] = "Hebrew manuscript work"
 
-        work.statements.append(WikidataStatement(
-            property_id=P_INSTANCE_OF, value=Q_WRITTEN_WORK, value_type="item",
-        ))
-        work.statements.append(WikidataStatement(
-            property_id=P_TITLE, value=title,
-            value_type="monolingualtext", language="he",
-        ))
-        work.statements.append(WikidataStatement(
-            property_id=P_LANGUAGE, value="Q9288", value_type="item",
-        ))
+        work.statements.append(
+            WikidataStatement(
+                property_id=P_INSTANCE_OF,
+                value=Q_WRITTEN_WORK,
+                value_type="item",
+            )
+        )
+        work.statements.append(
+            WikidataStatement(
+                property_id=P_TITLE,
+                value=title,
+                value_type="monolingualtext",
+                language="he",
+            )
+        )
+        work.statements.append(
+            WikidataStatement(
+                property_id=P_LANGUAGE,
+                value="Q9288",
+                value_type="item",
+            )
+        )
 
         # Link to author if available
         if author_name and author_name.strip():
@@ -1105,16 +1436,21 @@ class WikidataItemBuilder:
             if person:
                 resolved_qid = self._person_qids.get(author_key) or person.existing_qid
                 if resolved_qid:
-                    work.statements.append(WikidataStatement(
-                        property_id=P_AUTHOR, value=resolved_qid,
-                        value_type="item",
-                    ))
+                    work.statements.append(
+                        WikidataStatement(
+                            property_id=P_AUTHOR,
+                            value=resolved_qid,
+                            value_type="item",
+                        )
+                    )
                 else:
-                    work.statements.append(WikidataStatement(
-                        property_id=P_AUTHOR,
-                        value=f"__LOCAL:{person.local_id}",
-                        value_type="item",
-                    ))
+                    work.statements.append(
+                        WikidataStatement(
+                            property_id=P_AUTHOR,
+                            value=f"__LOCAL:{person.local_id}",
+                            value_type="item",
+                        )
+                    )
 
         self._work_items[key] = work
         return work
@@ -1148,7 +1484,9 @@ class WikidataItemBuilder:
         )
         logger.info(
             "Built %d items: %d manuscripts + %d persons + %d works",
-            len(all_items), len(self._manuscript_items), len(self._person_items),
+            len(all_items),
+            len(self._manuscript_items),
+            len(self._person_items),
             len(self._work_items),
         )
         return all_items
@@ -1179,7 +1517,7 @@ class WikidataItemBuilder:
         for ms_item in self._manuscript_items:
             for stmt in ms_item.statements:
                 if isinstance(stmt.value, str) and stmt.value.startswith("__LOCAL:"):
-                    local_ref = stmt.value[len("__LOCAL:"):]
+                    local_ref = stmt.value[len("__LOCAL:") :]
                     qid = self._person_qids.get(local_ref)
                     if qid:
                         stmt.value = qid

@@ -8,11 +8,11 @@ historical database of place names in the Hebrew script maintained
 by the Dutch Institute for Language and Speech Technology (HLT/INT)
 and the National Library of Israel.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,7 @@ class KimaMatcher:
         if self._index is None and self.is_available:
             try:
                 from converter.authority.kima_index import KimaIndex
+
                 self._index = KimaIndex(self.index_path)
                 logger.debug("KIMA index loaded from %s", self.index_path)
             except Exception as exc:
@@ -68,7 +69,7 @@ class KimaMatcher:
 
     # ── public API ────────────────────────────────────────────────────
 
-    def match_place(self, name: str) -> Optional[str]:
+    def match_place(self, name: str) -> str | None:
         """Return the Wikidata URI for place *name*, or None if not found.
 
         The primary return value is a Wikidata entity URI
@@ -107,7 +108,7 @@ class KimaMatcher:
 
     # ── internals ─────────────────────────────────────────────────────
 
-    def _lookup(self, name: str) -> Optional[str]:
+    def _lookup(self, name: str) -> str | None:
         if not self.is_available:
             logger.debug("KIMA index not available; skipping lookup for %r", name)
             return None

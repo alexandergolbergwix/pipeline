@@ -45,8 +45,13 @@ from PyQt6.QtWidgets import (
 logger = logging.getLogger(__name__)
 
 VALID_ENTITY_TYPES = [
-    "PERSON", "OWNER", "DATE", "COLLECTION",
-    "WORK", "FOLIO", "WORK_AUTHOR",
+    "PERSON",
+    "OWNER",
+    "DATE",
+    "COLLECTION",
+    "WORK",
+    "FOLIO",
+    "WORK_AUTHOR",
 ]
 
 TYPE_COLORS: dict[str, str] = {
@@ -98,7 +103,10 @@ class EditableEntityModel(QAbstractTableModel):
         return len(self.HEADERS)
 
     def headerData(  # noqa: N802
-        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole,
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
     ) -> str | None:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.HEADERS[section]
@@ -124,12 +132,15 @@ class EditableEntityModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.BackgroundRole and col == 2:
             from PyQt6.QtGui import QColor  # noqa: PLC0415
+
             color_hex = TYPE_COLORS.get(entity["type"], "#f3f4f6")
             return QColor(color_hex)
 
         return None
 
-    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:  # noqa: N802
+    def setData(
+        self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole
+    ) -> bool:  # noqa: N802
         if not index.isValid() or role != Qt.ItemDataRole.EditRole:
             return False
         entity = self._entities[index.row()]
@@ -151,21 +162,27 @@ class EditableEntityModel(QAbstractTableModel):
         return base
 
     def add_entity(
-        self, control_number: str, text: str, entity_type: str, source: str = "manual",
+        self,
+        control_number: str,
+        text: str,
+        entity_type: str,
+        source: str = "manual",
     ) -> None:
         """Insert a new manually-added entity."""
         row = len(self._entities)
         self.beginInsertRows(QModelIndex(), row, row)
-        self._entities.append({
-            "_control_number": control_number,
-            "text": text,
-            "type": entity_type,
-            "confidence": 1.0,
-            "source": source,
-            "role": "",
-            "start": 0,
-            "end": len(text),
-        })
+        self._entities.append(
+            {
+                "_control_number": control_number,
+                "text": text,
+                "type": entity_type,
+                "confidence": 1.0,
+                "source": source,
+                "role": "",
+                "start": 0,
+                "end": len(text),
+            }
+        )
         self.endInsertRows()
 
     def delete_row(self, row: int) -> None:
@@ -195,10 +212,7 @@ class EditableEntityModel(QAbstractTableModel):
                 out["role"] = ent.get("role", "AUTHOR")
             by_cn[cn].append(out)
 
-        return [
-            {"_control_number": cn, "entities": ents}
-            for cn, ents in by_cn.items()
-        ]
+        return [{"_control_number": cn, "entities": ents} for cn, ents in by_cn.items()]
 
     def is_dirty(self) -> bool:
         """Check if any edits were made."""
@@ -225,7 +239,9 @@ class EntityTypeDelegate(QStyledItemDelegate):
         if idx >= 0:
             editor.setCurrentIndex(idx)
 
-    def setModelData(self, editor: QComboBox, model: QAbstractTableModel, index: QModelIndex) -> None:  # noqa: N802
+    def setModelData(
+        self, editor: QComboBox, model: QAbstractTableModel, index: QModelIndex
+    ) -> None:  # noqa: N802
         model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
 
@@ -346,10 +362,9 @@ class ExtractionEditor(QWidget):
         self._proxy.setFilterFixedString(text)
 
     def _on_add(self) -> None:
-        cns = sorted({
-            self._model._entities[i]["_control_number"]
-            for i in range(len(self._model._entities))
-        })
+        cns = sorted(
+            {self._model._entities[i]["_control_number"] for i in range(len(self._model._entities))}
+        )
         if not cns:
             cns = [""]
         dialog = AddEntityDialog(cns, self)
@@ -382,7 +397,8 @@ class ExtractionEditor(QWidget):
         if not self._model.is_dirty():
             return
         reply = QMessageBox.question(
-            self, "Revert Changes",
+            self,
+            "Revert Changes",
             "Discard all edits and revert to the original extraction results?",
         )
         if reply == QMessageBox.StandardButton.Yes:

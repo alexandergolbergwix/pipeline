@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -26,7 +26,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +56,9 @@ class WikidataPanel(QWidget):
 
         # Input file selector (authority_enriched.json)
         self._input_selector = FileSelector(
-            "Enriched JSON:", mode="open", filter="JSON files (*.json)",
+            "Enriched JSON:",
+            mode="open",
+            filter="JSON files (*.json)",
         )
         layout.addWidget(self._input_selector)
 
@@ -77,7 +78,9 @@ class WikidataPanel(QWidget):
 
         self._batch_cb = QCheckBox("Batch mode (45 items + 30s pause)")
         self._batch_cb.setChecked(True)
-        self._batch_cb.setToolTip("Pause every 45 items to avoid Wikidata rate limiting (recommended)")
+        self._batch_cb.setToolTip(
+            "Pause every 45 items to avoid Wikidata rate limiting (recommended)"
+        )
         config_layout.addWidget(self._batch_cb)
 
         config_layout.addStretch()
@@ -171,7 +174,11 @@ class WikidataPanel(QWidget):
         self._upload_view.update_overall_progress(0, total)
 
     def update_entity_status(
-        self, local_id: str, status: str, qid: str, message: str,
+        self,
+        local_id: str,
+        status: str,
+        qid: str,
+        message: str,
     ) -> None:
         """Update per-entity progress from the upload worker."""
         # Handle special "__total__" signal to set overall progress bar
@@ -183,7 +190,9 @@ class WikidataPanel(QWidget):
             return
 
         try:
-            from mhm_pipeline.gui.widgets.upload_progress_view import WikidataEntity  # noqa: PLC0415
+            from mhm_pipeline.gui.widgets.upload_progress_view import (
+                WikidataEntity,  # noqa: PLC0415
+            )
 
             widget = self._upload_view.get_entity_widget(local_id)
             if widget is None:
@@ -261,16 +270,18 @@ class WikidataPanel(QWidget):
         dry_run = self._dry_run_cb.isChecked()
         if not dry_run and not self._token_edit.text().strip():
             QMessageBox.warning(
-                self, "Missing Token",
-                "Bot password is required for live upload. "
-                "Use dry run for QuickStatements export.",
+                self,
+                "Missing Token",
+                "Bot password is required for live upload. Use dry run for QuickStatements export.",
             )
             return
 
         self.run_requested.emit(
-            input_path, output_path,
+            input_path,
+            output_path,
             self._token_edit.text().strip(),
-            dry_run, self._batch_cb.isChecked(),
+            dry_run,
+            self._batch_cb.isChecked(),
         )
 
     def _on_load_results(self) -> None:
@@ -278,7 +289,9 @@ class WikidataPanel(QWidget):
         from PyQt6.QtWidgets import QFileDialog  # noqa: PLC0415
 
         path_str, _ = QFileDialog.getOpenFileName(
-            self, "Load Upload Results", "",
+            self,
+            "Load Upload Results",
+            "",
             "JSON files (*.json);;QuickStatements (*.txt);;All (*)",
         )
         if not path_str:
@@ -291,8 +304,7 @@ class WikidataPanel(QWidget):
                 text = path.read_text(encoding="utf-8")
                 lines = text.strip().split("\n")
                 self._stats_label.setText(
-                    f"<b>QuickStatements Export</b><br>"
-                    f"{len(lines)} statements from {path.name}"
+                    f"<b>QuickStatements Export</b><br>{len(lines)} statements from {path.name}"
                 )
                 self._stats_label.show()
                 self._log_viewer.append_line(f"Loaded {len(lines)} QuickStatements from {path}")
@@ -375,7 +387,7 @@ class WikidataPanel(QWidget):
         # Re-add to panel layout (scroll area content)
         for i in range(self.layout().count()):
             widget = self.layout().itemAt(i).widget()
-            if widget and hasattr(widget, 'widget'):  # QScrollArea
+            if widget and hasattr(widget, "widget"):  # QScrollArea
                 content = widget.widget()
                 if content:
                     content.layout().insertWidget(content.layout().count() - 1, self._upload_view)
@@ -383,11 +395,12 @@ class WikidataPanel(QWidget):
 
     def _compute_upload_stats(self) -> str:
         """Compute live upload statistics as HTML."""
-        widgets = getattr(self._upload_view, '_entity_widgets', [])
+        widgets = getattr(self._upload_view, "_entity_widgets", [])
         if not widgets:
             return "No upload data."
 
         from collections import Counter  # noqa: PLC0415
+
         statuses = Counter(w.current_status for w in widgets)
         total = len(widgets)
         created = statuses.get("success", 0)

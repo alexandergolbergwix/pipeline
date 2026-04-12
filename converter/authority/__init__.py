@@ -9,17 +9,18 @@ authority records with multilingual support (Hebrew, Latin, Arabic, Cyrillic)
 and links to international authority systems (VIAF, ORCID, Wikidata).
 """
 
-from .mazal_matcher import MazalMatcher
-from .mazal_index import MazalIndex, build_index
-from .viaf_matcher import VIAFMatcher
 from .kima_index import KimaIndex, build_kima_index
 from .kima_matcher import KimaMatcher
+from .mazal_index import MazalIndex, build_index
+from .mazal_matcher import MazalMatcher
+from .viaf_matcher import VIAFMatcher
 
 __all__ = [
-    'MazalMatcher', 'MazalIndex', 'build_index',
-    'VIAFMatcher',
-    'KimaMatcher', 'KimaIndex', 'build_kima_index',
+    "MazalMatcher",
+    "MazalIndex",
+    "build_index",
+    "VIAFMatcher",
+    "KimaMatcher",
+    "KimaIndex",
+    "build_kima_index",
 ]
-
-
-

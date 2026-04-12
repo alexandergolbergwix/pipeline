@@ -43,10 +43,10 @@ _STAGE_LABELS: list[str] = [
 ]
 
 _STATE_ICONS: dict[str, str] = {
-    "pending": "\u25CB",   # ○
-    "running": "\u25D4",   # ◔
-    "done": "\u25CF",      # ●
-    "error": "\u2716",     # ✖
+    "pending": "\u25cb",  # ○
+    "running": "\u25d4",  # ◔
+    "done": "\u25cf",  # ●
+    "error": "\u2716",  # ✖
 }
 
 
@@ -155,8 +155,8 @@ class MainWindow(QMainWindow):
             self._stack.addWidget(panel)
         splitter.addWidget(self._stack)
         splitter.setCollapsible(0, True)  # Sidebar can collapse
-        splitter.setStretchFactor(0, 0)   # Sidebar doesn't stretch
-        splitter.setStretchFactor(1, 1)   # Panels get all extra space
+        splitter.setStretchFactor(0, 0)  # Sidebar doesn't stretch
+        splitter.setStretchFactor(1, 1)  # Panels get all extra space
 
         main_layout.addWidget(splitter, stretch=3)
 
@@ -212,9 +212,7 @@ class MainWindow(QMainWindow):
 
     def _on_stage_finished(self, index: int, output: Path) -> None:
         self._update_stage_state(index, "done")
-        self._shared_log.append_line(
-            f"Stage {index + 1} finished. Output: {output}"
-        )
+        self._shared_log.append_line(f"Stage {index + 1} finished. Output: {output}")
         self._load_stage_results(index, output)
         self._autofill_next_stage(index, output)
 
@@ -390,22 +388,32 @@ class MainWindow(QMainWindow):
         """
         self._sidebar.setCurrentRow(index)
 
-    def _on_run_convert(
-        self, input_path: Path, output_path: Path, start: int, end: int
-    ) -> None:
+    def _on_run_convert(self, input_path: Path, output_path: Path, start: int, end: int) -> None:
         self._shared_log.append_line(f"Parsing {input_path.name}…")
         self._controller.start_stage(
-            0, input_path=input_path, output_dir=output_path, start=start, end=end,
+            0,
+            input_path=input_path,
+            output_dir=output_path,
+            start=start,
+            end=end,
         )
 
     def _on_run_ner(
-        self, input_path: Path, output_path: Path, model_path: str,
-        batch_size: int, provenance_model_path: str, contents_model_path: str,
+        self,
+        input_path: Path,
+        output_path: Path,
+        model_path: str,
+        batch_size: int,
+        provenance_model_path: str,
+        contents_model_path: str,
     ) -> None:
         self._shared_log.append_line(f"Running NER on {input_path.name}…")
         self._controller.start_stage(
-            1, input_path=input_path, output_dir=output_path,
-            model_path=model_path, batch_size=batch_size,
+            1,
+            input_path=input_path,
+            output_dir=output_path,
+            model_path=model_path,
+            batch_size=batch_size,
             provenance_model_path=provenance_model_path,
             contents_model_path=contents_model_path,
         )
@@ -437,7 +445,10 @@ class MainWindow(QMainWindow):
     def _on_run_rdf(self, input_path: Path, output_path: Path, fmt: str) -> None:
         self._shared_log.append_line(f"Building RDF from {input_path.name}…")
         self._controller.start_stage(
-            3, input_path=input_path, output_dir=output_path, rdf_format=fmt,
+            3,
+            input_path=input_path,
+            output_dir=output_path,
+            rdf_format=fmt,
         )
 
     def _on_run_validate(self, ttl_path: Path, shapes_path: Path) -> None:
@@ -445,14 +456,22 @@ class MainWindow(QMainWindow):
         self._controller.start_stage(4, input_path=ttl_path, shapes_path=shapes_path)
 
     def _on_run_wikidata(
-        self, input_path: Path, output_dir: Path,
-        token: str, dry_run: bool, batch_mode: bool,
+        self,
+        input_path: Path,
+        output_dir: Path,
+        token: str,
+        dry_run: bool,
+        batch_mode: bool,
     ) -> None:
         mode = "dry run" if dry_run else "live upload"
         self._shared_log.append_line(f"Wikidata {mode} from {input_path.name}…")
         self._controller.start_stage(
-            5, input_path=input_path, output_dir=output_dir,
-            token=token, dry_run=dry_run, batch_mode=batch_mode,
+            5,
+            input_path=input_path,
+            output_dir=output_dir,
+            token=token,
+            dry_run=dry_run,
+            batch_mode=batch_mode,
         )
 
     def _on_open_marc(self) -> None:

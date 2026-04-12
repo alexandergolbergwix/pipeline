@@ -43,14 +43,37 @@ _EMPTY = DateRange(None, None, False, "unresolved")
 # ── Gematria engine ──────────────────────────────────────────────────────────
 
 GEMATRIA: dict[str, int] = {
-    "א": 1, "ב": 2, "ג": 3, "ד": 4, "ה": 5, "ו": 6, "ז": 7, "ח": 8, "ט": 9,
-    "י": 10, "כ": 20, "ך": 20, "ל": 30, "מ": 40, "ם": 40, "נ": 50, "ן": 50,
-    "ס": 60, "ע": 70, "פ": 80, "ף": 80, "צ": 90, "ץ": 90,
-    "ק": 100, "ר": 200, "ש": 300, "ת": 400,
+    "א": 1,
+    "ב": 2,
+    "ג": 3,
+    "ד": 4,
+    "ה": 5,
+    "ו": 6,
+    "ז": 7,
+    "ח": 8,
+    "ט": 9,
+    "י": 10,
+    "כ": 20,
+    "ך": 20,
+    "ל": 30,
+    "מ": 40,
+    "ם": 40,
+    "נ": 50,
+    "ן": 50,
+    "ס": 60,
+    "ע": 70,
+    "פ": 80,
+    "ף": 80,
+    "צ": 90,
+    "ץ": 90,
+    "ק": 100,
+    "ר": 200,
+    "ש": 300,
+    "ת": 400,
 }
 
 # Characters to strip from Hebrew date text before gematria calculation
-_STRIP_CHARS = set("\"'״׳\u05F3\u05F4\u05BC\u05BD\u0027\u0022 ")
+_STRIP_CHARS = set("\"'״׳\u05f3\u05f4\u05bc\u05bd\u0027\u0022 ")
 
 # Hebrew letter range for regex (alef–tav including final forms)
 _HEB = r"\u05D0-\u05EA"
@@ -62,8 +85,7 @@ def _strip_marks(text: str) -> str:
     cleaned = "".join(c for c in text if c not in _STRIP_CHARS)
     # Then remove Unicode combining characters (niqqud etc.)
     return "".join(
-        c for c in unicodedata.normalize("NFD", cleaned)
-        if unicodedata.category(c) != "Mn"
+        c for c in unicodedata.normalize("NFD", cleaned) if unicodedata.category(c) != "Mn"
     )
 
 
@@ -116,6 +138,7 @@ def _century_to_range(century: int) -> tuple[int, int]:
 
 # ── Hebrew ordinal gematria (for century numbers) ───────────────────────────
 
+
 def _hebrew_ordinal_to_int(text: str) -> int | None:
     """Convert a Hebrew ordinal like יז (17) or יא (11) to an integer.
 
@@ -130,18 +153,10 @@ def _hebrew_ordinal_to_int(text: str) -> int | None:
 # by the resolve() dispatcher.
 
 # Pre-compiled patterns (module-level for performance)
-_RE_SELEUCID = re.compile(
-    rf"([{_HEB}\"״\u05F4'\u05F3]+)\s*לשטרות"
-)
-_RE_HEBREW_YEAR_WITH_GREG = re.compile(
-    rf"([{_HEB}\"״\u05F4'\u05F3]{{2,8}})\s*\(?(\d{{3,4}})\)?"
-)
-_RE_HEBREW_APPROX_RANGE = re.compile(
-    r"(\d{3,4})\s*בערך\s*[-–]\s*(\d{3,4})"
-)
-_RE_HEBREW_APPROX_RANGE2 = re.compile(
-    r"בערך\s*(\d{3,4})\s*[-–]\s*(\d{3,4})"
-)
+_RE_SELEUCID = re.compile(rf"([{_HEB}\"״\u05F4'\u05F3]+)\s*לשטרות")
+_RE_HEBREW_YEAR_WITH_GREG = re.compile(rf"([{_HEB}\"״\u05F4'\u05F3]{{2,8}})\s*\(?(\d{{3,4}})\)?")
+_RE_HEBREW_APPROX_RANGE = re.compile(r"(\d{3,4})\s*בערך\s*[-–]\s*(\d{3,4})")
+_RE_HEBREW_APPROX_RANGE2 = re.compile(r"בערך\s*(\d{3,4})\s*[-–]\s*(\d{3,4})")
 _RE_HEBREW_DIED = re.compile(r"נפטר\s+(\d{3,4})")
 _RE_HEBREW_BORN = re.compile(r"נולד\s+(\d{3,4})")
 _RE_HEBREW_APPROX_SINGLE = re.compile(r"(\d{3,4})\s*בערך")
@@ -150,33 +165,29 @@ _RE_HEBREW_ACTIVE_CENTURY = re.compile(
 )
 _RE_HEBREW_ACTIVE_YEAR = re.compile(r"(?:פעל|פעיל)\s+(\d{3,4})")
 _RE_HEBREW_CENTURY_NUM = re.compile(r"מאה\s+ה[-]?(\d{1,2})")
-_RE_HEBREW_CENTURY_LETTERS = re.compile(
-    rf"מאה\s+ה[-]?([{_HEB}\"״\u05F4'\u05F3]{{1,5}})"
-)
+_RE_HEBREW_CENTURY_LETTERS = re.compile(rf"מאה\s+ה[-]?([{_HEB}\"״\u05F4'\u05F3]{{1,5}})")
 _RE_ENG_APPROX = re.compile(
     r"(?:approximately|approx\.?|ca\.?)\s*(\d{3,4})\s*[-–]\s*"
     r"(?:approximately|approx\.?|ca\.?)\s*(\d{3,4})",
     re.IGNORECASE,
 )
 _RE_ENG_CA = re.compile(
-    r"(?:ca\.?|c\.)\s*(\d{3,4})", re.IGNORECASE,
+    r"(?:ca\.?|c\.)\s*(\d{3,4})",
+    re.IGNORECASE,
 )
 _RE_ENG_CENTURY_RANGE = re.compile(
     r"(\d{1,2})(?:th|st|nd|rd)\s*[-–]\s*(\d{1,2})(?:th|st|nd|rd)\s*cent",
     re.IGNORECASE,
 )
 _RE_ENG_CENTURY = re.compile(
-    r"(\d{1,2})(?:th|st|nd|rd)\s*cent", re.IGNORECASE,
+    r"(\d{1,2})(?:th|st|nd|rd)\s*cent",
+    re.IGNORECASE,
 )
-_RE_GREG_UNCERTAIN = re.compile(
-    r"\??\s*(\d{3,4})\s*\??\s*[-–]\s*\??\s*(\d{3,4})\s*\??"
-)
+_RE_GREG_UNCERTAIN = re.compile(r"\??\s*(\d{3,4})\s*\??\s*[-–]\s*\??\s*(\d{3,4})\s*\??")
 _RE_GREG_OPEN = re.compile(r"(\d{3,4})\s*[-–]\s*$")
 _RE_GREG_RANGE = re.compile(r"(\d{3,4})\s*[-–]\s*(\d{3,4})")
 _RE_GREG_SINGLE = re.compile(r"\b(\d{4})\b")
-_RE_HEBREW_STANDALONE = re.compile(
-    rf"([{_HEB}]{{1,5}})"
-)
+_RE_HEBREW_STANDALONE = re.compile(rf"([{_HEB}]{{1,5}})")
 
 
 def _parse_seleucid_era(s: str) -> DateRange | None:
@@ -262,7 +273,8 @@ def _parse_hebrew_active(s: str) -> DateRange | None:
 
     # Century range in active context: "פעל במאה ה-16-17"
     range_match = re.search(
-        rf"(?:פעל|פעיל)\s+(?:ב)?מאה\s+ה[-]?(\d{{1,2}})\s*[-–]\s*(\d{{1,2}})", s,
+        r"(?:פעל|פעיל)\s+(?:ב)?מאה\s+ה[-]?(\d{1,2})\s*[-–]\s*(\d{1,2})",
+        s,
     )
     if range_match:
         c1, c2 = int(range_match.group(1)), int(range_match.group(2))
@@ -507,7 +519,9 @@ def resolve_person_dates(date_string: str) -> dict[str, int | None]:
 
 
 def dates_overlap(
-    range_a: DateRange, range_b: DateRange, tolerance: int = 5,
+    range_a: DateRange,
+    range_b: DateRange,
+    tolerance: int = 5,
 ) -> bool:
     """Check whether two ``DateRange`` values overlap within *tolerance* years.
 

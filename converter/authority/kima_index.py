@@ -17,6 +17,7 @@ Usage::
     result = idx.lookup_place("ירושלים")  # -> dict or None
     idx.close()
 """
+
 from __future__ import annotations
 
 import csv
@@ -26,7 +27,6 @@ import sqlite3
 import sys
 import unicodedata
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ _VARIANTS_GLOB = "*Kima*Variants*"
 _MAAGARIM_GLOB = "Maagarim*"
 
 
-def _find_tsv(directory: Path, glob: str) -> Optional[Path]:
+def _find_tsv(directory: Path, glob: str) -> Path | None:
     matches = list(directory.glob(glob))
     if not matches:
         return None
@@ -106,8 +106,7 @@ class KimaIndex:
         name = re.sub(r"[\u0591-\u05C7]", "", name)
         # NFD normalization + remove combining characters
         name = "".join(
-            c for c in unicodedata.normalize("NFD", name)
-            if not unicodedata.combining(c)
+            c for c in unicodedata.normalize("NFD", name) if not unicodedata.combining(c)
         )
         # Remove punctuation except hyphens and apostrophes
         name = re.sub(r"[^\w\s\-']", "", name, flags=re.UNICODE)
@@ -134,14 +133,20 @@ class KimaIndex:
                geonames_id, mazal_nli_id, lat, lon)
             VALUES (?,?,?,?,?,?,?,?,?)
             """,
-            (kima_id, primary_heb, primary_rom, wikidata_id or None,
-             viaf_id or None, geonames_id or None, mazal_nli_id or None,
-             lat, lon),
+            (
+                kima_id,
+                primary_heb,
+                primary_rom,
+                wikidata_id or None,
+                viaf_id or None,
+                geonames_id or None,
+                mazal_nli_id or None,
+                lat,
+                lon,
+            ),
         )
 
-    def insert_name_variant(
-        self, normalized_name: str, kima_id: int, script: str
-    ) -> None:
+    def insert_name_variant(self, normalized_name: str, kima_id: int, script: str) -> None:
         if not normalized_name:
             return
         self.conn.execute(
@@ -151,7 +156,7 @@ class KimaIndex:
 
     # ── lookup ────────────────────────────────────────────────────────
 
-    def lookup_place(self, name: str) -> Optional[dict]:
+    def lookup_place(self, name: str) -> dict | None:
         """Return place record dict for *name*, or None if not found."""
         normalized = self.normalize_name(name)
         if not normalized:
@@ -361,6 +366,8 @@ def build_kima_index(
     if verbose:
         logger.info(
             "KIMA index complete — %d places, %d name variants → %s",
-            st["places"], st["name_variants"], db_path,
+            st["places"],
+            st["name_variants"],
+            db_path,
         )
     index.close()

@@ -26,7 +26,11 @@ def _configure_logging(log_level: str) -> None:
 
     # Daily rotation, keep 30 days of logs
     file_handler = TimedRotatingFileHandler(
-        log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8",
+        log_file,
+        when="midnight",
+        interval=1,
+        backupCount=30,
+        encoding="utf-8",
     )
     file_handler.suffix = "%Y-%m-%d"
 
@@ -47,11 +51,13 @@ def main() -> None:
     # Required for QWebEngineView (Cytoscape.js graph viewer) — must be set
     # BEFORE QApplication is created, otherwise WebEngine silently fails.
     from PyQt6.QtCore import Qt  # noqa: PLC0415
+
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
     # Set process name for macOS menu bar (shows "MHM Pipeline" instead of "Python")
     try:
         import ctypes  # noqa: PLC0415
+
         libc = ctypes.cdll.LoadLibrary("libc.dylib")
         libc.setprogname(b"MHM Pipeline")
     except Exception:

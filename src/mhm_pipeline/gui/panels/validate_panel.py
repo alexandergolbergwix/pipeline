@@ -35,9 +35,7 @@ class ValidatePanel(QWidget):
         layout = QVBoxLayout(self)
 
         # file selectors
-        self._ttl_selector = FileSelector(
-            "TTL File:", mode="open", filter="Turtle files (*.ttl)"
-        )
+        self._ttl_selector = FileSelector("TTL File:", mode="open", filter="Turtle files (*.ttl)")
         self._shapes_selector = FileSelector(
             "SHACL Shapes:", mode="open", filter="Turtle files (*.ttl)"
         )

@@ -11,15 +11,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 _VIAF_SEARCH = "https://viaf.org/viaf/search"
-_TIMEOUT = 8          # seconds per request
-_RATE_LIMIT = 0.5     # seconds between requests (2 req/s — VIAF rate limit)
+_TIMEOUT = 8  # seconds per request
+_RATE_LIMIT = 0.5  # seconds between requests (2 req/s — VIAF rate limit)
 
 
 class VIAFMatcher:
@@ -38,7 +37,7 @@ class VIAFMatcher:
 
     # ── public API ────────────────────────────────────────────────────
 
-    def match_person(self, name: str) -> Optional[str]:
+    def match_person(self, name: str) -> str | None:
         """Return the VIAF cluster URI for *name*, or None if not found.
 
         Searches VIAF personal-name headings.  Returns the URI of the
@@ -46,11 +45,11 @@ class VIAFMatcher:
         """
         return self._search(name, cql_field="local.personalNames")
 
-    def match_place(self, name: str) -> Optional[str]:
+    def match_place(self, name: str) -> str | None:
         """Return the VIAF cluster URI for a geographic name, or None."""
         return self._search(name, cql_field="local.geographicNames")
 
-    def match_work(self, title: str) -> Optional[str]:
+    def match_work(self, title: str) -> str | None:
         """Return the VIAF cluster URI for a uniform title, or None."""
         return self._search(title, cql_field="local.uniformTitleWorks")
 
@@ -132,7 +131,7 @@ class VIAFMatcher:
 
     # ── internals ─────────────────────────────────────────────────────
 
-    def _search(self, name: str, cql_field: str) -> Optional[str]:
+    def _search(self, name: str, cql_field: str) -> str | None:
         cache_key = f"{cql_field}:{name}"
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -141,7 +140,7 @@ class VIAFMatcher:
         self._cache[cache_key] = result
         return result
 
-    def _query_api(self, name: str, cql_field: str) -> Optional[str]:
+    def _query_api(self, name: str, cql_field: str) -> str | None:
         # Respect rate limit
         elapsed = time.monotonic() - self._last_request
         if elapsed < _RATE_LIMIT:
@@ -171,7 +170,9 @@ class VIAFMatcher:
             return None
 
         # records_wrapper is {"record": [...]} or {"record": {...}}
-        record_list = records_wrapper.get("record") if isinstance(records_wrapper, dict) else records_wrapper
+        record_list = (
+            records_wrapper.get("record") if isinstance(records_wrapper, dict) else records_wrapper
+        )
         if not record_list:
             return None
 
@@ -179,9 +180,8 @@ class VIAFMatcher:
 
         # viafID lives at recordData.ns2:VIAFCluster.ns2:viafID
         record_data = first.get("recordData", {})
-        viaf_id = (
-            record_data.get("ns2:VIAFCluster", {}).get("ns2:viafID")
-            or record_data.get("viafID")
+        viaf_id = record_data.get("ns2:VIAFCluster", {}).get("ns2:viafID") or record_data.get(
+            "viafID"
         )
         if not viaf_id:
             return None

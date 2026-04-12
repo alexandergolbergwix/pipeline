@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -66,9 +66,7 @@ class NerPanel(QWidget):
         # ── NER Models section ──────────────────────────────────────
         models_frame = QFrame()
         models_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        models_frame.setStyleSheet(
-            "QFrame { border: 1px solid #d1d5db; border-radius: 6px; }"
-        )
+        models_frame.setStyleSheet("QFrame { border: 1px solid #d1d5db; border-radius: 6px; }")
         models_layout = QVBoxLayout(models_frame)
         models_layout.setContentsMargins(10, 8, 10, 8)
         models_layout.setSpacing(4)
@@ -86,7 +84,9 @@ class NerPanel(QWidget):
         person_row.addWidget(self._person_check)
         person_default = os.environ.get("MHM_BUNDLED_NER_MODEL", "")
         self._person_model_edit = QLineEdit(person_default if person_default else _DEFAULT_MODEL)
-        self._person_model_edit.setStyleSheet("border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;")
+        self._person_model_edit.setStyleSheet(
+            "border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;"
+        )
         person_row.addWidget(self._person_model_edit)
         models_layout.addLayout(person_row)
 
@@ -99,7 +99,9 @@ class NerPanel(QWidget):
         prov_row.addWidget(self._prov_check)
         prov_default = os.environ.get("MHM_BUNDLED_PROVENANCE_MODEL", "")
         self._prov_model_edit = QLineEdit(prov_default if prov_default else "(auto-detect)")
-        self._prov_model_edit.setStyleSheet("border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;")
+        self._prov_model_edit.setStyleSheet(
+            "border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;"
+        )
         prov_row.addWidget(self._prov_model_edit)
         models_layout.addLayout(prov_row)
 
@@ -112,7 +114,9 @@ class NerPanel(QWidget):
         cont_row.addWidget(self._cont_check)
         cont_default = os.environ.get("MHM_BUNDLED_CONTENTS_MODEL", "")
         self._cont_model_edit = QLineEdit(cont_default if cont_default else "(auto-detect)")
-        self._cont_model_edit.setStyleSheet("border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;")
+        self._cont_model_edit.setStyleSheet(
+            "border: 1px solid #9ca3af; border-radius: 3px; padding: 2px 4px;"
+        )
         cont_row.addWidget(self._cont_model_edit)
         models_layout.addLayout(cont_row)
 
@@ -169,9 +173,7 @@ class NerPanel(QWidget):
         """Build the compact entity results preview section."""
         preview_frame = QFrame()
         preview_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        preview_frame.setStyleSheet(
-            "QFrame { border: 1px solid #d1d5db; border-radius: 6px; }"
-        )
+        preview_frame.setStyleSheet("QFrame { border: 1px solid #d1d5db; border-radius: 6px; }")
         preview_layout = QVBoxLayout(preview_frame)
         preview_layout.setContentsMargins(10, 8, 10, 8)
         preview_layout.setSpacing(6)
@@ -235,7 +237,11 @@ class NerPanel(QWidget):
 
         n_records = len(records) if records else 0
         n_entities = len(entities)
-        header = f"Entities Found ({n_records} records, {n_entities} entities)" if n_records else f"Entities Found ({n_entities} entities)"
+        header = (
+            f"Entities Found ({n_records} records, {n_entities} entities)"
+            if n_records
+            else f"Entities Found ({n_entities} entities)"
+        )
         self._preview_header.setText(header)
         self._view_full_btn.setEnabled(True)
 
@@ -245,11 +251,15 @@ class NerPanel(QWidget):
         shown = entities[:_PREVIEW_MAX_ENTITIES]
         for entity in shown:
             icon = get_entity_icon(
-                entity, EntityHighlighter.ROLE_ICONS, EntityHighlighter.DEFAULT_ICON,
+                entity,
+                EntityHighlighter.ROLE_ICONS,
+                EntityHighlighter.DEFAULT_ICON,
             )
             display_text = f"{icon} {build_entity_display_text(entity)}"
             bg_color, _ = get_entity_colors(
-                entity, EntityHighlighter.ROLE_COLORS, EntityHighlighter.ENTITY_COLORS,
+                entity,
+                EntityHighlighter.ROLE_COLORS,
+                EntityHighlighter.ENTITY_COLORS,
             )
             item = QListWidgetItem(display_text)
             item.setBackground(QColor(bg_color))
@@ -340,8 +350,7 @@ class NerPanel(QWidget):
         """Handle role filter checkbox state changes."""
         # Get selected roles
         selected_roles = {
-            role for role, checkbox in self._role_checkboxes.items()
-            if checkbox.isChecked()
+            role for role, checkbox in self._role_checkboxes.items() if checkbox.isChecked()
         }
         # Apply filter
         self._entity_highlighter.filter_by_roles(selected_roles)
@@ -373,7 +382,9 @@ class NerPanel(QWidget):
             output_path = input_path.parent
             self._output_selector.path = output_path
 
-        person_model = self._person_model_edit.text().strip() if self._person_check.isChecked() else ""
+        person_model = (
+            self._person_model_edit.text().strip() if self._person_check.isChecked() else ""
+        )
         if self._person_check.isChecked() and not person_model:
             self._log_viewer.append_line("Error: Person NER model path is empty.")
             return
@@ -398,8 +409,12 @@ class NerPanel(QWidget):
         self._log_viewer.append_line(f"Running NER models: {', '.join(enabled)}")
 
         self.run_requested.emit(
-            input_path, output_path, person_model,
-            self._batch_spin.value(), prov_model, cont_model,
+            input_path,
+            output_path,
+            person_model,
+            self._batch_spin.value(),
+            prov_model,
+            cont_model,
         )
 
     def _on_load_results(self) -> None:
@@ -453,7 +468,10 @@ class NerPanel(QWidget):
         self._update_role_filter_checkboxes()
 
     def display_entities(
-        self, text: str, entities: list[Entity], records: list[dict] | None = None,
+        self,
+        text: str,
+        entities: list[Entity],
+        records: list[dict] | None = None,
     ) -> None:
         """Display extracted entities in the preview.
 
@@ -477,7 +495,8 @@ class NerPanel(QWidget):
         """Open a full-screen dialog showing all NER results."""
         if not getattr(self, "_current_entities", None):
             QMessageBox.information(
-                self, "No Results",
+                self,
+                "No Results",
                 "No NER results to display. run NER Extraction or load results first.",
             )
             return
@@ -504,7 +523,8 @@ class NerPanel(QWidget):
             full_view.display_records(self._current_records)
         else:
             full_view.load_entities(
-                getattr(self, "_current_text", ""), self._current_entities,
+                getattr(self, "_current_text", ""),
+                self._current_entities,
             )
         dlg_layout.addWidget(full_view, stretch=1)
 
@@ -531,9 +551,7 @@ class NerPanel(QWidget):
 
         # Close button
         close_btn = QPushButton("Close")
-        close_btn.setStyleSheet(
-            "QPushButton { padding: 6px 24px; font-size: 13px; }"
-        )
+        close_btn.setStyleSheet("QPushButton { padding: 6px 24px; font-size: 13px; }")
         close_btn.clicked.connect(dialog.accept)
         dlg_layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
 

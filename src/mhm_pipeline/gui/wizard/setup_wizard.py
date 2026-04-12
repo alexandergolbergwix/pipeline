@@ -32,6 +32,7 @@ _CPU_MODELS: list[str] = [
 
 # ── Download worker ──────────────────────────────────────────────────
 
+
 class _DownloadWorker(QThread):
     """Background worker that downloads HuggingFace model snapshots."""
 
@@ -69,6 +70,7 @@ class _DownloadWorker(QThread):
 
 
 # ── Wizard pages ─────────────────────────────────────────────────────
+
 
 class _WelcomePage(QWizardPage):
     """Page 1: greeting, detected GPU, and disk space."""
@@ -202,6 +204,7 @@ class _CompletePage(QWizardPage):
 
 # ── Main wizard ──────────────────────────────────────────────────────
 
+
 class SetupWizard(QWizard):
     """First-run wizard that downloads required NLP models."""
 
@@ -224,7 +227,8 @@ class SetupWizard(QWizard):
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
+
 def _free_disk_gb() -> float:
     """Return free disk space in GB for the home directory."""
     usage = shutil.disk_usage(Path.home())
-    return usage.free / (1024 ** 3)
+    return usage.free / (1024**3)

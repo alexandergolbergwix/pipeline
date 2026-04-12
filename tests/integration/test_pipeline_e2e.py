@@ -22,6 +22,7 @@ Stage → test class mapping (used by /run-tests skill):
 CRITICAL: TestVenvImports runs FIRST to catch "tests pass but app crashes" issues.
 These tests verify packages are installed in .venv, not just found via PYTHONPATH.
 """
+
 from __future__ import annotations
 
 import json
@@ -133,8 +134,9 @@ class TestVenvImports:
         kima.close()
         assert uri, "KIMA index exists but failed to match 'ירושלים' — index may be corrupt"
 
-
-    def test_stage_0_worker_runs_in_qthread_without_crash(self, qtbot: object, tmp_path: Path) -> None:
+    def test_stage_0_worker_runs_in_qthread_without_crash(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
         """MarcParseWorker must run in QThread without segfault — real crash was dictiter_iternextitem.
 
         The actual crash happens when running in a QThread (GUI mode), not when calling run() directly.
@@ -156,7 +158,7 @@ class TestVenvImports:
         worker.error.connect(error_msgs.append)
 
         # Run in actual QThread — this is where the crash happened
-        with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+        with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
             worker.start()
 
         # Verify no error was emitted
@@ -211,9 +213,7 @@ class TestGuiWidgetContracts:
 
         for panel in panels:
             name = type(panel).__name__
-            assert hasattr(panel, "stage_progress"), (
-                f"{name} missing stage_progress property"
-            )
+            assert hasattr(panel, "stage_progress"), f"{name} missing stage_progress property"
             widget = panel.stage_progress
             assert hasattr(widget, "set_progress"), (
                 f"{name}.stage_progress ({type(widget).__name__}) "
@@ -262,6 +262,7 @@ class TestGuiWidgetContracts:
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
+
 
 def _ner_json(tmp_path: Path, control_number: str = "990000836520205171") -> Path:
     """Write a minimal NER-results JSON (one record, one entity) to tmp_path."""
@@ -337,7 +338,9 @@ class TestMarcParseWorker:
         records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
         assert len(records) == 897
 
-    def test_tsv_first_500_records_parse_with_authority_fields(self, qtbot: object, tmp_path: Path) -> None:
+    def test_tsv_first_500_records_parse_with_authority_fields(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
         """First 500 records from TSV should parse and include all MARC name fields (100, 110, 111, 700, 710, 711)."""
         from mhm_pipeline.controller.workers import MarcParseWorker
 
@@ -352,9 +355,7 @@ class TestMarcParseWorker:
         # Verify some records have name fields that should be authority-matched
         records_with_names = 0
         for record in records:
-            has_names = bool(
-                record.get("authors") or record.get("contributors")
-            )
+            has_names = bool(record.get("authors") or record.get("contributors"))
             if has_names:
                 records_with_names += 1
 
@@ -387,9 +388,7 @@ class TestMarcParseWorker:
         assert blocker.args[0]  # non-empty error message
 
     @INPUT_FILES
-    def test_log_lines_emitted(
-        self, qtbot: object, tmp_path: Path, input_file: Path
-    ) -> None:
+    def test_log_lines_emitted(self, qtbot: object, tmp_path: Path, input_file: Path) -> None:
         from mhm_pipeline.controller.workers import MarcParseWorker
 
         worker = MarcParseWorker(input_file, tmp_path, "cpu")
@@ -526,7 +525,7 @@ class TestNerWorker:
             worker.error.connect(error_msgs.append)
 
             # Run in actual QThread
-            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+            with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
                 worker.start()
 
         # Verify no error was emitted
@@ -605,9 +604,7 @@ class TestAuthorityWorker:
             with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
                 worker.start()
 
-        records = json.loads(
-            Path(blocker.args[0]).read_text(encoding="utf-8")
-        )
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
         entity = records[0]["entities"][0]
         assert entity.get("mazal_id") == "NLI12345"
 
@@ -739,6 +736,7 @@ class TestMazalIndexWorker:
         single_dir = tmp_path / "xml"
         single_dir.mkdir()
         import shutil
+
         shutil.copy(single_xml, single_dir / single_xml.name)
 
         db_path = tmp_path / "mazal_test.db"
@@ -829,9 +827,7 @@ class TestKimaIndexWorker:
 
 class TestRdfBuildWorker:
     @INPUT_FILES
-    def test_produces_ttl_file(
-        self, qtbot: object, tmp_path: Path, input_file: Path
-    ) -> None:
+    def test_produces_ttl_file(self, qtbot: object, tmp_path: Path, input_file: Path) -> None:
         from mhm_pipeline.controller.workers import RdfBuildWorker
 
         worker = RdfBuildWorker(input_file, tmp_path)
@@ -846,9 +842,7 @@ class TestRdfBuildWorker:
         assert "@prefix" in content or "PREFIX" in content, "TTL has no namespace declarations"
 
     @INPUT_FILES
-    def test_ttl_contains_triples(
-        self, qtbot: object, tmp_path: Path, input_file: Path
-    ) -> None:
+    def test_ttl_contains_triples(self, qtbot: object, tmp_path: Path, input_file: Path) -> None:
         from mhm_pipeline.controller.workers import RdfBuildWorker
 
         worker = RdfBuildWorker(input_file, tmp_path)
@@ -861,12 +855,11 @@ class TestRdfBuildWorker:
         g.parse(blocker.args[0], format="turtle")
         assert len(g) > 0, "Serialised TTL graph has no triples"
 
-    def test_tsv_builds_more_triples_than_single_mrc(
-        self, qtbot: object, tmp_path: Path
-    ) -> None:
+    def test_tsv_builds_more_triples_than_single_mrc(self, qtbot: object, tmp_path: Path) -> None:
         """897-record TSV should produce more triples than a single MRC record."""
-        from mhm_pipeline.controller.workers import RdfBuildWorker
         from rdflib import Graph
+
+        from mhm_pipeline.controller.workers import RdfBuildWorker
 
         mrc_dir = tmp_path / "mrc"
         tsv_dir = tmp_path / "tsv"
@@ -893,9 +886,7 @@ class TestRdfBuildWorker:
         )
 
     @INPUT_FILES
-    def test_emits_progress_100(
-        self, qtbot: object, tmp_path: Path, input_file: Path
-    ) -> None:
+    def test_emits_progress_100(self, qtbot: object, tmp_path: Path, input_file: Path) -> None:
         from mhm_pipeline.controller.workers import RdfBuildWorker
 
         worker = RdfBuildWorker(input_file, tmp_path)
@@ -913,9 +904,7 @@ class TestRdfBuildWorker:
 
 class TestShaclValidateWorker:
     @INPUT_FILES
-    def test_produces_report_file(
-        self, qtbot: object, tmp_path: Path, input_file: Path
-    ) -> None:
+    def test_produces_report_file(self, qtbot: object, tmp_path: Path, input_file: Path) -> None:
         from mhm_pipeline.controller.workers import RdfBuildWorker, ShaclValidateWorker
 
         rdf_worker = RdfBuildWorker(input_file, tmp_path)
@@ -1021,7 +1010,6 @@ class TestPipelineControllerChain:
 
     @pytest.fixture()
     def controller(self, tmp_path: Path) -> object:
-        from PyQt6.QtCore import QCoreApplication
 
         from mhm_pipeline.controller.pipeline_controller import PipelineController
         from mhm_pipeline.settings.settings_manager import SettingsManager
@@ -1122,7 +1110,11 @@ class TestFullGuiProgressChain:
         # Run Stage 0 on first 10 records — enough to emit many progress signals
         with qtbot.waitSignal(controller.stage_finished, timeout=60_000):  # type: ignore[attr-defined]
             controller.start_stage(
-                0, input_path=TSV_FILE, output_dir=tmp_path, start=0, end=10,
+                0,
+                input_path=TSV_FILE,
+                output_dir=tmp_path,
+                start=0,
+                end=10,
             )
 
         assert not error_stages, f"Stage 0 error: {error_stages}"

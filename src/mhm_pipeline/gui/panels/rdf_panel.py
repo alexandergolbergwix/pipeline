@@ -116,15 +116,15 @@ class RdfPanel(QWidget):
         if output_path is None:
             output_path = input_path.parent
             self._output_selector.path = output_path
-        self.run_requested.emit(
-            input_path, output_path, self._format_combo.currentText()
-        )
+        self.run_requested.emit(input_path, output_path, self._format_combo.currentText())
 
     def _on_load_results(self) -> None:
         from PyQt6.QtWidgets import QFileDialog  # noqa: PLC0415
 
         path_str, _ = QFileDialog.getOpenFileName(
-            self, "Load RDF File", "",
+            self,
+            "Load RDF File",
+            "",
             "Turtle files (*.ttl);;All files (*)",
         )
         if path_str:
@@ -133,7 +133,8 @@ class RdfPanel(QWidget):
     def _on_open_fullscreen(self) -> None:
         if not self._current_ttl_path:
             QMessageBox.information(
-                self, "No Results",
+                self,
+                "No Results",
                 "No RDF graph loaded. Build RDF or load results first.",
             )
             return
@@ -152,8 +153,9 @@ class RdfPanel(QWidget):
 
         # Reuse the existing SQLite store via its DB path (avoids re-parsing TTL)
         from mhm_pipeline.gui.widgets.graph_store import GraphStore  # noqa: PLC0415
+
         full_graph = KnowledgeGraphView()
-        existing_store = getattr(self._graph_view, '_store', None)
+        existing_store = getattr(self._graph_view, "_store", None)
         if existing_store is not None:
             # Open a read-only connection to the same SQLite DB
             full_graph._store = GraphStore(existing_store.db_path)

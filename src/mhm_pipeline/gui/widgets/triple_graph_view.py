@@ -332,6 +332,7 @@ class TripleGraphView(QWidget):
 
         # Create line - use palette-aware mid color
         from PyQt6.QtWidgets import QApplication
+
         app = QApplication.instance()
         if app:
             palette = app.palette()
@@ -357,6 +358,7 @@ class TripleGraphView(QWidget):
         if label:
             # Use palette-aware text color
             from PyQt6.QtWidgets import QApplication
+
             app = QApplication.instance()
             if app:
                 palette = app.palette()

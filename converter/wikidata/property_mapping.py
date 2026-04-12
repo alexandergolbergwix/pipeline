@@ -12,7 +12,7 @@ Sources:
 from __future__ import annotations
 
 import re
-from datetime import date, timezone, datetime
+from datetime import UTC, datetime
 
 # ── Wikidata PIDs ────────────────────────────────────────────────────
 
@@ -172,10 +172,10 @@ Q_CIRCA = "Q5727902"
 Q_WIKIPROJECT_MANUSCRIPTS = "Q123078816"
 
 # Condition states
-Q_GOOD_CONDITION = "Q56557591"   # preserved
-Q_DAMAGED = "Q106379705"         # damaged
-Q_FRAGMENT = "Q3749265"          # fragment
-Q_RESTORED = "Q75505084"         # restored
+Q_GOOD_CONDITION = "Q56557591"  # preserved
+Q_DAMAGED = "Q106379705"  # damaged
+Q_FRAGMENT = "Q3749265"  # fragment
+Q_RESTORED = "Q75505084"  # restored
 Q_POOR_CONDITION = "Q136350185"  # poor
 
 # Inscription roles (colophon, gloss, correction, marginalia)
@@ -185,8 +185,8 @@ Q_CORRECTION = "Q3299332"
 Q_MARGINALIA = "Q1136474"
 
 # Copyright status
-Q_COPYRIGHTED = "Q50423863"     # copyrighted
-Q_PUBLIC_DOMAIN = "Q19652"      # public domain
+Q_COPYRIGHTED = "Q50423863"  # copyrighted
+Q_PUBLIC_DOMAIN = "Q19652"  # public domain
 
 # Occupations for persons
 Q_SCRIBE = "Q916292"
@@ -207,57 +207,57 @@ SCRIPT_TYPE_TO_QID: dict[str, str] = {
 # Genre mappings — from HMO genre → Wikidata QID
 GENRE_TO_QID: dict[str, str] = {
     # HMO ontology genre types
-    "BiblicalText": "Q55017318",     # biblical literature
-    "TalmudicText": "Q43290",        # Talmud
-    "MishnaicText": "Q191825",       # Mishnah
-    "HalachicText": "Q107427",       # Halakha
-    "KabbalisticText": "Q123006",    # Kabbalah
-    "PhilosophicalText": "Q5891",    # philosophy
-    "PoeticText": "Q482",            # poetry
-    "LiturgicalText": "Q172331",     # liturgy
-    "MedicalText": "Q11190",         # medicine
-    "CommentaryText": "Q1749541",    # commentary
-    "GrammaticalText": "Q8091",      # grammar
+    "BiblicalText": "Q55017318",  # biblical literature
+    "TalmudicText": "Q43290",  # Talmud
+    "MishnaicText": "Q191825",  # Mishnah
+    "HalachicText": "Q107427",  # Halakha
+    "KabbalisticText": "Q123006",  # Kabbalah
+    "PhilosophicalText": "Q5891",  # philosophy
+    "PoeticText": "Q482",  # poetry
+    "LiturgicalText": "Q172331",  # liturgy
+    "MedicalText": "Q11190",  # medicine
+    "CommentaryText": "Q1749541",  # commentary
+    "GrammaticalText": "Q8091",  # grammar
     # MARC genre/form strings (from NLI catalog data)
-    "Poetry": "Q482",                          # poetry
-    "Piyyutim": "Q1377011",                    # piyyut (Hebrew liturgical poetry)
+    "Poetry": "Q482",  # poetry
+    "Piyyutim": "Q1377011",  # piyyut (Hebrew liturgical poetry)
     "Illustrated works (Manuscript)": "Q48498",  # illuminated manuscript
     "Approbations (Rabbinical literature)": "Q3089066",  # haskama
-    "Personal correspondence": "Q133492",       # letter
-    "Mezuzot": "Q177038",                       # mezuzah
-    "Legislation (Jewish law)": "Q107427",      # Halakha
-    "Gittin": "Q752001",                        # get (Jewish divorce document)
-    "Drama": "Q25372",                          # drama
-    "Calendars": "Q12132",                      # calendar
-    "Pinkasim": "Q7197095",                     # pinkas (communal record book)
-    "Censored manuscripts": "Q49100005",         # banned book (censored)
-    "Family records": "Q485228",                 # family register
-    "Registers of births, etc.": "Q18562479",    # vital record
-    "Autograph manuscripts": "Q9026959",         # autograph (handwritten by author)
-    "Bibliographies": "Q1631107",                # bibliography
-    "Tales": "Q49084",                           # short story / tale
-    "Negotiable instruments": "Q3359388",        # negotiable instrument
-    "Riddles": "Q189539",                        # riddle
-    "Death registers": "Q3348095",               # register of deaths
-    "Account books": "Q192907",                  # ledger / account book
+    "Personal correspondence": "Q133492",  # letter
+    "Mezuzot": "Q177038",  # mezuzah
+    "Legislation (Jewish law)": "Q107427",  # Halakha
+    "Gittin": "Q752001",  # get (Jewish divorce document)
+    "Drama": "Q25372",  # drama
+    "Calendars": "Q12132",  # calendar
+    "Pinkasim": "Q7197095",  # pinkas (communal record book)
+    "Censored manuscripts": "Q49100005",  # banned book (censored)
+    "Family records": "Q485228",  # family register
+    "Registers of births, etc.": "Q18562479",  # vital record
+    "Autograph manuscripts": "Q9026959",  # autograph (handwritten by author)
+    "Bibliographies": "Q1631107",  # bibliography
+    "Tales": "Q49084",  # short story / tale
+    "Negotiable instruments": "Q3359388",  # negotiable instrument
+    "Riddles": "Q189539",  # riddle
+    "Death registers": "Q3348095",  # register of deaths
+    "Account books": "Q192907",  # ledger / account book
     "Business records (Manuscript)": "Q804154",  # business record
-    "Licenses": "Q79719",                        # license
-    "Records (Documents)": "Q49848",             # document
-    "Community records (Manuscript)": "Q7197095", # pinkas (communal record)
+    "Licenses": "Q79719",  # license
+    "Records (Documents)": "Q49848",  # document
+    "Community records (Manuscript)": "Q7197095",  # pinkas (communal record)
     "Literature (Miscellaneous, in manuscript)": "Q8242",  # literature
-    "Biographies (Manuscript)": "Q36279",        # biography
-    "Parodies": "Q12378",                        # parody
-    "Ketubbot": "Q207128",                       # ketubah (marriage contract)
-    "Forms (Jewish law)": "Q11028",              # legal document / form
-    "Prayer books": "Q3412432",                  # prayer book / siddur
-    "Sermons": "Q861911",                        # sermon
-    "Commentaries": "Q1749541",                  # commentary
-    "Responsa (Jewish law)": "Q2112559",         # responsa
-    "Deeds": "Q40621",                           # deed (legal document)
-    "Manuscripts, Hebrew": "Q87167",             # Hebrew manuscript
-    "Wills": "Q179157",                          # will / testament
-    "Contracts": "Q386724",                      # contract
-    "Letters": "Q133492",                        # letter
+    "Biographies (Manuscript)": "Q36279",  # biography
+    "Parodies": "Q12378",  # parody
+    "Ketubbot": "Q207128",  # ketubah (marriage contract)
+    "Forms (Jewish law)": "Q11028",  # legal document / form
+    "Prayer books": "Q3412432",  # prayer book / siddur
+    "Sermons": "Q861911",  # sermon
+    "Commentaries": "Q1749541",  # commentary
+    "Responsa (Jewish law)": "Q2112559",  # responsa
+    "Deeds": "Q40621",  # deed (legal document)
+    "Manuscripts, Hebrew": "Q87167",  # Hebrew manuscript
+    "Wills": "Q179157",  # will / testament
+    "Contracts": "Q386724",  # contract
+    "Letters": "Q133492",  # letter
 }
 
 # Well-known works that already exist on Wikidata
@@ -313,43 +313,43 @@ TALMUD_TRACTATE_TO_QID: dict[str, str] = {
 
 # LCSH subject terms → Wikidata QIDs (for P921 main subject)
 SUBJECT_TO_QID: dict[str, str] = {
-    "Eretz Israel": "Q1207",           # Land of Israel
-    "Jews": "Q7325",                   # Jews
-    "Karaites": "Q173579",             # Karaites
-    "Jewish law": "Q107427",           # Halakha
-    "Cabala": "Q123006",               # Kabbalah
+    "Eretz Israel": "Q1207",  # Land of Israel
+    "Jews": "Q7325",  # Jews
+    "Karaites": "Q173579",  # Karaites
+    "Jewish law": "Q107427",  # Halakha
+    "Cabala": "Q123006",  # Kabbalah
     "Religious disputations": "Q841408",  # religious debate
-    "Astronomy": "Q333",               # astronomy
-    "Responsa": "Q2112559",            # responsa
-    "Philosophy": "Q5891",             # philosophy
-    "Jewish philosophy": "Q131748",     # Jewish philosophy
-    "Shehitah": "Q328079",             # shechita (kosher slaughter)
-    "Christianity": "Q5043",           # Christianity
+    "Astronomy": "Q333",  # astronomy
+    "Responsa": "Q2112559",  # responsa
+    "Philosophy": "Q5891",  # philosophy
+    "Jewish philosophy": "Q131748",  # Jewish philosophy
+    "Shehitah": "Q328079",  # shechita (kosher slaughter)
+    "Christianity": "Q5043",  # Christianity
     "Jewish sermons, Hebrew": "Q861911",  # sermon
-    "Jewish calendar": "Q217535",       # Hebrew calendar
-    "Hebrew language": "Q9288",         # Hebrew language
-    "Dreams": "Q36348",                # dream
-    "Earthquakes": "Q7944",            # earthquake
-    "Medicine": "Q11190",              # medicine
-    "Astrology": "Q34362",             # astrology
-    "Phlebotomy": "Q575696",           # phlebotomy
-    "Berit milah": "Q204819",          # circumcision
-    "Bar mitzvah": "Q28807008",         # Bar Mitzvah (Jewish ceremony)
-    "Gematria": "Q168529",             # gematria
-    "Purim": "Q132834",               # Purim
-    "Apostasy": "Q179723",             # apostasy
-    "Liturgy": "Q172331",              # liturgy
-    "Prayer": "Q40953",                # prayer
-    "Bible": "Q1845",                  # Bible
-    "Talmud": "Q43290",                # Talmud
-    "Torah scrolls": "Q37602",         # Torah
-    "Sepulchral monuments": "Q56055312", # sepulchral monument
+    "Jewish calendar": "Q217535",  # Hebrew calendar
+    "Hebrew language": "Q9288",  # Hebrew language
+    "Dreams": "Q36348",  # dream
+    "Earthquakes": "Q7944",  # earthquake
+    "Medicine": "Q11190",  # medicine
+    "Astrology": "Q34362",  # astrology
+    "Phlebotomy": "Q575696",  # phlebotomy
+    "Berit milah": "Q204819",  # circumcision
+    "Bar mitzvah": "Q28807008",  # Bar Mitzvah (Jewish ceremony)
+    "Gematria": "Q168529",  # gematria
+    "Purim": "Q132834",  # Purim
+    "Apostasy": "Q179723",  # apostasy
+    "Liturgy": "Q172331",  # liturgy
+    "Prayer": "Q40953",  # prayer
+    "Bible": "Q1845",  # Bible
+    "Talmud": "Q43290",  # Talmud
+    "Torah scrolls": "Q37602",  # Torah
+    "Sepulchral monuments": "Q56055312",  # sepulchral monument
     "Christian converts from Judaism": "Q814999",  # conversion to Christianity
-    "Devil": "Q6674",                # devil
-    "Tombs": "Q381885",              # tomb
-    "Jewish converts": "Q814999",    # conversion to Christianity
+    "Devil": "Q6674",  # devil
+    "Tombs": "Q381885",  # tomb
+    "Jewish converts": "Q814999",  # conversion to Christianity
     "Abbreviations, Hebrew": "Q102786",  # abbreviation
-    "Sheluhe de-rabanan": "Q6867684",    # Shadarim (emissaries)
+    "Sheluhe de-rabanan": "Q6867684",  # Shadarim (emissaries)
 }
 
 # ── Language code → QID mapping ──────────────────────────────────────
@@ -372,9 +372,9 @@ LANG_TO_QID: dict[str, str] = {
     "eng": "Q1860",
     "por": "Q5146",
     "tur": "Q256",
-    "dut": "Q7411",      # Dutch (MARC language code)
-    "gre": "Q36510",     # Modern Greek (MARC language code)
-    "tat": "Q25285",     # Tatar (MARC language code)
+    "dut": "Q7411",  # Dutch (MARC language code)
+    "gre": "Q36510",  # Modern Greek (MARC language code)
+    "tat": "Q25285",  # Tatar (MARC language code)
 }
 
 # ── Material → QID mapping ───────────────────────────────────────────
@@ -494,7 +494,7 @@ def nli_reference(control_number: str) -> list[dict[str, str]]:
     Returns:
         List of reference snak dicts with P248, P854, P813.
     """
-    today = datetime.now(tz=timezone.utc).strftime("+%Y-%m-%dT00:00:00Z")
+    today = datetime.now(tz=UTC).strftime("+%Y-%m-%dT00:00:00Z")
     return [
         {"property": P_STATED_IN, "value": Q_KTIV, "type": "item"},
         {"property": P_REFERENCE_URL, "value": nli_catalog_url(control_number), "type": "url"},
@@ -506,10 +506,29 @@ PRECISION_CENTURY = 7
 
 # Hebrew ordinal → century number mapping
 _HEBREW_ORDINAL_TO_INT: dict[str, int] = {
-    'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 7, 'ח': 8, 'ט': 9,
-    'י': 10, "י\"א": 11, "י\"ב": 12, "י\"ג": 13, "י\"ד": 14, "י\"ה": 15,
-    "ט\"ו": 15, "י\"ו": 16, "ט\"ז": 16, "י\"ז": 17, "י\"ח": 18, "י\"ט": 19,
-    'כ': 20, "כ\"א": 21,
+    "א": 1,
+    "ב": 2,
+    "ג": 3,
+    "ד": 4,
+    "ה": 5,
+    "ו": 6,
+    "ז": 7,
+    "ח": 8,
+    "ט": 9,
+    "י": 10,
+    'י"א': 11,
+    'י"ב': 12,
+    'י"ג': 13,
+    'י"ד': 14,
+    'י"ה': 15,
+    'ט"ו': 15,
+    'י"ו': 16,
+    'ט"ז': 16,
+    'י"ז': 17,
+    'י"ח': 18,
+    'י"ט': 19,
+    "כ": 20,
+    'כ"א': 21,
 }
 
 
@@ -573,7 +592,10 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
         return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
     # Hebrew century range: "מאה י"ד-ט"ו" → use midpoint
-    range_match = re.search(r'מאה\s+([א-ת]["\u05F4\']?[א-ת]?)\s*[-–]\s*([א-ת]["\u05F4\']?[א-ת]?)', original.replace('""', '"'))
+    range_match = re.search(
+        r'מאה\s+([א-ת]["\u05F4\']?[א-ת]?)\s*[-–]\s*([א-ת]["\u05F4\']?[א-ת]?)',
+        original.replace('""', '"'),
+    )
     if range_match:
         c1 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(1).strip())
         c2 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(2).strip())
@@ -582,7 +604,7 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
             return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
     # Gregorian year in string: extract 4-digit year
-    year_match = re.search(r'\b(\d{4})\b', original)
+    year_match = re.search(r"\b(\d{4})\b", original)
     if year_match:
         return f"+{int(year_match.group(1)):04d}-00-00T00:00:00Z", PRECISION_YEAR
 

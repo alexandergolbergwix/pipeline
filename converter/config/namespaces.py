@@ -1,6 +1,6 @@
 """RDF namespace definitions for the Hebrew Manuscripts Ontology."""
 
-from rdflib import Namespace, Graph
+from rdflib import Graph, Namespace
 
 HM = Namespace("http://www.ontology.org.il/HebrewManuscripts/2025-12-06#")
 LRMOO = Namespace("http://iflastandards.info/ns/lrm/lrmoo/")
@@ -28,4 +28,3 @@ def bind_namespaces(graph: Graph) -> Graph:
     for prefix, namespace in NAMESPACES.items():
         graph.bind(prefix, namespace)
     return graph
-

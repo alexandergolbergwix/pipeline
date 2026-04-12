@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -92,9 +92,7 @@ class AuthorityPanel(QWidget):
         self._mazal_group.toggled.connect(self._on_mazal_group_toggled)
         mazal_layout = QVBoxLayout(self._mazal_group)
 
-        self._mazal_db_selector = FileSelector(
-            "Index DB:", mode="open", filter="SQLite DB (*.db)"
-        )
+        self._mazal_db_selector = FileSelector("Index DB:", mode="open", filter="SQLite DB (*.db)")
         if default_mazal_db:
             self._mazal_db_selector.path = default_mazal_db
 
@@ -120,9 +118,7 @@ class AuthorityPanel(QWidget):
         self._kima_group.toggled.connect(self._on_kima_group_toggled)
         kima_layout = QVBoxLayout(self._kima_group)
 
-        self._kima_db_selector = FileSelector(
-            "Index DB:", mode="open", filter="SQLite DB (*.db)"
-        )
+        self._kima_db_selector = FileSelector("Index DB:", mode="open", filter="SQLite DB (*.db)")
         if default_kima_db:
             self._kima_db_selector.path = default_kima_db
 
@@ -323,8 +319,11 @@ class AuthorityPanel(QWidget):
         worker = KimaIndexWorker(tsv_dir=tsv_dir, db_path=db_path)
         worker.log_line.connect(self._log_viewer.append_line)
         worker.progress.connect(
-            lambda pct: self._log_viewer.append_line(f"  KIMA index: {pct}%")
-            if pct in (40, 85, 100) else None
+            lambda pct: (
+                self._log_viewer.append_line(f"  KIMA index: {pct}%")
+                if pct in (40, 85, 100)
+                else None
+            )
         )
         worker.finished.connect(lambda p: self._on_rebuild_kima_done(p))
         worker.error.connect(lambda msg: self._on_rebuild_kima_error(msg))
@@ -339,9 +338,7 @@ class AuthorityPanel(QWidget):
         self._log_viewer.append_line(f"KIMA rebuild error: {msg}")
         self._rebuild_kima_btn.setEnabled(True)
 
-    def display_matches(
-        self, matches: list[tuple[str, AuthorityMatch]]
-    ) -> None:
+    def display_matches(self, matches: list[tuple[str, AuthorityMatch]]) -> None:
         """Display authority matches in the matcher view.
 
         Args:

@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 _SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
 _RATE_LIMIT_SECONDS = 1.0
 _TIMEOUT_SECONDS = 15
-_USER_AGENT = "MHMPipeline/0.1 (https://github.com/alexgoldberg/mhm-pipeline; alexander.goldberg@biu.ac.il)"
+_USER_AGENT = (
+    "MHMPipeline/0.1 (https://github.com/alexgoldberg/mhm-pipeline; alexander.goldberg@biu.ac.il)"
+)
 
 
 @dataclass
@@ -91,10 +93,12 @@ class WikidataReconciler:
         self._cache: dict[str, str | None] = {}
         self._last_request_time: float = 0.0
         self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": _USER_AGENT,
-            "Accept": "application/sparql-results+json",
-        })
+        self._session.headers.update(
+            {
+                "User-Agent": _USER_AGENT,
+                "Accept": "application/sparql-results+json",
+            }
+        )
 
     def _rate_limit(self) -> None:
         """Enforce rate limiting between SPARQL requests."""
@@ -155,7 +159,9 @@ class WikidataReconciler:
         return qid
 
     def reconcile_manuscript_by_shelfmark(
-        self, shelfmark: str, collection_qid: str = Q_NLI,
+        self,
+        shelfmark: str,
+        collection_qid: str = Q_NLI,
     ) -> str | None:
         """Check if a manuscript item exists via P195 (collection) + P217 (shelfmark).
 
@@ -262,7 +268,9 @@ class WikidataReconciler:
         return qid
 
     def reconcile_manuscript(
-        self, control_number: str, shelfmark: str | None,
+        self,
+        control_number: str,
+        shelfmark: str | None,
     ) -> str | None:
         """Reconcile a manuscript by NLI ID first, then shelfmark fallback.
 
@@ -283,7 +291,9 @@ class WikidataReconciler:
         return None
 
     def reconcile_person_by_external_id(
-        self, prop: str, ext_id: str,
+        self,
+        prop: str,
+        ext_id: str,
     ) -> str | None:
         """Check if a person item exists via any external-id property.
 
@@ -359,7 +369,8 @@ class WikidataReconciler:
     # ── Batch reconciliation (efficient for large uploads) ────────
 
     def reconcile_batch_by_nli_id(
-        self, nli_ids: list[str],
+        self,
+        nli_ids: list[str],
     ) -> dict[str, str]:
         """Reconcile multiple items by NLI J9U ID in a single SPARQL query.
 
@@ -371,7 +382,7 @@ class WikidataReconciler:
         results: dict[str, str] = {}
         # Process in chunks of 100 (SPARQL VALUES limit)
         for i in range(0, len(nli_ids), 100):
-            chunk = nli_ids[i:i + 100]
+            chunk = nli_ids[i : i + 100]
             values = " ".join(f'"{nid}"' for nid in chunk)
             sparql = f"""
             SELECT ?item ?nli WHERE {{
@@ -420,7 +431,8 @@ class WikidataReconciler:
 
             # Reconcile manuscript
             ms_qid = self.reconcile_manuscript(
-                control_number, str(shelfmark) if shelfmark else None,
+                control_number,
+                str(shelfmark) if shelfmark else None,
             )
             ms_result = ReconciliationResult(
                 entity_type="manuscript",
@@ -436,7 +448,7 @@ class WikidataReconciler:
                 report.manuscripts_new += 1
 
             # Reconcile persons from MARC authority matches
-            for match in (record.get("marc_authority_matches") or []):
+            for match in record.get("marc_authority_matches") or []:
                 name = str(match.get("name", ""))
                 viaf_uri = match.get("viaf_uri")
                 mazal_id = match.get("mazal_id")
@@ -446,7 +458,9 @@ class WikidataReconciler:
                     continue
 
                 person_qid = self.reconcile_person(
-                    name, viaf_uri, mazal_id,
+                    name,
+                    viaf_uri,
+                    mazal_id,
                     lc_id=match.get("lc_id"),
                     gnd_id=match.get("gnd_id"),
                     isni=match.get("isni"),
@@ -466,7 +480,7 @@ class WikidataReconciler:
                     report.persons_new += 1
 
             # Reconcile NER entities
-            for entity in (record.get("entities") or []):
+            for entity in record.get("entities") or []:
                 name = str(entity.get("person", ""))
                 viaf_uri = entity.get("viaf_uri")
                 mazal_id = entity.get("mazal_id")
@@ -491,7 +505,7 @@ class WikidataReconciler:
                     report.persons_new += 1
 
             # Reconcile KIMA places (already have Wikidata QIDs)
-            for place_name, wikidata_uri in (record.get("kima_places") or {}).items():
+            for _place_name, wikidata_uri in (record.get("kima_places") or {}).items():
                 qid = self.reconcile_place(str(wikidata_uri))
                 if qid:
                     report.places_found += 1
@@ -502,8 +516,10 @@ class WikidataReconciler:
         logger.info(
             "Reconciliation complete: %d MS found / %d new, "
             "%d persons found / %d new, %d places validated",
-            report.manuscripts_found, report.manuscripts_new,
-            report.persons_found, report.persons_new,
+            report.manuscripts_found,
+            report.manuscripts_new,
+            report.persons_found,
+            report.persons_new,
             report.places_found,
         )
         return report

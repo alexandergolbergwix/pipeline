@@ -240,9 +240,7 @@ class PipelineFlowWidget(QWidget):
 
         return bg, hover
 
-    def _update_button_style(
-        self, btn: QPushButton, border_color: str, state: str
-    ) -> None:
+    def _update_button_style(self, btn: QPushButton, border_color: str, state: str) -> None:
         """Update a button's stylesheet with appropriate colors.
 
         Args:

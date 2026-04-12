@@ -17,7 +17,7 @@ Fully aligned with Hebrew Manuscripts Ontology v1.4, including:
 
 CERTAINTY_LEVELS = {
     "certain": "Certain",
-    "probable": "Probable", 
+    "probable": "Probable",
     "possible": "Possible",
     "uncertain": "Uncertain",
     # Hebrew mappings
@@ -103,16 +103,16 @@ INTERPRETATION_METHODS = {
 # Mapping of data types to their default epistemological status
 # True = factual (DirectObservation), False = interpretive (ScholarlyInterpretation)
 DATA_FACTUALITY = {
-    "extent": True,           # Counting folios is factual
-    "dimensions": True,       # Physical measurement
-    "material": True,         # Observable
-    "colophon_text": True,    # Direct transcription
-    "title": True,            # From manuscript
-    "date": False,            # Usually interpretive
-    "place": False,           # Usually interpretive
-    "author": False,          # Attribution required
-    "scribe": False,          # Attribution required
-    "script_type": False,     # Paleographic interpretation
+    "extent": True,  # Counting folios is factual
+    "dimensions": True,  # Physical measurement
+    "material": True,  # Observable
+    "colophon_text": True,  # Direct transcription
+    "title": True,  # From manuscript
+    "date": False,  # Usually interpretive
+    "place": False,  # Usually interpretive
+    "author": False,  # Attribution required
+    "scribe": False,  # Attribution required
+    "script_type": False,  # Paleographic interpretation
     "work_identification": False,  # Scholarly judgment
 }
 
@@ -215,7 +215,7 @@ ROLE_MAPPINGS = {
 
 DATE_TYPE_CODES = {
     "s": "single",
-    "q": "questionable", 
+    "q": "questionable",
     "m": "multiple",
     "n": "unknown",
     "c": "continuing",
@@ -247,7 +247,7 @@ DATE_FORMAT_TYPES = {
 
 GENRE_MAPPINGS = {
     "bible": "BiblicalText",
-    "תנ\"ך": "BiblicalText",
+    'תנ"ך': "BiblicalText",
     "מקרא": "BiblicalText",
     "mishnah": "MishnaicText",
     "משנה": "MishnaicText",
@@ -280,7 +280,7 @@ GENRE_MAPPINGS = {
 
 CANONICAL_HIERARCHIES = {
     "bible": "Bible_hierarchy",
-    "תנ\"ך": "Bible_hierarchy",
+    'תנ"ך': "Bible_hierarchy",
     "מקרא": "Bible_hierarchy",
     "mishnah": "Mishnah_hierarchy",
     "משנה": "Mishnah_hierarchy",
@@ -292,7 +292,7 @@ CANONICAL_HIERARCHIES = {
     "ירושלמי": "Talmud_Yerushalmi_hierarchy",
     "mishneh_torah": "Mishneh_Torah_hierarchy",
     "משנה תורה": "Mishneh_Torah_hierarchy",
-    "רמב\"ם": "Mishneh_Torah_hierarchy",
+    'רמב"ם': "Mishneh_Torah_hierarchy",
     "shulchan_aruch": "Shulchan_Aruch_hierarchy",
     "שולחן ערוך": "Shulchan_Aruch_hierarchy",
     "zohar": "Zohar_hierarchy",
@@ -479,7 +479,6 @@ TEXT_TYPES = {
     "gloss": "GlossText",
     "ביאור": "GlossText",
     "responsum": "ResponsumText",
-    "שו\"ת": "ResponsumText",
+    'שו"ת': "ResponsumText",
     "תשובה": "ResponsumText",
 }
-

@@ -174,7 +174,9 @@ class QuickStatementsExporter:
         return "\n".join(blocks)
 
     def export_to_file(
-        self, items: list[WikidataItem], output_path: Path,
+        self,
+        items: list[WikidataItem],
+        output_path: Path,
     ) -> Path:
         """Write QuickStatements text to a file.
 
@@ -190,6 +192,7 @@ class QuickStatementsExporter:
         output_path.write_text(text, encoding="utf-8")
         logger.info(
             "Exported %d items to QuickStatements: %s",
-            len(items), output_path,
+            len(items),
+            output_path,
         )
         return output_path

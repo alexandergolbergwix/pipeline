@@ -84,8 +84,10 @@ class WikidataUploader:
             return self._wbi
 
         try:
-            from wikibaseintegrator import WikibaseIntegrator  # noqa: PLC0415
-            from wikibaseintegrator import wbi_login  # noqa: PLC0415
+            from wikibaseintegrator import (
+                WikibaseIntegrator,  # noqa: PLC0415
+                wbi_login,  # noqa: PLC0415
+            )
             from wikibaseintegrator.wbi_config import config as wbi_config  # noqa: PLC0415
         except ImportError as exc:
             raise ImportError(
@@ -105,8 +107,8 @@ class WikidataUploader:
 
         # Limit retries to avoid infinite waits during server load
         wbi_config["MAXLAG"] = 5
-        wbi_config["BACKOFF_MAX_TRIES"] = 3       # Max 3 retries (default 5)
-        wbi_config["BACKOFF_MAX_VALUE"] = 30       # Max 30s backoff (default 3600!)
+        wbi_config["BACKOFF_MAX_TRIES"] = 3  # Max 3 retries (default 5)
+        wbi_config["BACKOFF_MAX_VALUE"] = 30  # Max 30s backoff (default 3600!)
 
         # Support three authentication methods:
         # 1. Bot password: "Username@BotName:password"
@@ -145,7 +147,8 @@ class WikidataUploader:
             # Bot password: "Username@BotName:password"
             parts = self._token.split(":", 1)
             login = wbi_login.Login(
-                user=parts[0], password=parts[1],
+                user=parts[0],
+                password=parts[1],
                 mediawiki_api_url=api_url,
                 user_agent=user_agent,
             )
@@ -175,7 +178,6 @@ class WikidataUploader:
         Returns:
             Tuple of (wbi_item, new_claims_count).
         """
-        from wikibaseintegrator import datatypes  # noqa: PLC0415
 
         wbi = self._init_wbi()
 
@@ -201,11 +203,12 @@ class WikidataUploader:
         from wikibaseintegrator.wbi_enums import ActionIfExists  # noqa: PLC0415
 
         action = (
-            ActionIfExists.MERGE_REFS_OR_APPEND if item.existing_qid
+            ActionIfExists.MERGE_REFS_OR_APPEND
+            if item.existing_qid
             else ActionIfExists.FORCE_APPEND
         )
 
-        claims_before = len(wbi_item.claims) if item.existing_qid else 0
+        len(wbi_item.claims) if item.existing_qid else 0
         added_properties: list[str] = []
         for stmt in item.statements:
             claim = self._build_claim(stmt)
@@ -218,7 +221,7 @@ class WikidataUploader:
         new_claims = len(added_properties) if item.existing_qid else len(item.statements)
         return wbi_item, new_claims, added_properties
 
-    def _claim_exists(self, wbi_item: object, stmt: "WikidataStatement") -> bool:
+    def _claim_exists(self, wbi_item: object, stmt: WikidataStatement) -> bool:
         """Check if a claim with the same property+value already exists on the item."""
         try:
             existing_claims = wbi_item.claims.get(stmt.property_id)
@@ -268,7 +271,7 @@ class WikidataUploader:
             A datatypes claim object, or None if conversion fails.
         """
         from wikibaseintegrator import datatypes  # noqa: PLC0415
-        from wikibaseintegrator.models import References, Reference  # noqa: PLC0415
+        from wikibaseintegrator.models import Reference, References  # noqa: PLC0415
 
         # Build references
         refs = References()
@@ -287,8 +290,9 @@ class WikidataUploader:
 
         # Build qualifiers
         from wikibaseintegrator.models import Qualifiers  # noqa: PLC0415
+
         qualifiers = Qualifiers()
-        for qual in (stmt.qualifiers or []):
+        for qual in stmt.qualifiers or []:
             qual_claim = self._build_reference_snak(qual)
             if qual_claim:
                 qualifiers.add(qual_claim)
@@ -296,24 +300,32 @@ class WikidataUploader:
         try:
             if stmt.value_type == "item":
                 return datatypes.Item(
-                    prop_nr=stmt.property_id, value=str(value),
-                    references=refs, qualifiers=qualifiers,
+                    prop_nr=stmt.property_id,
+                    value=str(value),
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
             if stmt.value_type == "string":
                 return datatypes.String(
-                    prop_nr=stmt.property_id, value=str(value),
-                    references=refs, qualifiers=qualifiers,
+                    prop_nr=stmt.property_id,
+                    value=str(value),
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
             if stmt.value_type == "external-id":
                 return datatypes.ExternalID(
-                    prop_nr=stmt.property_id, value=str(value),
-                    references=refs, qualifiers=qualifiers,
+                    prop_nr=stmt.property_id,
+                    value=str(value),
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
             if stmt.value_type == "time":
                 return datatypes.Time(
-                    prop_nr=stmt.property_id, time=str(value),
+                    prop_nr=stmt.property_id,
+                    time=str(value),
                     precision=stmt.precision,
-                    references=refs, qualifiers=qualifiers,
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
             if stmt.value_type == "quantity":
                 # Map unit strings to Wikidata entity URLs
@@ -324,24 +336,33 @@ class WikidataUploader:
                 }
                 unit_val = unit_url_map.get(stmt.unit, "1") if stmt.unit else "1"
                 return datatypes.Quantity(
-                    prop_nr=stmt.property_id, amount=value,
-                    unit=unit_val, references=refs, qualifiers=qualifiers,
+                    prop_nr=stmt.property_id,
+                    amount=value,
+                    unit=unit_val,
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
             if stmt.value_type == "url":
                 return datatypes.URL(
-                    prop_nr=stmt.property_id, value=str(value),
-                    references=refs, qualifiers=qualifiers,
+                    prop_nr=stmt.property_id,
+                    value=str(value),
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
             if stmt.value_type == "monolingualtext":
                 return datatypes.MonolingualText(
-                    prop_nr=stmt.property_id, text=str(value),
+                    prop_nr=stmt.property_id,
+                    text=str(value),
                     language=stmt.language,
-                    references=refs, qualifiers=qualifiers,
+                    references=refs,
+                    qualifiers=qualifiers,
                 )
         except Exception as exc:
             logger.warning(
                 "Failed to build claim for %s=%s: %s",
-                stmt.property_id, value, exc,
+                stmt.property_id,
+                value,
+                exc,
             )
             return None
 
@@ -383,7 +404,7 @@ class WikidataUploader:
             existing = wbi.item.get(qid)
             for claim in existing.claims.get("P1343") or []:
                 mainsnak = claim.mainsnak
-                if hasattr(mainsnak, 'datavalue') and "Q118384267" in str(mainsnak.datavalue):
+                if hasattr(mainsnak, "datavalue") and "Q118384267" in str(mainsnak.datavalue):
                     return True
             return False
         except Exception:
@@ -408,7 +429,8 @@ class WikidataUploader:
         if item.existing_qid and not self._is_our_item(item.existing_qid):
             logger.warning(
                 "SAFETY: Skipping %s — existing item %s was NOT created by MHM Pipeline",
-                item.local_id, item.existing_qid,
+                item.local_id,
+                item.existing_qid,
             )
             return UploadResult(
                 local_id=item.local_id,
@@ -437,6 +459,7 @@ class WikidataUploader:
 
                 if item.existing_qid:
                     from collections import Counter  # noqa: PLC0415
+
                     prop_summary = ", ".join(
                         f"{pid}x{cnt}" for pid, cnt in Counter(added_props).most_common(5)
                     )
@@ -458,7 +481,10 @@ class WikidataUploader:
                 last_error = str(exc)
                 logger.warning(
                     "Upload attempt %d/%d for %s failed: %s",
-                    attempt, _MAX_RETRIES, item.local_id, exc,
+                    attempt,
+                    _MAX_RETRIES,
+                    item.local_id,
+                    exc,
                 )
                 if attempt < _MAX_RETRIES:
                     time.sleep(_RETRY_DELAY_SECONDS * attempt)
@@ -502,7 +528,7 @@ class WikidataUploader:
             # Resolve __LOCAL: references to QIDs of previously uploaded items
             for stmt in item.statements:
                 if isinstance(stmt.value, str) and stmt.value.startswith("__LOCAL:"):
-                    local_ref = stmt.value[len("__LOCAL:"):]
+                    local_ref = stmt.value[len("__LOCAL:") :]
                     resolved_qid = created_qids.get(local_ref)
                     if resolved_qid:
                         stmt.value = resolved_qid
@@ -537,7 +563,9 @@ class WikidataUploader:
         failed = sum(1 for r in results if r.status == "failed")
         logger.info(
             "Upload complete: %d/%d succeeded, %d failed",
-            success, total, failed,
+            success,
+            total,
+            failed,
         )
         return results
 

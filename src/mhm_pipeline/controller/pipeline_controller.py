@@ -1,4 +1,5 @@
 """Orchestrates pipeline stage execution."""
+
 from __future__ import annotations
 
 import logging
@@ -131,7 +132,9 @@ class PipelineController(QObject):
             return NerWorker(
                 input_path=self._resolve_input(0, kwargs),
                 output_dir=output_dir,
-                model_path=str(kwargs.get("model_path", "alexgoldberg/hebrew-manuscript-joint-ner-v2")),
+                model_path=str(
+                    kwargs.get("model_path", "alexgoldberg/hebrew-manuscript-joint-ner-v2")
+                ),
                 device=self._settings.gpu_device,
                 batch_size=int(kwargs.get("batch_size", self._settings.batch_size)),
                 provenance_model_path=str(kwargs.get("provenance_model_path", "")),
@@ -153,12 +156,8 @@ class PipelineController(QObject):
                 ner_path=ner_path,
                 enable_viaf=bool(kwargs.get("enable_viaf", True)),
                 enable_kima=bool(kwargs.get("enable_kima", False)),
-                kima_db_path=str(
-                    kwargs.get("kima_db_path", self._settings.kima_db_path)
-                ),
-                mazal_db_path=str(
-                    kwargs.get("mazal_db_path", self._settings.mazal_db_path)
-                ),
+                kima_db_path=str(kwargs.get("kima_db_path", self._settings.kima_db_path)),
+                mazal_db_path=str(kwargs.get("mazal_db_path", self._settings.mazal_db_path)),
             )
 
         if stage_index == 3:
@@ -175,9 +174,11 @@ class PipelineController(QObject):
                 output_dir = Path(str(kwargs["output_dir"]))
             return ShaclValidateWorker(
                 ttl_path=self._resolve_input(3, kwargs),
-                shapes_path=Path(str(
-                    kwargs.get("shapes_path", Path("ontology/shacl-shapes.ttl")),
-                )),
+                shapes_path=Path(
+                    str(
+                        kwargs.get("shapes_path", Path("ontology/shacl-shapes.ttl")),
+                    )
+                ),
                 output_dir=output_dir,
             )
 
@@ -194,9 +195,7 @@ class PipelineController(QObject):
 
         raise ValueError(f"Unknown stage index: {stage_index}")
 
-    def _resolve_input(
-        self, prior_stage: int, kwargs: dict[str, object]
-    ) -> Path:
+    def _resolve_input(self, prior_stage: int, kwargs: dict[str, object]) -> Path:
         """Return an explicit *input_path* kwarg, or fall back to a prior stage output."""
         explicit = kwargs.get("input_path")
         if explicit is not None:
@@ -204,6 +203,4 @@ class PipelineController(QObject):
         stored = self._stage_outputs.get(prior_stage)
         if stored is not None:
             return stored
-        raise ValueError(
-            f"No input_path provided and stage {prior_stage} has not completed"
-        )
+        raise ValueError(f"No input_path provided and stage {prior_stage} has not completed")

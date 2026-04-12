@@ -10,7 +10,6 @@ Typical memory usage: <10 MB regardless of graph size.
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -46,7 +45,7 @@ class GraphStore:
         ttl_path: Path,
         db_path: str | None = None,
         progress_callback: object = None,
-    ) -> "GraphStore":
+    ) -> GraphStore:
         """Parse a Turtle file into a new SQLite store.
 
         Args:
@@ -60,6 +59,7 @@ class GraphStore:
         if db_path is None:
             fd, db_path = tempfile.mkstemp(suffix=".db", prefix="graph_")
             import os
+
             os.close(fd)
 
         store = cls(db_path)
@@ -76,13 +76,12 @@ class GraphStore:
 
     def get_unique_property_keys(self) -> list[str]:
         """Return all distinct property key names, sorted alphabetically."""
-        rows = self._conn.execute(
-            "SELECT DISTINCT key FROM properties ORDER BY key"
-        ).fetchall()
+        rows = self._conn.execute("SELECT DISTINCT key FROM properties ORDER BY key").fetchall()
         return [r[0] for r in rows]
 
     def search_by_property(
-        self, filters: list[tuple[str, str, str]],
+        self,
+        filters: list[tuple[str, str, str]],
     ) -> list[str]:
         """Find node URIs matching ALL property filters (AND logic).
 
@@ -100,19 +99,13 @@ class GraphStore:
         params: list[str] = []
         for key, op, text in filters:
             if op == "equals":
-                subqueries.append(
-                    "SELECT node_uri FROM properties WHERE key = ? AND value = ?"
-                )
+                subqueries.append("SELECT node_uri FROM properties WHERE key = ? AND value = ?")
                 params.extend([key, text])
             elif op == "starts_with":
-                subqueries.append(
-                    "SELECT node_uri FROM properties WHERE key = ? AND value LIKE ?"
-                )
+                subqueries.append("SELECT node_uri FROM properties WHERE key = ? AND value LIKE ?")
                 params.extend([key, f"{text}%"])
             else:  # contains (default)
-                subqueries.append(
-                    "SELECT node_uri FROM properties WHERE key = ? AND value LIKE ?"
-                )
+                subqueries.append("SELECT node_uri FROM properties WHERE key = ? AND value LIKE ?")
                 params.extend([key, f"%{text}%"])
 
         sql = " INTERSECT ".join(subqueries)
@@ -152,29 +145,35 @@ class GraphStore:
     # ── Import ───────────────────────────────────────────────────────
 
     _TYPE_MAP: dict[str, str] = {
-        "Manuscript": "manuscript", "F4_Manifestation_Singleton": "manuscript",
+        "Manuscript": "manuscript",
+        "F4_Manifestation_Singleton": "manuscript",
         "F3_Manifestation": "manuscript",
         "E21_Person": "person",
-        "F1_Work": "work", "F24_Publication_Work": "work",
+        "F1_Work": "work",
+        "F24_Publication_Work": "work",
         "F2_Expression": "expression",
         "E53_Place": "place",
         "Codicological_Unit": "codicological_unit",
         "Bibliographic_Unit": "codicological_unit",
         "Paleographical_Unit": "codicological_unit",
-        "E12_Production": "event", "E8_Acquisition": "event",
-        "E10_Transfer_of_Custody": "event", "F27_Work_Creation": "event",
-        "E7_Activity": "event", "CreativeEvent": "event",
+        "E12_Production": "event",
+        "E8_Acquisition": "event",
+        "E10_Transfer_of_Custody": "event",
+        "F27_Work_Creation": "event",
+        "E7_Activity": "event",
+        "CreativeEvent": "event",
         "E74_Group": "organization",
     }
 
     def _import_ttl(
-        self, ttl_path: Path, progress_callback: object = None,
+        self,
+        ttl_path: Path,
+        progress_callback: object = None,
     ) -> None:
         """Stream-parse TTL into SQLite using rdflib in chunks."""
         from rdflib import RDF, RDFS, Graph, Literal  # noqa: PLC0415
 
         file_size = ttl_path.stat().st_size
-        chunk_size = 50_000  # triples per batch
         g = Graph()
 
         # Parse the file — this is the memory-heavy step but we process
@@ -264,6 +263,7 @@ class GraphStore:
         # Free rdflib graph immediately
         del g, node_rows, edge_rows, prop_rows, node_types, node_labels, all_uris
         import gc
+
         gc.collect()
 
         if progress_callback:
@@ -272,7 +272,9 @@ class GraphStore:
         stats = self.get_stats()
         logger.info(
             "Graph store ready: %d nodes, %d edges, %d properties",
-            stats["n_nodes"], stats["n_edges"], stats["n_properties"],
+            stats["n_nodes"],
+            stats["n_edges"],
+            stats["n_properties"],
         )
 
     # ── Query API ────────────────────────────────────────────────────
@@ -304,7 +306,9 @@ class GraphStore:
         return [(r["src_type"], r["tgt_type"], r["cnt"]) for r in rows]
 
     def get_nodes_by_type(
-        self, node_type: str, limit: int = 200,
+        self,
+        node_type: str,
+        limit: int = 200,
     ) -> list[dict[str, str]]:
         """Return nodes of a given type."""
         rows = self._conn.execute(
@@ -314,7 +318,9 @@ class GraphStore:
         return [dict(r) for r in rows]
 
     def get_neighborhood(
-        self, center_uri: str, hops: int = 1,
+        self,
+        center_uri: str,
+        hops: int = 1,
     ) -> dict[str, list[dict[str, object]]]:
         """Return the N-hop neighborhood as Cytoscape.js JSON."""
         visited: set[str] = {center_uri}
@@ -342,7 +348,9 @@ class GraphStore:
         return self._build_subgraph_json(visited, center_uri)
 
     def get_type_subgraph(
-        self, node_type: str, limit: int = 100,
+        self,
+        node_type: str,
+        limit: int = 100,
     ) -> dict[str, list[dict[str, object]]]:
         """Return nodes of a type + their 1-hop neighbors as Cytoscape.js JSON."""
         # Get target type nodes
@@ -389,8 +397,12 @@ class GraphStore:
             (uri,),
         ).fetchall()
         return [
-            {"predicate": r["predicate"], "uri": r["target"],
-             "label": r["label"] or _local_name(r["target"]), "type": r["node_type"]}
+            {
+                "predicate": r["predicate"],
+                "uri": r["target"],
+                "label": r["label"] or _local_name(r["target"]),
+                "type": r["node_type"],
+            }
             for r in rows
         ]
 
@@ -403,15 +415,20 @@ class GraphStore:
             (uri,),
         ).fetchall()
         return [
-            {"predicate": r["predicate"], "uri": r["source"],
-             "label": r["label"] or _local_name(r["source"]), "type": r["node_type"]}
+            {
+                "predicate": r["predicate"],
+                "uri": r["source"],
+                "label": r["label"] or _local_name(r["source"]),
+                "type": r["node_type"],
+            }
             for r in rows
         ]
 
     def get_node_label(self, uri: str) -> str:
         """Return the label for a node URI."""
         row = self._conn.execute(
-            "SELECT label, node_type FROM nodes WHERE uri = ?", (uri,),
+            "SELECT label, node_type FROM nodes WHERE uri = ?",
+            (uri,),
         ).fetchone()
         if row:
             return row["label"] or _local_name(uri)
@@ -420,7 +437,8 @@ class GraphStore:
     def get_node_type(self, uri: str) -> str:
         """Return the node type category."""
         row = self._conn.execute(
-            "SELECT node_type FROM nodes WHERE uri = ?", (uri,),
+            "SELECT node_type FROM nodes WHERE uri = ?",
+            (uri,),
         ).fetchone()
         return row["node_type"] if row else "default"
 
@@ -434,29 +452,33 @@ class GraphStore:
         nodes: list[dict[str, object]] = []
         for ntype, count in summary.items():
             colors = _NODE_COLORS.get(ntype, _NODE_COLORS["default"])
-            nodes.append({
-                "data": {
-                    "id": f"cluster_{ntype}",
-                    "label": f"{ntype.replace('_', ' ').title()}\n({count})",
-                    "nodeType": ntype,
-                    "bgColor": colors["bg"],
-                    "borderColor": colors["border"],
-                    "properties": {"count": [str(count)]},
-                    "isCluster": True,
-                    "memberCount": count,
+            nodes.append(
+                {
+                    "data": {
+                        "id": f"cluster_{ntype}",
+                        "label": f"{ntype.replace('_', ' ').title()}\n({count})",
+                        "nodeType": ntype,
+                        "bgColor": colors["bg"],
+                        "borderColor": colors["border"],
+                        "properties": {"count": [str(count)]},
+                        "isCluster": True,
+                        "memberCount": count,
+                    }
                 }
-            })
+            )
 
         edges: list[dict[str, object]] = []
         for src_type, tgt_type, count in summary_edges:
-            edges.append({
-                "data": {
-                    "id": f"ce_{src_type}_{tgt_type}",
-                    "source": f"cluster_{src_type}",
-                    "target": f"cluster_{tgt_type}",
-                    "label": str(count),
+            edges.append(
+                {
+                    "data": {
+                        "id": f"ce_{src_type}_{tgt_type}",
+                        "source": f"cluster_{src_type}",
+                        "target": f"cluster_{tgt_type}",
+                        "label": str(count),
+                    }
                 }
-            })
+            )
 
         return {"nodes": nodes, "edges": edges}
 
@@ -487,16 +509,18 @@ class GraphStore:
             ntype = r["node_type"]
             colors = _NODE_COLORS.get(ntype, _NODE_COLORS["default"])
             is_center = r["uri"] == center_uri
-            nodes.append({
-                "data": {
-                    "id": r["uri"],
-                    "label": (r["label"] or "")[:40],
-                    "nodeType": ntype,
-                    "bgColor": colors["bg"],
-                    "borderColor": "#f59e0b" if is_center else colors["border"],
-                    "properties": {},
+            nodes.append(
+                {
+                    "data": {
+                        "id": r["uri"],
+                        "label": (r["label"] or "")[:40],
+                        "nodeType": ntype,
+                        "bgColor": colors["bg"],
+                        "borderColor": "#f59e0b" if is_center else colors["border"],
+                        "properties": {},
+                    }
                 }
-            })
+            )
 
         # Fetch edges between these nodes
         edge_rows = self._conn.execute(
@@ -507,14 +531,16 @@ class GraphStore:
 
         edges: list[dict[str, object]] = []
         for i, r in enumerate(edge_rows):
-            edges.append({
-                "data": {
-                    "id": f"e_{i}",
-                    "source": r["source"],
-                    "target": r["target"],
-                    "label": r["predicate"],
+            edges.append(
+                {
+                    "data": {
+                        "id": f"e_{i}",
+                        "source": r["source"],
+                        "target": r["target"],
+                        "label": r["predicate"],
+                    }
                 }
-            })
+            )
 
         return {"nodes": nodes, "edges": edges}
 
@@ -532,10 +558,17 @@ def _shorten(uri: str) -> str:
 def _infer_type(uri: str) -> str:
     uri_lower = uri.lower()
     for kw, cat in [
-        ("person", "person"), ("ms_", "manuscript"), ("manuscript", "manuscript"),
-        ("work", "work"), ("expression", "expression"), ("place", "place"),
-        ("cu_", "codicological_unit"), ("event", "event"), ("creation", "event"),
-        ("production", "event"), ("group", "organization"),
+        ("person", "person"),
+        ("ms_", "manuscript"),
+        ("manuscript", "manuscript"),
+        ("work", "work"),
+        ("expression", "expression"),
+        ("place", "place"),
+        ("cu_", "codicological_unit"),
+        ("event", "event"),
+        ("creation", "event"),
+        ("production", "event"),
+        ("group", "organization"),
     ]:
         if kw in uri_lower:
             return cat

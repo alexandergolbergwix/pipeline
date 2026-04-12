@@ -29,7 +29,7 @@ def get_session(bearer_token: str) -> tuple[requests.Session, str]:
 
     resp = s.get(API, params={"action": "query", "meta": "tokens", "format": "json"})
     csrf = resp.json()["query"]["tokens"]["csrftoken"]
-    print(f"Authenticated. CSRF token obtained.")
+    print("Authenticated. CSRF token obtained.")
     return s, csrf
 
 
@@ -48,29 +48,51 @@ def is_our_item(qid: str) -> bool:
 
 def merge(s: requests.Session, csrf: str, from_id: str, to_id: str) -> dict:
     if not is_our_item(from_id):
-        return {"error": {"code": "safety-block", "info": f"{from_id} is NOT our item (< Q{OUR_QID_MIN})"}}
-    return s.post(API, data={
-        "action": "wbmergeitems", "fromid": from_id, "toid": to_id,
-        "token": csrf, "ignoreconflicts": "description|sitelink|statement",
-        "summary": "Merging duplicate from MHM Pipeline automated upload",
-        "format": "json",
-    }).json()
+        return {
+            "error": {
+                "code": "safety-block",
+                "info": f"{from_id} is NOT our item (< Q{OUR_QID_MIN})",
+            }
+        }
+    return s.post(
+        API,
+        data={
+            "action": "wbmergeitems",
+            "fromid": from_id,
+            "toid": to_id,
+            "token": csrf,
+            "ignoreconflicts": "description|sitelink|statement",
+            "summary": "Merging duplicate from MHM Pipeline automated upload",
+            "format": "json",
+        },
+    ).json()
 
 
 def blank(s: requests.Session, csrf: str, qid: str) -> dict:
     if not is_our_item(qid):
-        return {"error": {"code": "safety-block", "info": f"{qid} is NOT our item (< Q{OUR_QID_MIN})"}}
-    return s.post(API, data={
-        "action": "wbeditentity", "id": qid, "clear": "true",
-        "data": json.dumps({
-            "labels": {"en": {"language": "en", "value": "deleted - MHM Pipeline duplicate"}},
-            "descriptions": {},
-            "claims": [],
-        }),
-        "token": csrf,
-        "summary": "Blanking orphan duplicate from MHM Pipeline test run",
-        "format": "json",
-    }).json()
+        return {
+            "error": {"code": "safety-block", "info": f"{qid} is NOT our item (< Q{OUR_QID_MIN})"}
+        }
+    return s.post(
+        API,
+        data={
+            "action": "wbeditentity",
+            "id": qid,
+            "clear": "true",
+            "data": json.dumps(
+                {
+                    "labels": {
+                        "en": {"language": "en", "value": "deleted - MHM Pipeline duplicate"}
+                    },
+                    "descriptions": {},
+                    "claims": [],
+                }
+            ),
+            "token": csrf,
+            "summary": "Blanking orphan duplicate from MHM Pipeline test run",
+            "format": "json",
+        },
+    ).json()
 
 
 def run_op(s, csrf, items, op_func, op_name):
@@ -83,7 +105,7 @@ def run_op(s, csrf, items, op_func, op_name):
             from_id, to_id = item, None
             label = item
 
-        print(f"[{i+1}/{len(items)}] {op_name} {label}...", end=" ", flush=True)
+        print(f"[{i + 1}/{len(items)}] {op_name} {label}...", end=" ", flush=True)
         try:
             if to_id:
                 result = op_func(s, csrf, from_id, to_id)
@@ -96,7 +118,10 @@ def run_op(s, csrf, items, op_func, op_name):
             elif "error" in result:
                 code = result["error"].get("code", "")
                 info = result["error"].get("info", "")
-                if any(x in code + info.lower() for x in ["no-such-entity", "cant-load", "redirect", "already"]):
+                if any(
+                    x in code + info.lower()
+                    for x in ["no-such-entity", "cant-load", "redirect", "already"]
+                ):
                     print("SKIP")
                     skip += 1
                 elif "badtoken" in code:
@@ -115,7 +140,7 @@ def run_op(s, csrf, items, op_func, op_name):
                     print(f"FAIL: {code} — {info[:80]}")
                     fail += 1
             else:
-                print(f"???")
+                print("???")
                 fail += 1
         except Exception as e:
             print(f"ERR: {e}")
@@ -129,7 +154,7 @@ def run_op(s, csrf, items, op_func, op_name):
     return csrf
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)

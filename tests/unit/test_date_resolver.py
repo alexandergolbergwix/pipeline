@@ -3,10 +3,10 @@
 Every function in date_resolver is pure (no I/O, no side effects),
 so these tests are deterministic and fast.
 """
+
 from __future__ import annotations
 
 import pytest
-
 from converter.transformer.date_resolver import (
     DateRange,
     dates_overlap,
@@ -15,7 +15,6 @@ from converter.transformer.date_resolver import (
     resolve,
     resolve_person_dates,
 )
-
 
 # ── Gematria ─────────────────────────────────────────────────────────────────
 
@@ -101,7 +100,11 @@ class TestResolve:
         ],
     )
     def test_gregorian_range(
-        self, text: str, expected_start: int, expected_end: int, expected_format: str,
+        self,
+        text: str,
+        expected_start: int,
+        expected_end: int,
+        expected_format: str,
     ) -> None:
         dr = resolve(text)
         assert dr.year_start == expected_start
@@ -118,7 +121,10 @@ class TestResolve:
         ],
     )
     def test_gregorian_uncertain_range(
-        self, text: str, expected_start: int, expected_end: int,
+        self,
+        text: str,
+        expected_start: int,
+        expected_end: int,
     ) -> None:
         dr = resolve(text)
         assert dr.year_start == expected_start
@@ -146,7 +152,10 @@ class TestResolve:
         ],
     )
     def test_hebrew_century(
-        self, text: str, expected_start: int, expected_end: int,
+        self,
+        text: str,
+        expected_start: int,
+        expected_end: int,
     ) -> None:
         dr = resolve(text)
         assert dr.year_start == expected_start
@@ -164,7 +173,10 @@ class TestResolve:
         ],
     )
     def test_hebrew_active(
-        self, text: str, expected_start: int | None, expected_end: int | None,
+        self,
+        text: str,
+        expected_start: int | None,
+        expected_end: int | None,
     ) -> None:
         dr = resolve(text)
         assert dr.year_start == expected_start
@@ -183,7 +195,10 @@ class TestResolve:
         ],
     )
     def test_hebrew_approximate(
-        self, text: str, expected_start: int | None, expected_end: int | None,
+        self,
+        text: str,
+        expected_start: int | None,
+        expected_end: int | None,
     ) -> None:
         dr = resolve(text)
         assert dr.year_start == expected_start
@@ -208,7 +223,10 @@ class TestResolve:
         ],
     )
     def test_english_century(
-        self, text: str, expected_start: int, expected_end: int,
+        self,
+        text: str,
+        expected_start: int,
+        expected_end: int,
     ) -> None:
         dr = resolve(text)
         assert dr.year_start == expected_start
@@ -271,12 +289,16 @@ class TestResolve:
 class TestResolvePersonDates:
     def test_birth_and_death(self) -> None:
         assert resolve_person_dates("1542-1620") == {
-            "birth_year": 1542, "death_year": 1620, "active_year": None,
+            "birth_year": 1542,
+            "death_year": 1620,
+            "active_year": None,
         }
 
     def test_open_ended_birth(self) -> None:
         assert resolve_person_dates("1661-") == {
-            "birth_year": 1661, "death_year": None, "active_year": None,
+            "birth_year": 1661,
+            "death_year": None,
+            "active_year": None,
         }
 
     def test_death_only(self) -> None:

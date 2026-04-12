@@ -26,6 +26,7 @@ def is_our_item(qid: str) -> bool:
     except (ValueError, IndexError):
         return False
 
+
 API = "https://www.wikidata.org/w/api.php"
 SPARQL = "https://query.wikidata.org/sparql"
 
@@ -51,8 +52,10 @@ def get_items_with_dup_claims(prop: str) -> list[dict]:
     """
     try:
         resp = requests.get(
-            SPARQL, params={"query": query, "format": "json"},
-            headers=headers, timeout=60,
+            SPARQL,
+            params={"query": query, "format": "json"},
+            headers=headers,
+            timeout=60,
         )
         bindings = resp.json()["results"]["bindings"]
         return [
@@ -70,9 +73,15 @@ def get_items_with_dup_claims(prop: str) -> list[dict]:
 def remove_duplicate_claims(session: requests.Session, csrf: str, qid: str, prop: str) -> int:
     """Remove duplicate claims for a property on an item, keeping the first one."""
     # Get the item's claims
-    resp = session.get(API, params={
-        "action": "wbgetclaims", "entity": qid, "property": prop, "format": "json",
-    })
+    resp = session.get(
+        API,
+        params={
+            "action": "wbgetclaims",
+            "entity": qid,
+            "property": prop,
+            "format": "json",
+        },
+    )
     data = resp.json()
     claims = data.get("claims", {}).get(prop, [])
 
@@ -101,13 +110,16 @@ def remove_duplicate_claims(session: requests.Session, csrf: str, qid: str, prop
 
     # Remove duplicate claims
     for claim_id in to_remove:
-        resp = session.post(API, data={
-            "action": "wbremoveclaims",
-            "claim": claim_id,
-            "token": csrf,
-            "summary": "Removing duplicate claim created by merge (MHM Pipeline cleanup)",
-            "format": "json",
-        })
+        resp = session.post(
+            API,
+            data={
+                "action": "wbremoveclaims",
+                "claim": claim_id,
+                "token": csrf,
+                "summary": "Removing duplicate claim created by merge (MHM Pipeline cleanup)",
+                "format": "json",
+            },
+        )
         result = resp.json()
         if "error" in result:
             code = result["error"].get("code", "")
@@ -129,9 +141,14 @@ def main() -> None:
     session.headers["User-Agent"] = "MHMPipeline/1.0 (shvedbook@gmail.com)"
 
     # Get CSRF token
-    csrf = session.get(API, params={
-        "action": "query", "meta": "tokens", "format": "json",
-    }).json()["query"]["tokens"]["csrftoken"]
+    csrf = session.get(
+        API,
+        params={
+            "action": "query",
+            "meta": "tokens",
+            "format": "json",
+        },
+    ).json()["query"]["tokens"]["csrftoken"]
 
     total_removed = 0
 
@@ -143,9 +160,11 @@ def main() -> None:
         for i, item in enumerate(items):
             qid = item["qid"]
             if not is_our_item(qid):
-                print(f"  [{i+1}/{len(items)}] {qid} — SKIPPED (not our item)")
+                print(f"  [{i + 1}/{len(items)}] {qid} — SKIPPED (not our item)")
                 continue
-            print(f"  [{i+1}/{len(items)}] {qid} ({item['count']} values)...", end=" ", flush=True)
+            print(
+                f"  [{i + 1}/{len(items)}] {qid} ({item['count']} values)...", end=" ", flush=True
+            )
 
             try:
                 removed = remove_duplicate_claims(session, csrf, qid, prop)
@@ -160,9 +179,14 @@ def main() -> None:
             time.sleep(1)
 
             if (i + 1) % 50 == 0:
-                csrf = session.get(API, params={
-                    "action": "query", "meta": "tokens", "format": "json",
-                }).json()["query"]["tokens"]["csrftoken"]
+                csrf = session.get(
+                    API,
+                    params={
+                        "action": "query",
+                        "meta": "tokens",
+                        "format": "json",
+                    },
+                ).json()["query"]["tokens"]["csrftoken"]
 
         time.sleep(3)
 
