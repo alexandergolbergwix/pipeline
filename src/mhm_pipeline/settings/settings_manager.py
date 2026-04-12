@@ -59,7 +59,7 @@ class SettingsManager:
                 return raw
             return str(raw).lower() in ("true", "1", "yes")
         if isinstance(default, int):
-            return int(raw)  # type: ignore[arg-type]
+            return int(raw)
         if isinstance(default, Path):
             return Path(str(raw))
         return str(raw)

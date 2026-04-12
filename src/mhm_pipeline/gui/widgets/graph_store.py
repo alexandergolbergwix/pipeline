@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class GraphStore:
         cls,
         ttl_path: Path,
         db_path: str | None = None,
-        progress_callback: object = None,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> GraphStore:
         """Parse a Turtle file into a new SQLite store.
 
@@ -168,7 +169,7 @@ class GraphStore:
     def _import_ttl(
         self,
         ttl_path: Path,
-        progress_callback: object = None,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> None:
         """Stream-parse TTL into SQLite using rdflib in chunks."""
         from rdflib import RDF, RDFS, Graph, Literal  # noqa: PLC0415

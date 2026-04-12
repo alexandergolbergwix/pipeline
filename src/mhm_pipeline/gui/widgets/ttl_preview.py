@@ -40,8 +40,10 @@ class _TurtleHighlighter(QSyntaxHighlighter):
         fmt_comment.setForeground(QColor(140, 140, 140))
         self._rules.append((QRegularExpression(r"#.*$"), fmt_comment))
 
-    def highlightBlock(self, text: str) -> None:  # noqa: N802
+    def highlightBlock(self, text: str | None) -> None:  # noqa: N802
         """Apply highlighting rules to a single text block."""
+        if text is None:
+            return
         for pattern, fmt in self._rules:
             it = pattern.globalMatch(text)
             while it.hasNext():
@@ -63,7 +65,9 @@ class TtlPreview(QWidget):
         self._text_edit.setFont(QFont("Menlo, Consolas, monospace", 10))
         self._text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
-        self._highlighter = _TurtleHighlighter(self._text_edit.document())
+        doc = self._text_edit.document()
+        assert doc is not None
+        self._highlighter = _TurtleHighlighter(doc)
 
         layout.addWidget(self._text_edit)
 

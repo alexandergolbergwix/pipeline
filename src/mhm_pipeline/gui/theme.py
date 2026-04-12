@@ -14,7 +14,10 @@ Usage::
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from PyQt6.QtGui import QColor
 
 # ── Data types ───────────────────────────────────────────────────────────────
 
@@ -40,7 +43,7 @@ def _resolve_dark() -> bool:
     try:
         from mhm_pipeline.settings.settings_manager import SettingsManager  # noqa: PLC0415
 
-        pref = SettingsManager().theme_preference
+        pref = str(SettingsManager().get("display/theme", "system"))
         if pref == "dark":
             return True
         if pref == "light":
@@ -55,7 +58,7 @@ def _resolve_dark() -> bool:
 
         app = QApplication.instance()
         if app is not None:
-            palette = app.palette()
+            palette = app.palette()  # type: ignore[attr-defined]
             bg = palette.color(palette.ColorRole.Window)
             luminance = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255
             return luminance < 0.5

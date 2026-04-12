@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import (
+    QAbstractItemModel,
     QAbstractTableModel,
     QModelIndex,
     QSortFilterProxyModel,
@@ -228,20 +229,24 @@ class EditableEntityModel(QAbstractTableModel):
 class EntityTypeDelegate(QStyledItemDelegate):
     """QComboBox dropdown delegate for the Type column."""
 
-    def createEditor(self, parent: QWidget, option: object, index: QModelIndex) -> QComboBox:  # noqa: N802
+    def createEditor(self, parent: QWidget | None, option: object, index: QModelIndex) -> QComboBox:  # noqa: N802
         combo = QComboBox(parent)
         combo.addItems(VALID_ENTITY_TYPES)
         return combo
 
-    def setEditorData(self, editor: QComboBox, index: QModelIndex) -> None:  # noqa: N802
+    def setEditorData(self, editor: QWidget | None, index: QModelIndex) -> None:  # noqa: N802
+        if not isinstance(editor, QComboBox):
+            return
         current = index.data(Qt.ItemDataRole.EditRole)
         idx = editor.findText(str(current))
         if idx >= 0:
             editor.setCurrentIndex(idx)
 
     def setModelData(
-        self, editor: QComboBox, model: QAbstractTableModel, index: QModelIndex
+        self, editor: QWidget | None, model: QAbstractItemModel | None, index: QModelIndex
     ) -> None:  # noqa: N802
+        if not isinstance(editor, QComboBox) or model is None:
+            return
         model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
 
@@ -336,6 +341,7 @@ class ExtractionEditor(QWidget):
 
         # Column sizing
         h = self._table.horizontalHeader()
+        assert h is not None
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -380,7 +386,10 @@ class ExtractionEditor(QWidget):
                 self.entities_changed.emit()
 
     def _on_delete(self) -> None:
-        indices = self._table.selectionModel().selectedRows()
+        sel_model = self._table.selectionModel()
+        if sel_model is None:
+            return
+        indices = sel_model.selectedRows()
         if not indices:
             return
         # Delete from bottom up to preserve indices

@@ -6,8 +6,14 @@ import dataclasses
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
+
+if TYPE_CHECKING:
+    from converter.authority.kima_matcher import KimaMatcher
+    from converter.authority.mazal_matcher import MazalMatcher
+    from converter.authority.viaf_matcher import VIAFMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +74,7 @@ class MarcParseWorker(StageWorker):
                 self.error.emit("No records found in input file")
                 return
 
-            extracted: list[dict[str, object]] = []
+            extracted: list[dict[str, Any]] = []
             for idx, record in enumerate(records):
                 data = extract_all_data(record)
                 entry = dataclasses.asdict(data)
@@ -156,9 +162,7 @@ def _calculate_segment_offset(texts: list[str], index: int) -> int:
     return offset
 
 
-def _adjust_entity_positions(
-    entities: list[dict[str, object]], offset: int
-) -> list[dict[str, object]]:
+def _adjust_entity_positions(entities: list[dict[str, Any]], offset: int) -> list[dict[str, Any]]:
     """Adjust entity positions by adding offset to start/end."""
     for ent in entities:
         ent["start"] = ent.get("start", 0) + offset
@@ -166,7 +170,7 @@ def _adjust_entity_positions(
     return entities
 
 
-def _process_text_segment(pipeline: object, text: str, offset: int) -> list[dict[str, object]]:
+def _process_text_segment(pipeline: Any, text: str, offset: int) -> list[dict[str, Any]]:
     """Process one text segment and return position-adjusted entities."""
     segment_entities = pipeline.process_text(text)
     return _adjust_entity_positions(segment_entities, offset)
@@ -227,7 +231,7 @@ class NerWorker(StageWorker):
 
             self.log_line.emit("Loading NER models...")
 
-            records: list[dict[str, object]] = json.loads(
+            records: list[dict[str, Any]] = json.loads(
                 self._input_path.read_text(encoding="utf-8"),
             )
             total = len(records)
@@ -276,9 +280,9 @@ class NerWorker(StageWorker):
             models_loaded = 1 + (1 if provenance_pipeline else 0) + (1 if contents_pipeline else 0)
             self.log_line.emit(f"Processing {total} records with {models_loaded} NER model(s)")
 
-            results: list[dict[str, object]] = []
+            results: list[dict[str, Any]] = []
             for idx, record in enumerate(records):
-                all_entities: list[dict[str, object]] = []
+                all_entities: list[dict[str, Any]] = []
 
                 # Person NER on notes + colophon
                 texts = _extract_texts_from_record(record)
@@ -419,9 +423,9 @@ class AuthorityWorker(StageWorker):
         field: str,
         mazal_id: str | None,
         viaf_uri: str | None,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """Create a match info dictionary with authority references."""
-        info: dict[str, object] = {
+        info: dict[str, Any] = {
             "name": name,
             "role": role,
             "source": source,
@@ -500,7 +504,7 @@ class AuthorityWorker(StageWorker):
         field: str,
         mazal: MazalMatcher,
         viaf: VIAFMatcher | None,
-    ) -> dict[str, object] | None:
+    ) -> dict[str, Any] | None:
         """Match a single MARC person entry (author or contributor).
 
         Returns match info dict with count metadata, or None if no valid name.
@@ -567,10 +571,10 @@ class AuthorityWorker(StageWorker):
     def _match_marc_persons(
         self,
         control_number: str,
-        marc_by_cn: dict[str, dict[str, object]],
+        marc_by_cn: dict[str, dict[str, Any]],
         mazal: MazalMatcher,
         viaf: VIAFMatcher | None,
-    ) -> list[dict[str, object]]:
+    ) -> list[dict[str, Any]]:
         """Match all persons from MARC record (authors and contributors).
 
         Returns list of match info dicts with count metadata.
@@ -580,7 +584,7 @@ class AuthorityWorker(StageWorker):
             return []
 
         marc_rec = marc_by_cn[control_number]
-        matches: list[dict[str, object]] = []
+        matches: list[dict[str, Any]] = []
 
         # Match authors (100, 110 fields)
         for author in marc_rec.get("authors") or []:
@@ -611,7 +615,7 @@ class AuthorityWorker(StageWorker):
     def _match_marc_places(
         self,
         control_number: str,
-        marc_by_cn: dict[str, dict[str, object]],
+        marc_by_cn: dict[str, dict[str, Any]],
         kima: KimaMatcher | None,
     ) -> dict[str, str] | None:
         """Match places from MARC record against KIMA authority.
@@ -640,12 +644,12 @@ class AuthorityWorker(StageWorker):
 
     # ── Helper methods for initialization ────────────────────────────
 
-    def _load_ner_by_control_number(self) -> dict[str, dict[str, object]]:
+    def _load_ner_by_control_number(self) -> dict[str, dict[str, Any]]:
         """Load NER records indexed by control number."""
         if not self._ner_path or not self._ner_path.exists():
             return {}
 
-        ner_records: list[dict[str, object]] = json.loads(
+        ner_records: list[dict[str, Any]] = json.loads(
             self._ner_path.read_text(encoding="utf-8"),
         )
         ner_by_cn = {str(r.get("_control_number", "")): r for r in ner_records}
@@ -654,8 +658,8 @@ class AuthorityWorker(StageWorker):
 
     @staticmethod
     def _merge_ner_into_records(
-        records: list[dict[str, object]],
-        ner_by_cn: dict[str, dict[str, object]],
+        records: list[dict[str, Any]],
+        ner_by_cn: dict[str, dict[str, Any]],
     ) -> int:
         """Merge NER entities into MARC records by control number.
 
@@ -686,7 +690,7 @@ class AuthorityWorker(StageWorker):
         if not self._enable_kima:
             return None
         self.log_line.emit("KIMA place matching enabled")
-        return kima_matcher_class(index_path=self._kima_db_path)
+        return kima_matcher_class(index_path=self._kima_db_path or "")
 
     def run(self) -> None:
         try:
@@ -696,7 +700,7 @@ class AuthorityWorker(StageWorker):
 
             # ── load MARC extract (primary input) ────────────────────
             self.log_line.emit(f"Loading MARC extract from {self._input_path.name}")
-            records: list[dict[str, object]] = json.loads(
+            records: list[dict[str, Any]] = json.loads(
                 self._input_path.read_text(encoding="utf-8"),
             )
             total = len(records)
@@ -711,13 +715,13 @@ class AuthorityWorker(StageWorker):
                 self.log_line.emit(f"Merged NER entities into {enriched}/{total} records")
 
             # ── index records by control number (for place matching) ─
-            marc_by_cn: dict[str, dict[str, object]] = {
+            marc_by_cn: dict[str, dict[str, Any]] = {
                 str(r.get("_control_number", "")): r for r in records
             }
 
             # ── initialise matchers ───────────────────────────────────
             self.log_line.emit("Loading Mazal authority index")
-            mazal = MazalMatcher(index_path=self._mazal_db_path)
+            mazal = MazalMatcher(index_path=self._mazal_db_path or "")
             self.log_line.emit(
                 f"Mazal index available: {mazal.is_available} (path: {mazal.index_path})"
             )
@@ -847,14 +851,14 @@ class MazalIndexWorker(StageWorker):
                     index.insert_authority(
                         nli_id=nli_id,
                         entity_type=record["entity_type"],
-                        preferred_name_heb=(
-                            record["names_heb"][0] if record["names_heb"] else None
-                        ),
-                        preferred_name_lat=(
-                            record["names_lat"][0] if record["names_lat"] else None
-                        ),
-                        dates=record.get("dates"),
-                        aleph_id=record.get("aleph_id"),
+                        preferred_name_heb=str(record["names_heb"][0])
+                        if record["names_heb"]
+                        else "",
+                        preferred_name_lat=str(record["names_lat"][0])
+                        if record["names_lat"]
+                        else "",
+                        dates=str(record.get("dates") or ""),
+                        aleph_id=str(record.get("aleph_id") or ""),
                     )
                     for name in record.get("names_heb", []):
                         norm = MazalIndex.normalize_name(name)
@@ -1041,7 +1045,7 @@ class WikidataUploadWorker(StageWorker):
             from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
             from converter.wikidata.quickstatements import QuickStatementsExporter  # noqa: PLC0415
 
-            records: list[dict[str, object]] = json.loads(
+            records: list[dict[str, Any]] = json.loads(
                 self._input_path.read_text(encoding="utf-8"),
             )
             total = len(records)

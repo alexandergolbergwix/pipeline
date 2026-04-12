@@ -335,7 +335,7 @@ class TripleGraphView(QWidget):
 
         app = QApplication.instance()
         if app:
-            palette = app.palette()
+            palette = app.palette()  # type: ignore[attr-defined]
             line_color = palette.color(palette.ColorRole.Mid)
         else:
             line_color = QColor("#9ca3af")
@@ -361,7 +361,7 @@ class TripleGraphView(QWidget):
 
             app = QApplication.instance()
             if app:
-                palette = app.palette()
+                palette = app.palette()  # type: ignore[attr-defined]
                 text_color = palette.color(palette.ColorRole.Text)
             else:
                 text_color = QColor("#4b5563")

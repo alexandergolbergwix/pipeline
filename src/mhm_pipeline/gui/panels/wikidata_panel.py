@@ -322,11 +322,11 @@ class WikidataPanel(QWidget):
                         f"{len(data)} items: {success} succeeded, {failed} failed"
                     )
                     for r in data:
-                        self._upload_view.update_entity(
-                            r.get("local_id", ""),
-                            r.get("status", ""),
-                            r.get("qid", ""),
-                            r.get("message", ""),
+                        self.update_entity_status(
+                            str(r.get("local_id", "")),
+                            str(r.get("status", "")),
+                            str(r.get("qid", "")),
+                            str(r.get("message", "")),
                         )
                 elif isinstance(data, list) and data and "entity_type" in data[0]:
                     # wikidata_items.json (dry run summary)
@@ -385,8 +385,14 @@ class WikidataPanel(QWidget):
         # Reparent back to the panel after dialog closes
         self._upload_view.setParent(self)
         # Re-add to panel layout (scroll area content)
-        for i in range(self.layout().count()):
-            widget = self.layout().itemAt(i).widget()
+        panel_layout = self.layout()
+        if panel_layout is None:
+            return
+        for i in range(panel_layout.count()):
+            item = panel_layout.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
             if widget and hasattr(widget, "widget"):  # QScrollArea
                 content = widget.widget()
                 if content:

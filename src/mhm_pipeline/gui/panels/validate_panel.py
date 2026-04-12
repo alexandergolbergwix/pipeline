@@ -150,9 +150,9 @@ class ValidatePanel(QWidget):
             return
         self.run_requested.emit(ttl_path, shapes_path)
 
-    def load_validation_results(self, result: dict) -> None:
+    def load_validation_results(self, result: object) -> None:
         """Load validation results into the view."""
-        self._validation_view.load_results(result)
+        self._validation_view.load_results(result)  # type: ignore[arg-type]
         self._fullscreen_btn.setEnabled(True)
 
     def _on_fullscreen(self) -> None:

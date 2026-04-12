@@ -38,7 +38,7 @@ def is_dark_mode(widget: QWidget | None = None) -> bool:
         app = QApplication.instance()
         if app is None:
             return False
-        palette = app.palette()
+        palette = app.palette()  # type: ignore[attr-defined]
 
     # Check window background brightness
     bg_color = palette.color(palette.ColorRole.Window)

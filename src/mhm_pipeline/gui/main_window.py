@@ -77,9 +77,11 @@ class MainWindow(QMainWindow):
     def _build_menu_bar(self) -> None:
         """Create File, Pipeline, and Help menus."""
         menu_bar = self.menuBar()
+        assert menu_bar is not None
 
         # File
         file_menu = menu_bar.addMenu("&File")
+        assert file_menu is not None
         open_action = QAction("&Open MARC…", self)
         open_action.triggered.connect(self._on_open_marc)
         file_menu.addAction(open_action)
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
 
         # Pipeline
         pipeline_menu = menu_bar.addMenu("&Pipeline")
+        assert pipeline_menu is not None
         run_all_action = QAction("&Run All", self)
         run_all_action.triggered.connect(self._on_run_all)
         pipeline_menu.addAction(run_all_action)
@@ -99,6 +102,7 @@ class MainWindow(QMainWindow):
 
         # Help
         help_menu = menu_bar.addMenu("&Help")
+        assert help_menu is not None
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
@@ -259,7 +263,7 @@ class MainWindow(QMainWindow):
 
                     # Map the entity data
                     entity = Entity(
-                        text=ent.get("person", ent.get("text", "")),
+                        text=str(ent.get("person", ent.get("text", "")) or ""),
                         type="PERSON",  # The model extracts persons
                         start=ent.get("start", 0),
                         end=ent.get("end", 0),
@@ -351,7 +355,7 @@ class MainWindow(QMainWindow):
             self._rdf_panel._output_selector.path = out_dir
         elif completed == 3:
             self._validate_panel._ttl_selector.path = output
-            self._wikidata_panel._ttl_selector.path = output
+            self._wikidata_panel._input_selector.path = output
 
     def _on_stage_error(self, index: int, message: str) -> None:
         self._update_stage_state(index, "error")

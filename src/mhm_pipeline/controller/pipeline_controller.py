@@ -121,8 +121,8 @@ class PipelineController(QObject):
             return MarcParseWorker(
                 input_path=Path(str(kwargs["input_path"])),
                 output_dir=output_dir,
-                start=int(kwargs.get("start", 0)),
-                end=int(kwargs.get("end", 0)),
+                start=int(str(kwargs.get("start", 0))),
+                end=int(str(kwargs.get("end", 0))),
                 device=self._settings.gpu_device,
             )
 
@@ -136,7 +136,7 @@ class PipelineController(QObject):
                     kwargs.get("model_path", "alexgoldberg/hebrew-manuscript-joint-ner-v2")
                 ),
                 device=self._settings.gpu_device,
-                batch_size=int(kwargs.get("batch_size", self._settings.batch_size)),
+                batch_size=int(str(kwargs.get("batch_size", self._settings.batch_size))),
                 provenance_model_path=str(kwargs.get("provenance_model_path", "")),
                 contents_model_path=str(kwargs.get("contents_model_path", "")),
             )

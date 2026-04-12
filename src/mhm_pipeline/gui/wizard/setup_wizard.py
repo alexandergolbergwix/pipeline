@@ -53,7 +53,7 @@ class _DownloadWorker(QThread):
     def run(self) -> None:
         """Execute model downloads sequentially."""
         try:
-            from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
+            from huggingface_hub import snapshot_download  # noqa: PLC0415
 
             total = len(self._models)
             for idx, model in enumerate(self._models):
@@ -146,7 +146,9 @@ class _DownloadPage(QWizardPage):
         self._download_complete = False
         self.completeChanged.emit()
 
-        select_page = self.wizard().page(1)
+        wizard = self.wizard()
+        assert wizard is not None
+        select_page = wizard.page(1)
         if isinstance(select_page, _ModelSelectPage) and select_page.is_full:
             models = _FULL_MODELS
         else:

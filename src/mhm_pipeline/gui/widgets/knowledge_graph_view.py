@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import json
 import logging
+import types
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal, pyqtSlot
+
+if TYPE_CHECKING:
+    import rdflib
+
+    from mhm_pipeline.gui.widgets.graph_store import GraphStore
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -443,8 +450,10 @@ class _CollapsibleSection(QWidget):
     def clear_body(self) -> None:
         while self._body_layout.count():
             item = self._body_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is not None:
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
 
     def add_widget(self, widget: QWidget) -> None:
         self._body_layout.addWidget(widget)
@@ -583,7 +592,7 @@ class _EntityDetailPanel(QWidget):
         section: _CollapsibleSection,
         edges: list[dict[str, str]],
         arrow: str,
-        theme: object,
+        theme: types.ModuleType,
     ) -> None:
         """Add edge rows with pagination to avoid creating hundreds of widgets."""
         visible = edges[: self._MAX_VISIBLE_ROWS]
@@ -636,7 +645,7 @@ class _EntityDetailPanel(QWidget):
         target_label: str,
         target_type: str,
         arrow: str,
-        theme: object,
+        theme: types.ModuleType,
     ) -> None:
         """Add a clickable relationship row to a section."""
         nc = theme.node_color(target_type)
@@ -676,6 +685,8 @@ class KnowledgeGraphView(QWidget):
         self._bridge.edge_selected.connect(self._on_edge_selected)
         self._bridge.cluster_expand.connect(self._on_cluster_expand)
         self._ttl_path: Path | None = None
+        self._pending_ttl: Path | None = None
+        self._store: GraphStore | None = None
         self._mode: str = "summary"  # "summary" or "full" or "neighborhood"
         self._build_ui()
 
@@ -791,7 +802,7 @@ class KnowledgeGraphView(QWidget):
         self._web_container = QWidget()
         self._web_layout = QVBoxLayout(self._web_container)
         self._web_layout.setContentsMargins(0, 0, 0, 0)
-        self._web_view = None  # Lazy init
+        self._web_view: Any = None  # Lazy init (QWebEngineView)
         splitter.addWidget(self._web_container)
 
         # Detail panel (Protégé-style)
@@ -854,7 +865,7 @@ class KnowledgeGraphView(QWidget):
 
     def resizeEvent(self, event: object) -> None:  # noqa: N802
         """Keep the loading overlay covering the full widget."""
-        super().resizeEvent(event)
+        super().resizeEvent(event)  # type: ignore[arg-type]
         self._loading_overlay.setGeometry(self.rect())
 
     def _show_loading(self, message: str = "Building graph...") -> None:
@@ -964,6 +975,7 @@ class KnowledgeGraphView(QWidget):
 
     def _render_summary(self) -> None:
         """Render the summary view from the store."""
+        assert self._store is not None
         graph_json = self._store.get_summary_json()
         self._mode = "summary"
         self._render_json(graph_json)
@@ -972,7 +984,9 @@ class KnowledgeGraphView(QWidget):
         """Render a Cytoscape.js JSON into the web view."""
         self._graph_json = graph_json
         self._node_types = {
-            n["data"]["nodeType"] for n in graph_json["nodes"] if n["data"].get("nodeType")
+            n["data"]["nodeType"]
+            for n in graph_json["nodes"]
+            if n["data"].get("nodeType")  # type: ignore[index, attr-defined]
         }
         self._rebuild_filter_checkboxes()
 
@@ -1038,9 +1052,9 @@ class KnowledgeGraphView(QWidget):
         # Build lightweight node index for detail panel, then free the JSON
         if self._graph_json:
             self._node_index = {
-                n["data"]["id"]: {
-                    "label": n["data"].get("label", ""),
-                    "nodeType": n["data"].get("nodeType", "unknown"),
+                n["data"]["id"]: {  # type: ignore[index]
+                    "label": n["data"].get("label", ""),  # type: ignore[attr-defined]
+                    "nodeType": n["data"].get("nodeType", "unknown"),  # type: ignore[attr-defined]
                 }
                 for n in self._graph_json["nodes"]
             }
@@ -1233,8 +1247,9 @@ class KnowledgeGraphView(QWidget):
         # Remove chip widgets (everything before the results label and stretch)
         while self._chips_layout.count() > 2:
             item = self._chips_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
+            w = item.widget() if item else None
+            if w is not None:
+                w.deleteLater()
         self._search_results_label.setText("")
         self._adv_text.clear()
         if self._web_view is not None:
@@ -1247,8 +1262,9 @@ class KnowledgeGraphView(QWidget):
             # Rebuild chips
             while self._chips_layout.count() > 2:
                 item = self._chips_layout.takeAt(0)
-                if item and item.widget():
-                    item.widget().deleteLater()
+                w = item.widget() if item else None
+                if w is not None:
+                    w.deleteLater()
             for i, (prop, op, text) in enumerate(self._active_filters):
                 chip = QPushButton(f'{prop} {op} "{text}"  ×')
                 chip.setStyleSheet(
