@@ -343,6 +343,10 @@ SUBJECT_TO_QID: dict[str, str] = {
     "Sepulchral monuments": "Q56055312", # sepulchral monument
     "Christian converts from Judaism": "Q814999",  # conversion to Christianity
     "Devil": "Q6674",                # devil
+    "Tombs": "Q381885",              # tomb
+    "Jewish converts": "Q814999",    # conversion to Christianity
+    "Abbreviations, Hebrew": "Q102786",  # abbreviation
+    "Sheluhe de-rabanan": "Q6867684",    # Shadarim (emissaries)
 }
 
 # ── Language code → QID mapping ──────────────────────────────────────
@@ -397,6 +401,8 @@ CONDITION_TO_QID: dict[str, str] = {
     "fragment": Q_FRAGMENT,
     "קטע": Q_FRAGMENT,
     "restored": Q_RESTORED,
+    "repaired": Q_RESTORED,
+    "משוקם": Q_RESTORED,
     "poor": Q_POOR_CONDITION,
 }
 
