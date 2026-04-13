@@ -171,14 +171,45 @@ class WikidataUploader:
             time.sleep(_EDIT_DELAY_SECONDS - elapsed)
         self._last_edit_time = time.time()
 
-    def _build_wbi_item(self, item: WikidataItem) -> tuple[object, int]:
+    # Identity properties: if the existing item already has a DIFFERENT value
+    # on one of these, adding our value would create the multi-value conflict
+    # pattern that Kolja21 flagged (e.g., two birth dates, two GNDs). We MUST
+    # skip our value in that case — the items are different real-world entities.
+    _IDENTITY_PROPS = frozenset(
+        {"P569", "P570", "P19", "P20", "P227", "P214", "P8189", "P213", "P244", "P31", "P21"}
+    )
+
+    def _would_create_identity_conflict(
+        self, wbi_item: object, stmt: WikidataStatement
+    ) -> bool:
+        """Return True if adding this statement to the existing item would create
+        a multi-value conflict on an identity property."""
+        if stmt.property_id not in self._IDENTITY_PROPS:
+            return False
+        try:
+            existing_claims = wbi_item.claims.get(stmt.property_id) or []
+        except Exception:
+            return False
+        if not existing_claims:
+            return False
+        new_value = str(stmt.value)
+        for existing in existing_claims:
+            existing_value = self._extract_claim_value(existing)
+            if existing_value == new_value:
+                return False  # same value — safe to add (WBI will dedup)
+            # date precision: compare just the date prefix for P569/P570
+            if stmt.property_id in ("P569", "P570") and existing_value[:11] == new_value[:11]:
+                return False
+        return True  # existing has different value(s) — would conflict
+
+    def _build_wbi_item(self, item: WikidataItem) -> tuple[object, int, list[str]]:
         """Convert a WikidataItem to a WikibaseIntegrator item object.
 
-        For existing items, performs claim diffing to avoid duplicates.
-        Only adds claims that don't already exist on Wikidata.
+        For existing items, performs claim diffing to avoid duplicates AND
+        refuses to write identity-property values that conflict with existing ones.
 
         Returns:
-            Tuple of (wbi_item, new_claims_count).
+            Tuple of (wbi_item, new_claims_count, added_properties).
         """
 
         wbi = self._init_wbi()
@@ -188,8 +219,19 @@ class WikidataUploader:
         else:
             wbi_item = wbi.item.new()
 
-        # Labels
+        # Labels — never overwrite an existing label on an item we did not create.
+        # The creator-author check upstream already guarantees we only modify our
+        # own items here, but be defensive: only set a label if the language slot
+        # is empty.
         for lang, label in item.labels.items():
+            if item.existing_qid:
+                try:
+                    current = wbi_item.labels.get(lang)
+                    current_val = current.value if current and getattr(current, "value", None) else ""
+                except Exception:
+                    current_val = ""
+                if current_val:
+                    continue
             wbi_item.labels.set(lang, label)
 
         # Descriptions
@@ -210,9 +252,18 @@ class WikidataUploader:
             else ActionIfExists.FORCE_APPEND
         )
 
-        len(wbi_item.claims) if item.existing_qid else 0
         added_properties: list[str] = []
         for stmt in item.statements:
+            # SAFETY: never add an identity-property value that conflicts with
+            # an existing one on a pre-existing item.
+            if item.existing_qid and self._would_create_identity_conflict(wbi_item, stmt):
+                logger.warning(
+                    "SAFETY: Refusing to add %s=%s to %s (existing item has different value — would create conflict)",
+                    stmt.property_id,
+                    stmt.value,
+                    item.existing_qid,
+                )
+                continue
             claim = self._build_claim(stmt)
             if claim:
                 count_before = len(wbi_item.claims)

@@ -1,14 +1,15 @@
-"""Revert ALL modifications I made to items I did NOT create.
+"""Revert the 35 destructive label/description overwrites on items I did NOT create.
 
-Safety: For each modification, this script:
-1. Gets the FIRST revision author of the item
-2. If creator != my username → revert my edit (use action=edit + undo=<my_revid>)
-3. If creator == my username → leave alone (it's my item)
+These are wbeditentity-update-languages edits where the MHM Pipeline's name-matching
+heuristic added Hebrew labels/aliases to existing items not created by me.
 
-Reads /tmp/items_to_revert.json built by audit script.
+Safety:
+- Loads the 35 label edits from /tmp/items_to_revert.json (filter: comment contains "languages")
+- Verifies first revision author != authenticated user before reverting
+- Uses action=edit + undo=<my_revid> to restore previous state
 
 Usage:
-    PYTHONPATH=src:. .venv/bin/python scripts/revert_my_modifications.py <bearer_token>
+    PYTHONPATH=src:. .venv/bin/python scripts/revert_label_overwrites.py <bearer_token>
 """
 
 from __future__ import annotations
@@ -23,26 +24,24 @@ API = "https://www.wikidata.org/w/api.php"
 
 
 def _retry_get(s, **kwargs):
-    """GET with retry on network errors (DNS/timeout)."""
     last_exc = None
     for attempt in range(6):
         try:
             return s.get(API, timeout=15, **kwargs)
         except (requests.ConnectionError, requests.Timeout) as e:
             last_exc = e
-            time.sleep(min(2 ** attempt, 30))
+            time.sleep(min(2**attempt, 30))
     raise last_exc
 
 
 def _retry_post(s, **kwargs):
-    """POST with retry on network errors."""
     last_exc = None
     for attempt in range(6):
         try:
             return s.post(API, timeout=20, **kwargs)
         except (requests.ConnectionError, requests.Timeout) as e:
             last_exc = e
-            time.sleep(min(2 ** attempt, 30))
+            time.sleep(min(2**attempt, 30))
     raise last_exc
 
 
@@ -52,42 +51,32 @@ def main() -> None:
         sys.exit(1)
 
     token = sys.argv[1]
-
     s = requests.Session()
     s.headers["Authorization"] = f"Bearer {token}"
     s.headers["User-Agent"] = "MHMPipeline/1.0 (shvedbook@gmail.com)"
 
-    csrf = s.get(API, params={"action": "query", "meta": "tokens", "format": "json"}).json()[
-        "query"
-    ]["tokens"]["csrftoken"]
+    csrf = _retry_get(
+        s, params={"action": "query", "meta": "tokens", "format": "json"}
+    ).json()["query"]["tokens"]["csrftoken"]
 
-    user_resp = s.get(API, params={"action": "query", "meta": "userinfo", "format": "json"})
-    auth_user = user_resp.json().get("query", {}).get("userinfo", {}).get("name", "")
+    auth_user = _retry_get(
+        s, params={"action": "query", "meta": "userinfo", "format": "json"}
+    ).json().get("query", {}).get("userinfo", {}).get("name", "")
     print(f"Authenticated as: {auth_user}")
 
-    # Load bad merges (items with conflicting GND/DOB/POB after my merge)
-    with open("/tmp/bad_merge_targets.json") as f:
-        bad_targets = {b["qid"] for b in json.load(f)}
-
-    # Filter all my modifications to only those targeting bad-merge items
-    with open("/tmp/items_to_revert.json") as f:
-        all_mods = json.load(f)
-
-    # Keep only bad-merge target modifications (where source != None means it was a merge)
-    modifications = [m for m in all_mods if m["qid"] in bad_targets and m["source"]]
-
-    print(f"\nFiltered to {len(modifications)} bad-merge reverts (from {len(all_mods)} total)")
-    print()
+    all_mods = json.load(open("/tmp/items_to_revert.json"))
+    label_edits = [
+        m for m in all_mods if "languages" in (m.get("comment") or "")
+    ]
+    print(f"Found {len(label_edits)} label/desc edits to revert\n")
 
     ok = skip = fail = 0
-    for i, mod in enumerate(modifications):
+    for i, mod in enumerate(label_edits):
         qid = mod["qid"]
         my_revid = mod["revid"]
-        comment = mod.get("comment", "")
+        print(f"[{i + 1}/{len(label_edits)}] {qid} (rev {my_revid})...", end=" ", flush=True)
 
-        print(f"[{i + 1}/{len(modifications)}] {qid} (rev {my_revid})...", end=" ", flush=True)
-
-        # Get first revision author to verify it's not mine
+        # Verify creator != me
         try:
             r = _retry_get(
                 s,
@@ -100,9 +89,9 @@ def main() -> None:
                     "rvlimit": "1",
                     "format": "json",
                 },
-            )
+            ).json()
             creator = ""
-            for _pid, page in r.json().get("query", {}).get("pages", {}).items():
+            for _pid, page in r.get("query", {}).get("pages", {}).items():
                 revs = page.get("revisions", [])
                 if revs:
                     creator = revs[0].get("user", "")
@@ -117,7 +106,6 @@ def main() -> None:
             skip += 1
             continue
 
-        # Try to revert via undo
         try:
             res = _retry_post(
                 s,
@@ -126,7 +114,7 @@ def main() -> None:
                     "title": qid,
                     "undo": my_revid,
                     "token": csrf,
-                    "summary": "Reverting unauthorized modification by automated script (item not created by me)",
+                    "summary": "Reverting unauthorized label/description overwrite by automated script (item not created by me)",
                     "format": "json",
                 },
             ).json()
@@ -135,11 +123,12 @@ def main() -> None:
                 ok += 1
             elif "error" in res:
                 err = res["error"].get("info", "")
-                if "undofailure" in res["error"].get("code", "") or "newer than" in err.lower():
-                    print("SKIP (already reverted/redirect)")
+                code = res["error"].get("code", "")
+                if "undofailure" in code or "newer than" in err.lower():
+                    print("SKIP (already reverted/changed)")
                     skip += 1
                 else:
-                    print(f"FAIL: {err[:60]}")
+                    print(f"FAIL: {err[:80]}")
                     fail += 1
             else:
                 print(f"???: {res}")
@@ -149,15 +138,12 @@ def main() -> None:
             fail += 1
 
         time.sleep(1.5)
-
-        # Refresh CSRF every 50
         if (i + 1) % 50 == 0:
-            csrf = s.get(
-                API, params={"action": "query", "meta": "tokens", "format": "json"}
+            csrf = _retry_get(
+                s, params={"action": "query", "meta": "tokens", "format": "json"}
             ).json()["query"]["tokens"]["csrftoken"]
 
-    print()
-    print(f"DONE: {ok} reverted, {skip} skipped, {fail} failed")
+    print(f"\nDONE: {ok} reverted, {skip} skipped, {fail} failed")
 
 
 if __name__ == "__main__":

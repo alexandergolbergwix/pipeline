@@ -100,12 +100,81 @@ def is_our_item(qid: str, session: requests.Session | None = None) -> bool:
     return True
 
 
+# Properties whose conflicting values prove two items are different entities.
+# If from_id and to_id both have one of these and the values disagree, REFUSE.
+_CONFLICT_PROPS = ("P569", "P570", "P19", "P20", "P227", "P214", "P8189", "P213", "P244")
+
+
+def _get_claims(s: requests.Session, qid: str) -> dict[str, set[str]]:
+    """Fetch identity-relevant claim values for an item."""
+    try:
+        resp = s.get(
+            API,
+            params={
+                "action": "wbgetentities",
+                "ids": qid,
+                "props": "claims",
+                "format": "json",
+            },
+            timeout=15,
+        )
+        ent = resp.json().get("entities", {}).get(qid, {})
+        out: dict[str, set[str]] = {}
+        for prop in _CONFLICT_PROPS:
+            for c in ent.get("claims", {}).get(prop, []):
+                snak = c.get("mainsnak", {})
+                if snak.get("snaktype") != "value":
+                    continue
+                v = snak.get("datavalue", {}).get("value")
+                if isinstance(v, dict):
+                    if "id" in v:
+                        out.setdefault(prop, set()).add(v["id"])
+                    elif "time" in v:
+                        out.setdefault(prop, set()).add(v["time"][:11])
+                else:
+                    out.setdefault(prop, set()).add(str(v))
+        return out
+    except Exception as e:
+        print(f"  (could not fetch claims for {qid}: {e})")
+        return {}
+
+
+def _has_conflict(from_claims: dict[str, set[str]], to_claims: dict[str, set[str]]) -> list[str]:
+    """Return list of properties where from and to disagree."""
+    bad = []
+    for prop in _CONFLICT_PROPS:
+        a = from_claims.get(prop, set())
+        b = to_claims.get(prop, set())
+        if a and b and not (a & b):
+            bad.append(prop)
+    return bad
+
+
 def merge(s: requests.Session, csrf: str, from_id: str, to_id: str) -> dict:
+    # Safety 1: from_id must be ours (created by authenticated user).
     if not is_our_item(from_id, s):
         return {
             "error": {
                 "code": "safety-block",
                 "info": f"{from_id} is NOT our item (range or creator mismatch)",
+            }
+        }
+    # Safety 2: to_id must be a known target. We allow merging into items NOT
+    # created by us (that's how dedup against community items works), but we
+    # require the target to look like a real entity, not an obviously-different one.
+    # The next check handles that.
+
+    # Safety 3: pre-merge metadata conflict. If from and to disagree on any
+    # identity property (DOB, POB, GND, VIAF, NLI, ISNI, LCCN), they are
+    # different real-world entities and MUST NOT be merged.
+    from_claims = _get_claims(s, from_id)
+    to_claims = _get_claims(s, to_id)
+    conflicts = _has_conflict(from_claims, to_claims)
+    if conflicts:
+        return {
+            "error": {
+                "code": "safety-block",
+                "info": f"{from_id}↔{to_id} conflict on {','.join(conflicts)} — refusing merge",
             }
         }
     return s.post(

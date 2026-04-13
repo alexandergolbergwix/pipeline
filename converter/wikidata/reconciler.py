@@ -322,6 +322,63 @@ class WikidataReconciler:
         self._cache[cache_key] = qid
         return qid
 
+    # Properties used for cross-identifier conflict verification.
+    # If a candidate item already has a value on these properties that
+    # differs from the value we would attach, the candidate is REJECTED
+    # as a match — they are almost certainly different real-world entities
+    # who happen to share one identifier.
+    _IDENTITY_PROPS = ("P214", "P8189", "P244", "P227", "P213")  # VIAF, NLI, LCCN, GND, ISNI
+
+    def _fetch_identity_claims(self, qid: str) -> dict[str, set[str]]:
+        """Fetch a candidate item's identity claims (VIAF/NLI/LCCN/GND/ISNI/DOB/POB).
+
+        Returns a dict mapping property → set of string values currently on the item.
+        Empty dict on lookup failure (caller should treat as 'no info, allow match').
+        """
+        cache_key = f"identity:{qid}"
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            if isinstance(cached, dict):
+                return cached
+        sparql = f"""
+        SELECT ?p ?v WHERE {{
+          VALUES ?p {{ wdt:P214 wdt:P8189 wdt:P244 wdt:P227 wdt:P213 wdt:P569 wdt:P19 }}
+          wd:{qid} ?p ?v .
+        }}
+        """
+        results = self._query(sparql)
+        out: dict[str, set[str]] = {}
+        for b in results:
+            prop_uri = b.get("p", {}).get("value", "")
+            val = str(b.get("v", {}).get("value", ""))
+            # Convert wdt:P… URI back to bare property id
+            prop = prop_uri.rsplit("/", 1)[-1]
+            out.setdefault(prop, set()).add(val)
+        # Cache (cast through Any since _cache type is narrower)
+        self._cache[cache_key] = out  # type: ignore[assignment]
+        return out
+
+    def _candidate_conflicts(
+        self,
+        qid: str,
+        proposed: dict[str, str],
+    ) -> list[str]:
+        """Return list of property IDs where the candidate conflicts with proposed values.
+
+        A conflict is when the candidate already has a value for the property AND
+        none of those values matches the proposed value. Properties the candidate
+        does not have are not conflicts (we'd just be adding new info).
+        """
+        existing = self._fetch_identity_claims(qid)
+        conflicts: list[str] = []
+        for prop, proposed_value in proposed.items():
+            if not proposed_value:
+                continue
+            existing_vals = existing.get(prop, set())
+            if existing_vals and proposed_value not in existing_vals:
+                conflicts.append(prop)
+        return conflicts
+
     def reconcile_person(
         self,
         name: str,
@@ -333,36 +390,65 @@ class WikidataReconciler:
     ) -> str | None:
         """Reconcile a person by all available identifiers.
 
-        Checks in order: VIAF → NLI → LCCN → GND → ISNI.
-        Returns QID on first match.
-        """
-        if viaf_uri:
-            viaf_id = extract_viaf_id(viaf_uri)
-            if viaf_id:
-                qid = self.reconcile_person_by_viaf(viaf_id)
-                if qid:
-                    return qid
+        SAFETY (added 2026-04-13): When an identifier matches a candidate item,
+        we cross-verify against ALL other available identifiers we have. If the
+        candidate already has a DIFFERENT value on any of those identifiers,
+        we REJECT the match — they are different real-world entities who happen
+        to share one identifier (e.g., two lawyers sharing an ISNI). This prevents
+        the wrong-merge disaster where 902+ items got merged because the pipeline
+        trusted a single shared identifier.
 
+        Checks in order: VIAF → NLI → LCCN → GND → ISNI.
+        Returns QID on first verified match; None otherwise.
+        """
+        viaf_id = extract_viaf_id(viaf_uri) if viaf_uri else None
+        proposed: dict[str, str] = {}
+        if viaf_id:
+            proposed["P214"] = viaf_id
+        if nli_id:
+            proposed["P8189"] = nli_id
+        if lc_id:
+            proposed["P244"] = lc_id
+        if gnd_id:
+            proposed["P227"] = gnd_id
+        if isni:
+            proposed["P213"] = isni
+
+        candidates: list[tuple[str, str]] = []  # (matching_prop, qid)
+        if viaf_id:
+            qid = self.reconcile_person_by_viaf(viaf_id)
+            if qid:
+                candidates.append(("P214", qid))
         if nli_id:
             qid = self.reconcile_person_by_nli_id(nli_id)
             if qid:
-                return qid
-
-        # Check cluster-harvested identifiers
+                candidates.append(("P8189", qid))
         if lc_id:
             qid = self.reconcile_person_by_external_id("P244", lc_id)
             if qid:
-                return qid
-
+                candidates.append(("P244", qid))
         if gnd_id:
             qid = self.reconcile_person_by_external_id("P227", gnd_id)
             if qid:
-                return qid
-
+                candidates.append(("P227", qid))
         if isni:
             qid = self.reconcile_person_by_external_id("P213", isni)
             if qid:
-                return qid
+                candidates.append(("P213", qid))
+
+        for matched_prop, qid in candidates:
+            conflicts = self._candidate_conflicts(qid, proposed)
+            if conflicts:
+                logger.warning(
+                    "RECONCILE REJECT: %s matched %s=%s but has conflicting %s — "
+                    "treating as different entity, will create new item",
+                    qid,
+                    matched_prop,
+                    proposed.get(matched_prop),
+                    ", ".join(conflicts),
+                )
+                continue
+            return qid
 
         return None
 

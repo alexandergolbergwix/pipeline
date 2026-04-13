@@ -367,3 +367,19 @@ When a property expects an `item` but only a string is available, skip the claim
 `VIAFMatcher.get_cluster_identifiers(viaf_id)` fetches the full VIAF cluster JSON and extracts cross-referenced authority identifiers. These flow through `AuthorityWorker._match_marc_person_entry()` into `match_info["gnd_id"]`, `match_info["lc_id"]`, `match_info["isni"]`, `match_info["bnf_id"]`, then into `WikidataItemBuilder._get_or_create_person()` as external-id claims. The method also extracts J9U (NLI) IDs from the cluster.
 
 Person entities also get hardcoded properties: P1412 (Hebrew, Q9288), P1559 (native name in Hebrew), P21 (male, Q6581097), P1343 (Ktiv, Q118384267). Manuscripts get P17 (Israel, Q801) and P131 (Jerusalem, Q1218). All hardcoded properties skip organizations (detected by keyword in name).
+
+### 23. Wikidata safety guards — NEVER bypass (added 2026-04-13)
+
+On 2026-04-12 a cleanup script merged 902+ unrelated Wikidata entities (people, bands, organizations) because the pipeline trusted a single shared identifier (e.g., ISNI). Several community members filed complaints (Pallor, Kolja21, Epìdosis). The following guards now exist and **must not** be bypassed without explicit user request:
+
+1. **Reconciler cross-identifier verification** — `WikidataReconciler._candidate_conflicts()` in `converter/wikidata/reconciler.py`. When a candidate matches by one identifier (VIAF/NLI/LCCN/GND/ISNI), the reconciler fetches all other identifiers on the candidate and rejects the match if any conflict. The candidate is treated as a different real-world entity and a new item is created instead.
+
+2. **Uploader identity-conflict guard** — `WikidataUploader._would_create_identity_conflict()` in `converter/wikidata/uploader.py`. Refuses to add a value to P569/P570/P19/P20/P227/P214/P8189/P213/P244/P31/P21 on an existing item if that item already has a different value for that property. P569/P570 compare on date prefix (first 11 chars) to ignore precision differences.
+
+3. **Uploader label-overwrite guard** — `_build_wbi_item()` in `converter/wikidata/uploader.py` only sets a label/alias on an existing item when the language slot is empty. Never overwrites an existing label.
+
+4. **Creator-author check** — `_is_our_item()` in `converter/wikidata/uploader.py` and `is_our_item()` in `scripts/merge_duplicates.py` and `scripts/fix_wikidata_items.py`. Verifies first revision author == authenticated user before any modification. Refuses to touch items not created by us, regardless of QID range.
+
+5. **Pre-merge metadata conflict check** — `_has_conflict()` in `scripts/merge_duplicates.py`. Before any `wbmergeitems` call, fetches both source and target claims for P569/P570/P19/P20/P227/P214/P8189/P213/P244 and refuses the merge if any of those properties has different values on the two items.
+
+Tests: `tests/unit/test_safety_guards.py` (14 tests) verify these guards. Do NOT delete or weaken these tests — they are the regression barrier.
