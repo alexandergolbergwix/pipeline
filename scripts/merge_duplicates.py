@@ -29,8 +29,24 @@ def get_session(bearer_token: str) -> tuple[requests.Session, str]:
 
     resp = s.get(API, params={"action": "query", "meta": "tokens", "format": "json"})
     csrf = resp.json()["query"]["tokens"]["csrftoken"]
-    print("Authenticated. CSRF token obtained.")
+
+    # Get authenticated username for creator-author safety check
+    user_resp = s.get(
+        API,
+        params={
+            "action": "query",
+            "meta": "userinfo",
+            "format": "json",
+        },
+    )
+    global AUTH_USER
+    AUTH_USER = user_resp.json().get("query", {}).get("userinfo", {}).get("name", "")
+    print(f"Authenticated as: {AUTH_USER}. CSRF token obtained.")
     return s, csrf
+
+
+AUTH_USER: str = ""
+_creator_cache: dict[str, str] = {}
 
 
 def refresh_csrf(s: requests.Session) -> str:
@@ -38,20 +54,58 @@ def refresh_csrf(s: requests.Session) -> str:
     return resp.json()["query"]["tokens"]["csrftoken"]
 
 
-def is_our_item(qid: str) -> bool:
-    """Check if a QID is in our range (Q138900000+)."""
+def get_creator(s: requests.Session, qid: str) -> str:
+    """Get the username of the FIRST revision (creator) of an item."""
+    if qid in _creator_cache:
+        return _creator_cache[qid]
     try:
-        return int(qid[1:]) >= OUR_QID_MIN
+        resp = s.get(
+            API,
+            params={
+                "action": "query",
+                "prop": "revisions",
+                "titles": qid,
+                "rvprop": "user",
+                "rvdir": "newer",
+                "rvlimit": "1",
+                "format": "json",
+            },
+        )
+        for _pid, page in resp.json().get("query", {}).get("pages", {}).items():
+            revs = page.get("revisions", [])
+            if revs:
+                author = revs[0].get("user", "")
+                _creator_cache[qid] = author
+                return author
+    except Exception:
+        pass
+    return ""
+
+
+def is_our_item(qid: str, session: requests.Session | None = None) -> bool:
+    """STRICT: Check if QID was CREATED by the authenticated user."""
+    # Range check first (cheap)
+    try:
+        if int(qid[1:]) < OUR_QID_MIN:
+            return False
     except (ValueError, IndexError):
         return False
 
+    # Author check (the real safety guard)
+    if session and AUTH_USER:
+        creator = get_creator(session, qid)
+        if creator and creator != AUTH_USER:
+            print(f"  SAFETY BLOCK: {qid} was created by '{creator}', not '{AUTH_USER}'")
+            return False
+    return True
+
 
 def merge(s: requests.Session, csrf: str, from_id: str, to_id: str) -> dict:
-    if not is_our_item(from_id):
+    if not is_our_item(from_id, s):
         return {
             "error": {
                 "code": "safety-block",
-                "info": f"{from_id} is NOT our item (< Q{OUR_QID_MIN})",
+                "info": f"{from_id} is NOT our item (range or creator mismatch)",
             }
         }
     return s.post(
@@ -69,9 +123,12 @@ def merge(s: requests.Session, csrf: str, from_id: str, to_id: str) -> dict:
 
 
 def blank(s: requests.Session, csrf: str, qid: str) -> dict:
-    if not is_our_item(qid):
+    if not is_our_item(qid, s):
         return {
-            "error": {"code": "safety-block", "info": f"{qid} is NOT our item (< Q{OUR_QID_MIN})"}
+            "error": {
+                "code": "safety-block",
+                "info": f"{qid} is NOT our item (range or creator mismatch)",
+            }
         }
     return s.post(
         API,

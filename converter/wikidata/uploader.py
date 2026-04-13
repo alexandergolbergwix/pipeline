@@ -70,6 +70,8 @@ class WikidataUploader:
         self._batch_mode = batch_mode
         self._wbi = None
         self._last_edit_time: float = 0.0
+        self._authenticated_user: str | None = None  # Set after first auth
+        self._creator_cache: dict[str, str] = {}  # qid → first revision author
 
     def _init_wbi(self) -> object:
         """Lazily initialize WikibaseIntegrator.
@@ -389,16 +391,102 @@ class WikidataUploader:
             logger.warning("Failed to build reference snak %s: %s", prop, exc)
             return None
 
+    def _get_authenticated_user(self) -> str | None:
+        """Get the username of the authenticated session via API."""
+        if self._authenticated_user is not None:
+            return self._authenticated_user
+        try:
+            import requests  # noqa: PLC0415
+
+            api_url = _TEST_API if self._is_test else _WIKIDATA_API
+            headers = {"User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)"}
+
+            # OAuth 2.0 bearer token format (single token, no |)
+            if "|" not in self._token and ":" not in self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+            elif "|" in self._token:
+                # OAuth: extract bearer if WBI provided one
+                parts = self._token.split("|")
+                if len(parts) == 2:
+                    # Owner-only consumer — use as bearer
+                    headers["Authorization"] = f"Bearer {self._token}"
+
+            resp = requests.get(
+                api_url,
+                params={"action": "query", "meta": "userinfo", "format": "json"},
+                headers=headers,
+                timeout=10,
+            )
+            user = resp.json().get("query", {}).get("userinfo", {}).get("name")
+            if user and user != "127.0.0.1":  # not anonymous
+                self._authenticated_user = user
+                logger.info("Authenticated as Wikidata user: %s", user)
+                return user
+        except Exception as exc:
+            logger.warning("Could not determine authenticated user: %s", exc)
+        return None
+
+    def _get_first_revision_author(self, qid: str) -> str | None:
+        """Get the username of the FIRST revision (creator) of an item via API."""
+        if qid in self._creator_cache:
+            return self._creator_cache[qid]
+        try:
+            import requests  # noqa: PLC0415
+
+            api_url = _TEST_API if self._is_test else _WIKIDATA_API
+            resp = requests.get(
+                api_url,
+                params={
+                    "action": "query",
+                    "prop": "revisions",
+                    "titles": qid,
+                    "rvprop": "user",
+                    "rvdir": "newer",
+                    "rvlimit": "1",
+                    "format": "json",
+                },
+                headers={"User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)"},
+                timeout=10,
+            )
+            pages = resp.json().get("query", {}).get("pages", {})
+            for _pid, page in pages.items():
+                revs = page.get("revisions", [])
+                if revs:
+                    author = revs[0].get("user")
+                    if author:
+                        self._creator_cache[qid] = author
+                        return author
+        except Exception as exc:
+            logger.warning("Could not get first revision author for %s: %s", qid, exc)
+        return None
+
     def _is_our_item(self, qid: str) -> bool:
-        """Check if an existing Wikidata item was created by the MHM Pipeline.
+        """Check if an existing Wikidata item was created by the authenticated user.
 
-        Checks whether the item has P1343 (described by source) = Q118384267 (Ktiv),
-        which is a marker we add to all items we create. If the item doesn't have
-        this marker, it was NOT created by us and should NOT be modified.
+        STRICT SAFETY CHECK: Verifies that the FIRST revision author of the item
+        matches the currently authenticated user. This prevents modifying items
+        created by other users, even if they have a P1343=Q_KTIV marker.
 
-        This prevents the pipeline from accidentally modifying established items
-        that happen to share identifiers with our entities.
+        Falls back to P1343=Q118384267 (Ktiv) marker check only if the user
+        identity cannot be determined.
         """
+        # Primary check: first revision author must match authenticated user
+        auth_user = self._get_authenticated_user()
+        if auth_user:
+            creator = self._get_first_revision_author(qid)
+            if creator and creator != auth_user:
+                logger.warning(
+                    "SAFETY: Item %s was created by '%s', not '%s' — REFUSING to modify",
+                    qid,
+                    creator,
+                    auth_user,
+                )
+                return False
+            if creator == auth_user:
+                return True
+            # If we couldn't determine creator, fall through to marker check
+
+        # Fallback: P1343=Q118384267 (Ktiv) marker
         try:
             wbi = self._init_wbi()
             existing = wbi.item.get(qid)
