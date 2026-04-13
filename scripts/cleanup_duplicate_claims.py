@@ -4,6 +4,13 @@ When wbmergeitems copies claims from source→target, it can create duplicate
 values for external-id properties (P214, P244, P227, P213, P268, P8189).
 This script finds and removes duplicate claims on items we merged into.
 
+Safety (uses scripts/lib/wikidata_safety.py):
+1. Range check (QID >= Q138900000) — cheap pre-filter.
+2. Creator check — first revision author must be the authenticated user.
+3. Latest-editor check — most recent edit must be the authenticated user
+   (otherwise someone else has touched the item since my edit, and removing
+   a "duplicate" claim could undo their correction).
+
 Usage:
     PYTHONPATH=src:. .venv/bin/python scripts/cleanup_duplicate_claims.py <bearer_token>
 """
@@ -16,16 +23,13 @@ import time
 
 import requests
 
-# SAFETY: Only touch items in our range
-OUR_QID_MIN = 138900000
-
-
-def is_our_item(qid: str) -> bool:
-    try:
-        return int(qid[1:]) >= OUR_QID_MIN
-    except (ValueError, IndexError):
-        return False
-
+from scripts.lib.wikidata_safety import (
+    OUR_QID_MIN,
+    RetryingSession,
+    get_authenticated_user,
+    get_csrf_token,
+    is_safe_to_revert,
+)
 
 API = "https://www.wikidata.org/w/api.php"
 SPARQL = "https://query.wikidata.org/sparql"
@@ -34,13 +38,20 @@ SPARQL = "https://query.wikidata.org/sparql"
 SINGLE_VALUE_PROPS = ["P214", "P244", "P227", "P213", "P268", "P8189"]
 
 
+def in_our_range(qid: str) -> bool:
+    """Cheap pre-filter — final safety is the creator+latest-editor check."""
+    try:
+        return int(qid[1:]) >= OUR_QID_MIN
+    except (ValueError, IndexError):
+        return False
+
+
 def get_items_with_dup_claims(prop: str) -> list[dict]:
     """Find items that have duplicate values for a property via SPARQL."""
     headers = {
         "User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)",
         "Accept": "application/sparql-results+json",
     }
-    # Find items with >1 value for this property that were targets of our merges
     query = f"""
     SELECT ?item (COUNT(?val) AS ?count) WHERE {{
       ?item wdt:{prop} ?val .
@@ -70,11 +81,9 @@ def get_items_with_dup_claims(prop: str) -> list[dict]:
         return []
 
 
-def remove_duplicate_claims(session: requests.Session, csrf: str, qid: str, prop: str) -> int:
+def remove_duplicate_claims(s: RetryingSession, csrf: str, qid: str, prop: str) -> int:
     """Remove duplicate claims for a property on an item, keeping the first one."""
-    # Get the item's claims
-    resp = session.get(
-        API,
+    resp = s.get(
         params={
             "action": "wbgetclaims",
             "entity": qid,
@@ -88,19 +97,15 @@ def remove_duplicate_claims(session: requests.Session, csrf: str, qid: str, prop
     if len(claims) <= 1:
         return 0
 
-    # Group by value — find true duplicates (same value, different claim IDs)
-    seen_values = {}
-    to_remove = []
-
+    seen_values: dict[str, str] = {}
+    to_remove: list[str] = []
     for claim in claims:
         mainsnak = claim.get("mainsnak", {})
         datavalue = mainsnak.get("datavalue", {})
         value = datavalue.get("value", "")
         if isinstance(value, dict):
             value = json.dumps(value, sort_keys=True)
-
         if value in seen_values:
-            # Duplicate — remove this one (keep the first)
             to_remove.append(claim["id"])
         else:
             seen_values[value] = claim["id"]
@@ -108,10 +113,8 @@ def remove_duplicate_claims(session: requests.Session, csrf: str, qid: str, prop
     if not to_remove:
         return 0
 
-    # Remove duplicate claims
     for claim_id in to_remove:
-        resp = session.post(
-            API,
+        resp = s.post(
             data={
                 "action": "wbremoveclaims",
                 "claim": claim_id,
@@ -134,21 +137,10 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
 
-    token = sys.argv[1]
-
-    session = requests.Session()
-    session.headers["Authorization"] = f"Bearer {token}"
-    session.headers["User-Agent"] = "MHMPipeline/1.0 (shvedbook@gmail.com)"
-
-    # Get CSRF token
-    csrf = session.get(
-        API,
-        params={
-            "action": "query",
-            "meta": "tokens",
-            "format": "json",
-        },
-    ).json()["query"]["tokens"]["csrftoken"]
+    s = RetryingSession(bearer_token=sys.argv[1])
+    csrf = get_csrf_token(s)
+    auth_user = get_authenticated_user(s)
+    print(f"Authenticated as: {auth_user}")
 
     total_removed = 0
 
@@ -159,15 +151,29 @@ def main() -> None:
 
         for i, item in enumerate(items):
             qid = item["qid"]
-            if not is_our_item(qid):
-                print(f"  [{i + 1}/{len(items)}] {qid} — SKIPPED (not our item)")
-                continue
             print(
-                f"  [{i + 1}/{len(items)}] {qid} ({item['count']} values)...", end=" ", flush=True
+                f"  [{i + 1}/{len(items)}] {qid} ({item['count']} values)...",
+                end=" ",
+                flush=True,
             )
 
+            # Cheap pre-filter
+            if not in_our_range(qid):
+                print("SKIP (out of range)")
+                continue
+
+            # Full safety check: creator must be me AND latest editor must be me
             try:
-                removed = remove_duplicate_claims(session, csrf, qid, prop)
+                safe, reason = is_safe_to_revert(s, qid, auth_user)
+            except Exception as e:
+                print(f"ERR safety check: {e}")
+                continue
+            if not safe:
+                print(f"SKIP ({reason})")
+                continue
+
+            try:
+                removed = remove_duplicate_claims(s, csrf, qid, prop)
                 if removed:
                     print(f"removed {removed}")
                     total_removed += removed
@@ -176,17 +182,10 @@ def main() -> None:
             except Exception as e:
                 print(f"ERROR: {e}")
 
-            time.sleep(1)
+            time.sleep(1.5)
 
             if (i + 1) % 50 == 0:
-                csrf = session.get(
-                    API,
-                    params={
-                        "action": "query",
-                        "meta": "tokens",
-                        "format": "json",
-                    },
-                ).json()["query"]["tokens"]["csrftoken"]
+                csrf = get_csrf_token(s)
 
         time.sleep(3)
 
