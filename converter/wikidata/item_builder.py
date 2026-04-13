@@ -1189,12 +1189,44 @@ class WikidataItemBuilder:
             return self._person_items[key]
 
         person = WikidataItem(entity_type="person", local_id=key)
-        person.labels["he"] = name
 
-        # P31 = human (or organization)
+        # Clean name: strip trailing punctuation that comes from MARC formatting
+        clean_name = name.strip().rstrip(",;:")
+        if not clean_name or len(clean_name) < 2:
+            # Skip creating items with incomplete/empty names
+            self._person_items[key] = person
+            return person
+
+        # Detect script: Hebrew vs Latin
+        has_hebrew = any("\u0590" <= c <= "\u05ff" for c in clean_name)
+        label_lang = "he" if has_hebrew else "en"
+        person.labels[label_lang] = clean_name
+
+        # P31 = human (or organization) — expanded keyword list
         is_org = any(
             kw in name.lower()
-            for kw in ("library", "museum", "university", "institute", "ספרייה", "מכון")
+            for kw in (
+                "library",
+                "museum",
+                "university",
+                "institute",
+                "seminary",
+                "school",
+                "college",
+                "society",
+                "academy",
+                "foundation",
+                "association",
+                "trust",
+                "centre",
+                "center",
+                "archive",
+                "ספרייה",
+                "מכון",
+                "אוניברסיטה",
+                "מוזיאון",
+                "קהילה",
+            )
         )
         person.statements.append(
             WikidataStatement(
@@ -1338,16 +1370,32 @@ class WikidataItemBuilder:
                 )
             )
 
-        # P1559 = name in native language (Hebrew)
-        if name and not is_org:
-            person.statements.append(
-                WikidataStatement(
-                    property_id="P1559",
-                    value=name,
-                    value_type="monolingualtext",
-                    language="he",
+        # P1559 = name in native language — use language matching the script
+        # Skip names with trailing commas/incomplete entries
+        cleaned_name = name.strip().rstrip(",;:")
+        if cleaned_name and not is_org and len(cleaned_name) >= 2:
+            # Detect script: Hebrew vs Latin vs Cyrillic etc.
+            if any("\u0590" <= c <= "\u05ff" for c in cleaned_name):
+                native_lang = "he"
+            elif any("\u0400" <= c <= "\u04ff" for c in cleaned_name):
+                native_lang = "ru"
+            elif any("\u0600" <= c <= "\u06ff" for c in cleaned_name):
+                native_lang = "ar"
+            elif any("a" <= c.lower() <= "z" for c in cleaned_name):
+                # Latin script — could be many languages, default to Latin
+                native_lang = "la"
+            else:
+                native_lang = None  # Skip if unknown script
+
+            if native_lang:
+                person.statements.append(
+                    WikidataStatement(
+                        property_id="P1559",
+                        value=cleaned_name,
+                        value_type="monolingualtext",
+                        language=native_lang,
+                    )
                 )
-            )
 
         # Additional authority IDs from VIAF cluster harvesting
         for match in source_record.get("marc_authority_matches") or []:
