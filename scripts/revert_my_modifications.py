@@ -1,9 +1,10 @@
-"""Revert ALL modifications I made to items I did NOT create.
+"""Revert modifications I made to items I did NOT create (bad-merge subset).
 
-Safety: For each modification, this script:
-1. Gets the FIRST revision author of the item
-2. If creator != my username → revert my edit (use action=edit + undo=<my_revid>)
-3. If creator == my username → leave alone (it's my item)
+Two-layer safety (see scripts/lib/wikidata_safety.py for the shared helpers):
+1. Item creator must NOT be me — otherwise it's my own item, nothing to revert.
+2. Latest editor MUST be me — otherwise someone else (e.g. Epìdosis) has touched
+   the item after my edit, and undoing my older revision would silently
+   override their correction.
 
 Reads /tmp/items_to_revert.json built by audit script.
 
@@ -17,33 +18,12 @@ import json
 import sys
 import time
 
-import requests
-
-API = "https://www.wikidata.org/w/api.php"
-
-
-def _retry_get(s, **kwargs):
-    """GET with retry on network errors (DNS/timeout)."""
-    last_exc = None
-    for attempt in range(6):
-        try:
-            return s.get(API, timeout=15, **kwargs)
-        except (requests.ConnectionError, requests.Timeout) as e:
-            last_exc = e
-            time.sleep(min(2 ** attempt, 30))
-    raise last_exc
-
-
-def _retry_post(s, **kwargs):
-    """POST with retry on network errors."""
-    last_exc = None
-    for attempt in range(6):
-        try:
-            return s.post(API, timeout=20, **kwargs)
-        except (requests.ConnectionError, requests.Timeout) as e:
-            last_exc = e
-            time.sleep(min(2 ** attempt, 30))
-    raise last_exc
+from scripts.lib.wikidata_safety import (
+    RetryingSession,
+    get_authenticated_user,
+    get_csrf_token,
+    is_safe_to_revert,
+)
 
 
 def main() -> None:
@@ -51,76 +31,38 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
 
-    token = sys.argv[1]
-
-    s = requests.Session()
-    s.headers["Authorization"] = f"Bearer {token}"
-    s.headers["User-Agent"] = "MHMPipeline/1.0 (shvedbook@gmail.com)"
-
-    csrf = s.get(API, params={"action": "query", "meta": "tokens", "format": "json"}).json()[
-        "query"
-    ]["tokens"]["csrftoken"]
-
-    user_resp = s.get(API, params={"action": "query", "meta": "userinfo", "format": "json"})
-    auth_user = user_resp.json().get("query", {}).get("userinfo", {}).get("name", "")
+    s = RetryingSession(bearer_token=sys.argv[1])
+    csrf = get_csrf_token(s)
+    auth_user = get_authenticated_user(s)
     print(f"Authenticated as: {auth_user}")
 
-    # Load bad merges (items with conflicting GND/DOB/POB after my merge)
     with open("/tmp/bad_merge_targets.json") as f:
         bad_targets = {b["qid"] for b in json.load(f)}
-
-    # Filter all my modifications to only those targeting bad-merge items
     with open("/tmp/items_to_revert.json") as f:
         all_mods = json.load(f)
-
-    # Keep only bad-merge target modifications (where source != None means it was a merge)
     modifications = [m for m in all_mods if m["qid"] in bad_targets and m["source"]]
 
-    print(f"\nFiltered to {len(modifications)} bad-merge reverts (from {len(all_mods)} total)")
-    print()
+    print(f"\nFiltered to {len(modifications)} bad-merge reverts (from {len(all_mods)} total)\n")
 
     ok = skip = fail = 0
     for i, mod in enumerate(modifications):
         qid = mod["qid"]
         my_revid = mod["revid"]
-        comment = mod.get("comment", "")
-
         print(f"[{i + 1}/{len(modifications)}] {qid} (rev {my_revid})...", end=" ", flush=True)
 
-        # Get first revision author to verify it's not mine
         try:
-            r = _retry_get(
-                s,
-                params={
-                    "action": "query",
-                    "prop": "revisions",
-                    "titles": qid,
-                    "rvprop": "user",
-                    "rvdir": "newer",
-                    "rvlimit": "1",
-                    "format": "json",
-                },
-            )
-            creator = ""
-            for _pid, page in r.json().get("query", {}).get("pages", {}).items():
-                revs = page.get("revisions", [])
-                if revs:
-                    creator = revs[0].get("user", "")
-                    break
+            safe, reason = is_safe_to_revert(s, qid, auth_user)
         except Exception as e:
-            print(f"ERR getting creator: {e}")
+            print(f"ERR safety check: {e}")
             fail += 1
             continue
-
-        if creator == auth_user:
-            print("SKIP (I created this item)")
+        if not safe:
+            print(f"SKIP ({reason})")
             skip += 1
             continue
 
-        # Try to revert via undo
         try:
-            res = _retry_post(
-                s,
+            res = s.post(
                 data={
                     "action": "edit",
                     "title": qid,
@@ -149,15 +91,10 @@ def main() -> None:
             fail += 1
 
         time.sleep(1.5)
-
-        # Refresh CSRF every 50
         if (i + 1) % 50 == 0:
-            csrf = s.get(
-                API, params={"action": "query", "meta": "tokens", "format": "json"}
-            ).json()["query"]["tokens"]["csrftoken"]
+            csrf = get_csrf_token(s)
 
-    print()
-    print(f"DONE: {ok} reverted, {skip} skipped, {fail} failed")
+    print(f"\nDONE: {ok} reverted, {skip} skipped, {fail} failed")
 
 
 if __name__ == "__main__":

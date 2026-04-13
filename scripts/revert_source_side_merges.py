@@ -1,13 +1,14 @@
-"""Revert ADDITIONAL bad merges flagged by the stricter heuristic.
+"""Undo source-side edits of bad merges (restores blanked redirects).
 
-Reads /tmp/extra_bad_merges.json (qid + issues) joined with
-/tmp/items_to_revert.json to get the my_revid for each.
+Per Epìdosis: each merge produces TWO edits — one on the target (adds
+merged content) and one on the source (blanks + redirects). Undoing only
+the target leaves the source as a blank redirect.
 
 Same two-layer safety as scripts/revert_my_modifications.py — see
 scripts/lib/wikidata_safety.py for shared helpers.
 
 Usage:
-    PYTHONPATH=src:. .venv/bin/python scripts/revert_extra_bad_merges.py <bearer_token>
+    PYTHONPATH=src:. .venv/bin/python scripts/revert_source_side_merges.py <bearer_token>
 """
 
 from __future__ import annotations
@@ -34,19 +35,16 @@ def main() -> None:
     auth_user = get_authenticated_user(s)
     print(f"Authenticated as: {auth_user}")
 
-    extra = json.load(open("/tmp/extra_bad_merges.json"))
-    extra_qids = {e["qid"] for e in extra}
     all_mods = json.load(open("/tmp/items_to_revert.json"))
-    mods_to_revert = [m for m in all_mods if m["qid"] in extra_qids and m.get("source")]
-    mods_to_revert.sort(key=lambda m: -m["revid"])
-
-    print(f"Reverting {len(mods_to_revert)} modifications across {len(extra_qids)} items\n")
+    src_side = [m for m in all_mods if "wbmergeitems-to" in (m.get("comment") or "")]
+    print(f"Found {len(src_side)} source-side merge edits\n")
 
     ok = skip = fail = 0
-    for i, mod in enumerate(mods_to_revert):
+    for i, mod in enumerate(src_side):
         qid = mod["qid"]
         my_revid = mod["revid"]
-        print(f"[{i + 1}/{len(mods_to_revert)}] {qid} (rev {my_revid})...", end=" ", flush=True)
+        comment = mod.get("comment", "")[:60]
+        print(f"[{i + 1}/{len(src_side)}] {qid} (rev {my_revid}) — {comment}...", end=" ", flush=True)
 
         try:
             safe, reason = is_safe_to_revert(s, qid, auth_user)
@@ -66,7 +64,7 @@ def main() -> None:
                     "title": qid,
                     "undo": my_revid,
                     "token": csrf,
-                    "summary": "Reverting wrong merge by automated script (item not created by me; conflicting metadata after merge)",
+                    "summary": "Restoring source-item content (per Epìdosis: each merge needs two undos)",
                     "format": "json",
                 },
             ).json()

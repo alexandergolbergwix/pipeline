@@ -216,5 +216,69 @@ class TestMergeDuplicatesConflictCheck:
         assert "P569" in _has_conflict(from_claims, to_claims)
 
 
+# ── is_safe_to_revert (latest-editor guard) ─────────────────────────────────
+
+
+class TestIsSafeToRevert:
+    """The combined safety check used by all revert scripts.
+
+    Catches the disaster pattern: someone (e.g., Epìdosis) re-applied my
+    edit because it was actually correct. A naive re-run of the revert
+    script would silently override their correction. The latest-editor
+    check refuses to undo when the most recent revision is by anyone else.
+    """
+
+    def _patch(self, monkeypatch, creator: str, latest: str) -> None:
+        from scripts.lib import wikidata_safety
+
+        monkeypatch.setattr(
+            wikidata_safety, "get_first_revision_author", lambda _s, _q: creator
+        )
+        monkeypatch.setattr(
+            wikidata_safety, "get_latest_revision_author", lambda _s, _q: latest
+        )
+
+    def test_safe_when_creator_is_other_and_latest_is_me(self, monkeypatch) -> None:
+        from scripts.lib.wikidata_safety import is_safe_to_revert
+
+        self._patch(monkeypatch, creator="OtherUser", latest="me")
+        safe, _reason = is_safe_to_revert(None, "Q1", "me")
+        assert safe is True
+
+    def test_unsafe_when_i_created_the_item(self, monkeypatch) -> None:
+        from scripts.lib.wikidata_safety import is_safe_to_revert
+
+        self._patch(monkeypatch, creator="me", latest="me")
+        safe, reason = is_safe_to_revert(None, "Q1", "me")
+        assert safe is False
+        assert "I created" in reason
+
+    def test_unsafe_when_creator_unknown(self, monkeypatch) -> None:
+        from scripts.lib.wikidata_safety import is_safe_to_revert
+
+        self._patch(monkeypatch, creator="", latest="me")
+        safe, reason = is_safe_to_revert(None, "Q1", "me")
+        assert safe is False
+        assert "creator" in reason
+
+    def test_unsafe_when_latest_editor_is_someone_else(self, monkeypatch) -> None:
+        """The Epìdosis case — they re-applied my edit because it was correct."""
+        from scripts.lib.wikidata_safety import is_safe_to_revert
+
+        self._patch(monkeypatch, creator="OtherUser", latest="Epìdosis")
+        safe, reason = is_safe_to_revert(None, "Q1", "me")
+        assert safe is False
+        assert "Epìdosis" in reason
+        assert "override" in reason
+
+    def test_unsafe_when_latest_editor_unknown(self, monkeypatch) -> None:
+        from scripts.lib.wikidata_safety import is_safe_to_revert
+
+        self._patch(monkeypatch, creator="OtherUser", latest="")
+        safe, reason = is_safe_to_revert(None, "Q1", "me")
+        assert safe is False
+        assert "latest" in reason
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

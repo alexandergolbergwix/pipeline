@@ -1,12 +1,10 @@
-"""Revert the 35 destructive label/description overwrites on items I did NOT create.
+"""Revert destructive label/description overwrites on items I did NOT create.
 
-These are wbeditentity-update-languages edits where the MHM Pipeline's name-matching
-heuristic added Hebrew labels/aliases to existing items not created by me.
+These are wbeditentity-update-languages edits where the MHM Pipeline's
+name-matching heuristic added Hebrew labels/aliases to existing items.
 
-Safety:
-- Loads the 35 label edits from /tmp/items_to_revert.json (filter: comment contains "languages")
-- Verifies first revision author != authenticated user before reverting
-- Uses action=edit + undo=<my_revid> to restore previous state
+Same two-layer safety as scripts/revert_my_modifications.py — see
+scripts/lib/wikidata_safety.py for shared helpers.
 
 Usage:
     PYTHONPATH=src:. .venv/bin/python scripts/revert_label_overwrites.py <bearer_token>
@@ -18,31 +16,12 @@ import json
 import sys
 import time
 
-import requests
-
-API = "https://www.wikidata.org/w/api.php"
-
-
-def _retry_get(s, **kwargs):
-    last_exc = None
-    for attempt in range(6):
-        try:
-            return s.get(API, timeout=15, **kwargs)
-        except (requests.ConnectionError, requests.Timeout) as e:
-            last_exc = e
-            time.sleep(min(2**attempt, 30))
-    raise last_exc
-
-
-def _retry_post(s, **kwargs):
-    last_exc = None
-    for attempt in range(6):
-        try:
-            return s.post(API, timeout=20, **kwargs)
-        except (requests.ConnectionError, requests.Timeout) as e:
-            last_exc = e
-            time.sleep(min(2**attempt, 30))
-    raise last_exc
+from scripts.lib.wikidata_safety import (
+    RetryingSession,
+    get_authenticated_user,
+    get_csrf_token,
+    is_safe_to_revert,
+)
 
 
 def main() -> None:
@@ -50,24 +29,13 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
 
-    token = sys.argv[1]
-    s = requests.Session()
-    s.headers["Authorization"] = f"Bearer {token}"
-    s.headers["User-Agent"] = "MHMPipeline/1.0 (shvedbook@gmail.com)"
-
-    csrf = _retry_get(
-        s, params={"action": "query", "meta": "tokens", "format": "json"}
-    ).json()["query"]["tokens"]["csrftoken"]
-
-    auth_user = _retry_get(
-        s, params={"action": "query", "meta": "userinfo", "format": "json"}
-    ).json().get("query", {}).get("userinfo", {}).get("name", "")
+    s = RetryingSession(bearer_token=sys.argv[1])
+    csrf = get_csrf_token(s)
+    auth_user = get_authenticated_user(s)
     print(f"Authenticated as: {auth_user}")
 
     all_mods = json.load(open("/tmp/items_to_revert.json"))
-    label_edits = [
-        m for m in all_mods if "languages" in (m.get("comment") or "")
-    ]
+    label_edits = [m for m in all_mods if "languages" in (m.get("comment") or "")]
     print(f"Found {len(label_edits)} label/desc edits to revert\n")
 
     ok = skip = fail = 0
@@ -76,39 +44,19 @@ def main() -> None:
         my_revid = mod["revid"]
         print(f"[{i + 1}/{len(label_edits)}] {qid} (rev {my_revid})...", end=" ", flush=True)
 
-        # Verify creator != me
         try:
-            r = _retry_get(
-                s,
-                params={
-                    "action": "query",
-                    "prop": "revisions",
-                    "titles": qid,
-                    "rvprop": "user",
-                    "rvdir": "newer",
-                    "rvlimit": "1",
-                    "format": "json",
-                },
-            ).json()
-            creator = ""
-            for _pid, page in r.get("query", {}).get("pages", {}).items():
-                revs = page.get("revisions", [])
-                if revs:
-                    creator = revs[0].get("user", "")
-                    break
+            safe, reason = is_safe_to_revert(s, qid, auth_user)
         except Exception as e:
-            print(f"ERR getting creator: {e}")
+            print(f"ERR safety check: {e}")
             fail += 1
             continue
-
-        if creator == auth_user:
-            print("SKIP (I created this item)")
+        if not safe:
+            print(f"SKIP ({reason})")
             skip += 1
             continue
 
         try:
-            res = _retry_post(
-                s,
+            res = s.post(
                 data={
                     "action": "edit",
                     "title": qid,
@@ -139,9 +87,7 @@ def main() -> None:
 
         time.sleep(1.5)
         if (i + 1) % 50 == 0:
-            csrf = _retry_get(
-                s, params={"action": "query", "meta": "tokens", "format": "json"}
-            ).json()["query"]["tokens"]["csrftoken"]
+            csrf = get_csrf_token(s)
 
     print(f"\nDONE: {ok} reverted, {skip} skipped, {fail} failed")
 

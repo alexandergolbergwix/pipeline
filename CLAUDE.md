@@ -382,4 +382,15 @@ On 2026-04-12 a cleanup script merged 902+ unrelated Wikidata entities (people, 
 
 5. **Pre-merge metadata conflict check** — `_has_conflict()` in `scripts/merge_duplicates.py`. Before any `wbmergeitems` call, fetches both source and target claims for P569/P570/P19/P20/P227/P214/P8189/P213/P244 and refuses the merge if any of those properties has different values on the two items.
 
-Tests: `tests/unit/test_safety_guards.py` (14 tests) verify these guards. Do NOT delete or weaken these tests — they are the regression barrier.
+Tests: `tests/unit/test_safety_guards.py` (19 tests) verify these guards. Do NOT delete or weaken these tests — they are the regression barrier.
+
+### 24. Wikidata revert scripts — TWO-LAYER editor check (added 2026-04-13)
+
+Every script in `scripts/` that issues `action=edit&undo=<my_revid>` MUST go through `scripts/lib/wikidata_safety.is_safe_to_revert()`. That helper enforces both checks and may NEVER be bypassed:
+
+1. **Creator check** — first revision author of the item ≠ authenticated user. Otherwise the item is ours; nothing to revert.
+2. **Latest-editor check** — most recent revision of the item == authenticated user. Otherwise someone else (e.g., Epìdosis re-applying a merge that was actually correct) has touched the item since our edit, and undoing our older revision would silently override their correction.
+
+The Epìdosis incident: on 2026-04-13 Epìdosis re-applied four merges I had wrongly reverted (Q109877110, Q479063, Q159933, Q55902460), commenting "Already checked, correct merge". A naive re-run of the revert script would have undone those corrections. The latest-editor check makes that impossible.
+
+Use `RetryingSession` from the same module for all HTTP — it survives transient DNS / TCP outages with exponential backoff (six attempts, capped at 30 s). See `scripts/revert_my_modifications.py` for the canonical pattern.
