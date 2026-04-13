@@ -20,6 +20,25 @@ The ontology, SHACL shapes, and controlled vocabularies are released under
 the Creative Commons Attribution 4.0 International license
 ([CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)).
 
+## Permanent identifier
+
+The HMO namespace is served via the W3ID Permanent Identifier Community
+Group at:
+
+> **https://w3id.org/hebrew-manuscripts/**
+
+This URL uses HTTP content negotiation:
+
+| `Accept:` header | Resolves to |
+|---|---|
+| `text/turtle` | `hebrew-manuscripts.ttl` (this directory) |
+| `application/rdf+xml` (and default) | `hebrew-manuscripts.owl` (this directory) |
+| `text/html` | this directory page on GitHub |
+
+The redirect is defined by `perma-id/w3id.org/hebrew-manuscripts/.htaccess`
+and is independent of the underlying hosting, so the namespace IRI
+remains stable across hosting changes.
+
 ## Citing
 
 If you use HMO in your research, please cite:
