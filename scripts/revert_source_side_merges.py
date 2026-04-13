@@ -44,7 +44,9 @@ def main() -> None:
         qid = mod["qid"]
         my_revid = mod["revid"]
         comment = mod.get("comment", "")[:60]
-        print(f"[{i + 1}/{len(src_side)}] {qid} (rev {my_revid}) — {comment}...", end=" ", flush=True)
+        print(
+            f"[{i + 1}/{len(src_side)}] {qid} (rev {my_revid}) — {comment}...", end=" ", flush=True
+        )
 
         try:
             safe, reason = is_safe_to_revert(s, qid, auth_user)

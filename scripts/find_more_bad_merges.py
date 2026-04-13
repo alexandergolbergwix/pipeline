@@ -64,13 +64,18 @@ def main() -> None:
     all_mods = json.load(open("/tmp/items_to_revert.json"))
 
     # Unflagged merges: have source AND not in bad_targets
-    unflagged_qids = sorted({m["qid"] for m in all_mods if m.get("source") and m["qid"] not in bad_targets})
+    unflagged_qids = sorted(
+        {m["qid"] for m in all_mods if m.get("source") and m["qid"] not in bad_targets}
+    )
     print(f"Checking {len(unflagged_qids)} unflagged merge targets...")
 
     flagged = []
     for batch_start in range(0, len(unflagged_qids), 50):
         batch = unflagged_qids[batch_start : batch_start + 50]
-        print(f"  Batch {batch_start // 50 + 1}/{(len(unflagged_qids) + 49) // 50}: {len(batch)} items...", flush=True)
+        print(
+            f"  Batch {batch_start // 50 + 1}/{(len(unflagged_qids) + 49) // 50}: {len(batch)} items...",
+            flush=True,
+        )
         try:
             r = _retry_get(
                 s,

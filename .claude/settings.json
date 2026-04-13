@@ -158,7 +158,12 @@
       "Bash(grep -lE \"eyJ[A-Za-z0-9_-]{30,}\\\\.eyJ[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+\" /Users/alexandergo/Documents/Doctorat/pipeline/audit_wikidata_manuscripts.py)",
       "Bash(git -C /Users/alexandergo/Documents/Doctorat/pipeline ls-files --others --exclude-standard)",
       "Bash(grep -E \"\\\\.\\(py|md|json|sh\\)$\")",
-      "Bash(grep -rE \"eyJ[A-Za-z0-9_-]{30,}\\\\.eyJ[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]{40,}\" --include=\"*.py\" --include=\"*.md\" --include=\"*.json\" --include=\"*.toml\" --include=\"*.sh\" --exclude-dir=.venv --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ --exclude-dir=.mypy_cache --exclude-dir=dist)"
+      "Bash(grep -rE \"eyJ[A-Za-z0-9_-]{30,}\\\\.eyJ[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]{40,}\" --include=\"*.py\" --include=\"*.md\" --include=\"*.json\" --include=\"*.toml\" --include=\"*.sh\" --exclude-dir=.venv --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__ --exclude-dir=.mypy_cache --exclude-dir=dist)",
+      "Bash(PYTHONPATH=src:. .venv/bin/python -m py_compile scripts/cleanup_duplicate_claims.py)",
+      "Bash(PYTHONPATH=src:. .venv/bin/python -m pytest tests/unit/test_safety_guards.py -q)",
+      "Bash(git -C /Users/alexandergo/Documents/Doctorat/pipeline add scripts/cleanup_duplicate_claims.py)",
+      "Bash(git -C /Users/alexandergo/Documents/Doctorat/pipeline commit -m ':*)",
+      "Bash(git -C /Users/alexandergo/Documents/Doctorat/pipeline add -u)"
     ],
     "additionalDirectories": [
       "/Users/alexandergo/Desktop/100richets",

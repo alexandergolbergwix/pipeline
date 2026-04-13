@@ -179,9 +179,7 @@ class WikidataUploader:
         {"P569", "P570", "P19", "P20", "P227", "P214", "P8189", "P213", "P244", "P31", "P21"}
     )
 
-    def _would_create_identity_conflict(
-        self, wbi_item: object, stmt: WikidataStatement
-    ) -> bool:
+    def _would_create_identity_conflict(self, wbi_item: object, stmt: WikidataStatement) -> bool:
         """Return True if adding this statement to the existing item would create
         a multi-value conflict on an identity property."""
         if stmt.property_id not in self._IDENTITY_PROPS:
@@ -227,7 +225,9 @@ class WikidataUploader:
             if item.existing_qid:
                 try:
                     current = wbi_item.labels.get(lang)
-                    current_val = current.value if current and getattr(current, "value", None) else ""
+                    current_val = (
+                        current.value if current and getattr(current, "value", None) else ""
+                    )
                 except Exception:
                     current_val = ""
                 if current_val:

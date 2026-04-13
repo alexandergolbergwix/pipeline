@@ -141,9 +141,7 @@ class TestUploaderIdentityConflict:
         """Identity prop with same value already present → safe (WBI dedups)."""
         u = self._make_uploader()
         wbi_item = MagicMock()
-        wbi_item.claims.get = MagicMock(
-            return_value=[self._make_existing_claim("118576488")]
-        )
+        wbi_item.claims.get = MagicMock(return_value=[self._make_existing_claim("118576488")])
         stmt = self._make_stmt("P227", "118576488")
         assert u._would_create_identity_conflict(wbi_item, stmt) is False
 
@@ -151,9 +149,7 @@ class TestUploaderIdentityConflict:
         """Identity prop with DIFFERENT value present → MUST block."""
         u = self._make_uploader()
         wbi_item = MagicMock()
-        wbi_item.claims.get = MagicMock(
-            return_value=[self._make_existing_claim("118576488")]
-        )
+        wbi_item.claims.get = MagicMock(return_value=[self._make_existing_claim("118576488")])
         stmt = self._make_stmt("P227", "119033348")  # different GND
         assert u._would_create_identity_conflict(wbi_item, stmt) is True
 
@@ -229,12 +225,8 @@ class TestIsSafeToRevert:
     def _patch(self, monkeypatch, creator: str, latest: str) -> None:
         from scripts.lib import wikidata_safety
 
-        monkeypatch.setattr(
-            wikidata_safety, "get_first_revision_author", lambda _s, _q: creator
-        )
-        monkeypatch.setattr(
-            wikidata_safety, "get_latest_revision_author", lambda _s, _q: latest
-        )
+        monkeypatch.setattr(wikidata_safety, "get_first_revision_author", lambda _s, _q: creator)
+        monkeypatch.setattr(wikidata_safety, "get_latest_revision_author", lambda _s, _q: latest)
 
     def test_safe_when_creator_is_other_and_latest_is_me(self, monkeypatch) -> None:
         from scripts.lib.wikidata_safety import is_safe_to_revert

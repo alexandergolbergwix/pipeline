@@ -71,9 +71,9 @@ class RetryingSession:
 
 def get_csrf_token(s: RetryingSession) -> str:
     """Fetch a CSRF token for write operations."""
-    return s.get(
-        params={"action": "query", "meta": "tokens", "format": "json"}
-    ).json()["query"]["tokens"]["csrftoken"]
+    return s.get(params={"action": "query", "meta": "tokens", "format": "json"}).json()["query"][
+        "tokens"
+    ]["csrftoken"]
 
 
 def get_authenticated_user(s: RetryingSession) -> str:
