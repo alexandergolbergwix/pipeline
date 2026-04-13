@@ -22,7 +22,6 @@ import sys
 import time
 
 import requests
-
 from scripts.lib.wikidata_safety import (
     OUR_QID_MIN,
     RetryingSession,

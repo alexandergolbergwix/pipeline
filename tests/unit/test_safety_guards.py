@@ -14,9 +14,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from converter.wikidata.reconciler import WikidataReconciler
-
 
 # ── Reconciler cross-identifier verification ────────────────────────────────
 
