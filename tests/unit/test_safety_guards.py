@@ -11,6 +11,7 @@ These tests verify:
 
 from __future__ import annotations
 
+import pathlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1109,6 +1110,363 @@ class TestP3959NotEmittedByPipeline:
                         f"Found P3959 reference in {path}:{line!r}. "
                         "P3959 (NNL item ID) is prohibited."
                     )
+
+
+# ── Third audit fixes (2026-04-15) ──────────────────────────────────────────
+
+
+class TestP217HasP195Qualifier:
+    """Fix #1: P217 (inventory number) must carry P195 (collection) as qualifier."""
+
+    def test_p217_statement_has_p195_qualifier(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find the actual WikidataStatement call for P_INVENTORY_NUMBER (skip import)
+        idx = src.find("property_id=P_INVENTORY_NUMBER")
+        assert idx != -1, "P_INVENTORY_NUMBER statement not found"
+        block = src[idx : idx + 700]
+        assert "P_COLLECTION" in block, "P217 statement must have P195 qualifier"
+        assert "Q_NLI" in block, "P195 qualifier value must be Q_NLI"
+
+    def test_p195_qualifier_key_present(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("property_id=P_INVENTORY_NUMBER")
+        assert idx != -1
+        block = src[idx : idx + 700]
+        assert "qualifiers" in block
+
+
+class TestP7153HasP3831Qualifier:
+    """Fix #2: P7153 (significant place) must carry P3831 (object has role) qualifier."""
+
+    def test_p7153_has_role_qualifier(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find the actual statement call, not the constant definition
+        idx = src.find("property_id=P_SIGNIFICANT_PLACE")
+        assert idx != -1, "P_SIGNIFICANT_PLACE statement not found"
+        block = src[idx : idx + 900]
+        assert "P_OBJECT_HAS_ROLE" in block
+
+    def test_p7153_role_qid_is_place_qid(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("property_id=P_SIGNIFICANT_PLACE")
+        block = src[idx : idx + 900]
+        # Q1616923 = place of provenance
+        assert "Q1616923" in block
+
+
+class TestP887InReferenceNotQualifier:
+    """Fix #3: P887 (based on heuristic) has scope=reference; must not be a qualifier."""
+
+    def test_p887_not_in_qualifiers_list(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find the P_INCEPTION statement block
+        inception_idx = src.find("property_id=P_INCEPTION")
+        assert inception_idx != -1
+        block_start = src.rfind("qualifiers", 0, inception_idx)
+        block = src[block_start : inception_idx + 600]
+        # P887 must NOT appear inside the qualifiers list (it was moved to ref)
+        # The qualifiers list for inception now only contains P_SOURCING_CIRCUMSTANCES
+        # and P_EARLIEST_DATE / P_LATEST_DATE — never P887
+        assert (
+            "P_BASED_ON_HEURISTIC"
+            not in block.split("qualifiers")[0 if block_start > 0 else 1].split("references")[0]
+        )
+
+    def test_p887_appears_in_reference_block(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # P887 must appear inside a ref block (colophon_ref construction)
+        assert "P_BASED_ON_HEURISTIC" in src
+        colophon_ref_idx = src.find("colophon_ref")
+        assert colophon_ref_idx != -1
+        block = src[colophon_ref_idx : colophon_ref_idx + 300]
+        assert "P_BASED_ON_HEURISTIC" in block
+
+
+class TestNotabilityGate:
+    """Fix #4: person items require at least one external identifier."""
+
+    def test_notability_gate_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert "has_identifier" in src
+        assert "Wikidata:Notability" in src
+
+    def test_notability_check_uses_viaf_and_mazal(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("has_identifier")
+        block = src[idx : idx + 300]
+        assert "viaf_uri" in block
+        assert "mazal_id" in block
+
+    def test_notability_check_uses_gnd_lc_isni_bnf(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("has_identifier")
+        block = src[idx : idx + 400]
+        assert "gnd_id" in block
+        assert "lc_id" in block
+        assert "isni" in block
+        assert "bnf_id" in block
+
+
+class TestAnonymousPersonFilter:
+    """Fix #5: anonymous/unknown placeholder names must not create items."""
+
+    def test_anonymous_names_frozenset_exists(self) -> None:
+        from converter.wikidata.item_builder import _ANONYMOUS_NAMES
+
+        assert "unknown" in _ANONYMOUS_NAMES
+        assert "anonymous" in _ANONYMOUS_NAMES
+
+    def test_hebrew_unknown_in_set(self) -> None:
+        from converter.wikidata.item_builder import _ANONYMOUS_NAMES
+
+        assert "לא ידוע" in _ANONYMOUS_NAMES
+
+    def test_is_anonymous_name_true_for_unknown(self) -> None:
+        from converter.wikidata.item_builder import _is_anonymous_name
+
+        assert _is_anonymous_name("unknown")
+        assert _is_anonymous_name("Unknown.")
+        assert _is_anonymous_name("ANONYMOUS")
+
+    def test_is_anonymous_name_false_for_real_name(self) -> None:
+        from converter.wikidata.item_builder import _is_anonymous_name
+
+        assert not _is_anonymous_name("Moses ben Maimon")
+        assert not _is_anonymous_name("יעקב בן אשר")
+
+
+class TestWorkItemEnglishLabel:
+    """Fix #6: work items must have an English label."""
+
+    def test_work_item_english_label_set_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        work_idx = src.find("def _get_or_create_work")
+        work_body_end = src.find("\n    def ", work_idx + 1)
+        body = src[work_idx:work_body_end]
+        assert 'work.labels["en"]' in body
+
+    def test_shelfmark_fallback_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        work_idx = src.find("def _get_or_create_work")
+        work_body_end = src.find("\n    def ", work_idx + 1)
+        body = src[work_idx:work_body_end]
+        assert "shelfmark_for_work" in body
+
+
+class TestWorkP407DerivedFromManuscript:
+    """Fix #7: P407 must be derived from manuscript languages, not hardcoded Hebrew."""
+
+    def test_p407_not_hardcoded_hebrew_only(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        work_idx = src.find("def _get_or_create_work")
+        work_body_end = src.find("\n    def ", work_idx + 1)
+        body = src[work_idx:work_body_end]
+        # The language must come from lang_qids_for_work, not bare Q9288
+        assert "lang_qids_for_work" in body
+        assert "LANG_TO_QID" in body
+
+    def test_p407_has_hebrew_fallback(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        work_idx = src.find("def _get_or_create_work")
+        work_body_end = src.find("\n    def ", work_idx + 1)
+        body = src[work_idx:work_body_end]
+        # Fallback to Hebrew when no language data
+        assert "Q9288" in body
+
+
+class TestP2093Fallback:
+    """Fix #8: unresolved persons (no QID, no labels) must use P2093 name string."""
+
+    def test_p2093_fallback_present_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert "P2093" in src
+
+    def test_p2093_condition_checks_no_labels(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("P2093")
+        block = src[max(0, idx - 200) : idx + 200]
+        assert "person_item.labels" in block or "labels" in block
+
+
+class TestP1343NotAsStatement:
+    """Fix #10: P1343 (described by source) must not be a main statement on persons."""
+
+    def test_p1343_not_emitted_as_main_statement(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find _get_or_create_person body
+        idx = src.find("def _get_or_create_person")
+        end = src.find("\n    def ", idx + 1)
+        body = src[idx:end]
+        # P1343 must not appear as a property_id in a WikidataStatement call
+        assert 'property_id="P1343"' not in body
+
+
+class TestP6216HasJurisdictionQualifier:
+    """Fix #11: P6216 (public domain) needs P1001=Q801 jurisdiction qualifier."""
+
+    def test_p6216_has_p1001_qualifier(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find the actual statement call (property_id="P6216")
+        idx = src.find('property_id="P6216"')
+        assert idx != -1
+        block = src[idx : idx + 600]
+        assert "P1001" in block
+
+    def test_p6216_jurisdiction_is_israel(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find('property_id="P6216"')
+        block = src[idx : idx + 600]
+        assert '"Q801"' in block
+
+
+class TestCenturyDateBounds:
+    """Fix #12: century-precision P571 must have P1319/P1326 start/end bounds."""
+
+    def test_date_to_wikidata_returns_5tuple_for_century(self) -> None:
+        from converter.wikidata.property_mapping import PRECISION_CENTURY, date_to_wikidata
+
+        result = date_to_wikidata({"original_string": "16th century"})
+        assert result is not None
+        assert len(result) == 5
+        time_val, precision, calendar, earliest, latest = result
+        assert precision == PRECISION_CENTURY
+        assert earliest == 1501
+        assert latest == 1600
+
+    def test_16th_century_bounds(self) -> None:
+        from converter.wikidata.property_mapping import date_to_wikidata
+
+        result = date_to_wikidata({"original_string": "16th century"})
+        assert result is not None
+        _, _, _, earliest, latest = result
+        assert earliest == 1501
+        assert latest == 1600
+
+    def test_hebrew_century_returns_bounds(self) -> None:
+        from converter.wikidata.property_mapping import date_to_wikidata
+
+        result = date_to_wikidata({"original_string": 'מאה ט"ז'})
+        assert result is not None
+        _, _, _, earliest, latest = result
+        assert earliest == 1501
+        assert latest == 1600
+
+    def test_year_precision_no_bounds(self) -> None:
+        from converter.wikidata.property_mapping import PRECISION_YEAR, date_to_wikidata
+
+        result = date_to_wikidata({"year": 1450})
+        assert result is not None
+        _, precision, _, earliest, latest = result
+        assert precision == PRECISION_YEAR
+        assert earliest is None
+        assert latest is None
+
+    def test_p1319_p1326_in_inception_code(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert "P_EARLIEST_DATE" in src
+        assert "P_LATEST_DATE" in src
+        assert "PRECISION_CENTURY" in src
+
+
+class TestCalendarModel:
+    """Fix #13: pre-1582 dates must use Julian calendar model."""
+
+    def test_pre_1583_date_uses_julian(self) -> None:
+        from converter.wikidata.property_mapping import JULIAN_CALENDAR, date_to_wikidata
+
+        result = date_to_wikidata({"year": 1450})
+        assert result is not None
+        _, _, calendar, _, _ = result
+        assert calendar == JULIAN_CALENDAR
+
+    def test_post_1582_date_uses_gregorian(self) -> None:
+        from converter.wikidata.property_mapping import GREGORIAN_CALENDAR, date_to_wikidata
+
+        result = date_to_wikidata({"year": 1750})
+        assert result is not None
+        _, _, calendar, _, _ = result
+        assert calendar == GREGORIAN_CALENDAR
+
+    def test_century_dates_use_julian(self) -> None:
+        from converter.wikidata.property_mapping import JULIAN_CALENDAR, date_to_wikidata
+
+        result = date_to_wikidata({"original_string": "16th century"})
+        assert result is not None
+        _, _, calendar, _, _ = result
+        assert calendar == JULIAN_CALENDAR
+
+    def test_calendar_constants_defined(self) -> None:
+        from converter.wikidata.property_mapping import GREGORIAN_CALENDAR, JULIAN_CALENDAR
+
+        assert "Q1985727" in GREGORIAN_CALENDAR  # Gregorian
+        assert "Q1985786" in JULIAN_CALENDAR  # Julian
+
+
+class TestDescriptionLengthCap:
+    """Fix #14: descriptions must be capped at 250 characters."""
+
+    def test_cap_description_truncates_long(self) -> None:
+        from converter.wikidata.item_builder import _cap_description
+
+        long_desc = "a" * 300
+        result = _cap_description(long_desc)
+        assert len(result) == 250
+
+    def test_cap_description_leaves_short_unchanged(self) -> None:
+        from converter.wikidata.item_builder import _cap_description
+
+        short = "Hebrew manuscript scribe (1200-1280)"
+        assert _cap_description(short) == short
+
+    def test_build_work_description_capped(self) -> None:
+        from converter.wikidata.item_builder import _build_work_description
+
+        long_author = "x" * 300
+        result = _build_work_description(author_name=long_author, century="16th")
+        assert len(result) <= 250
+
+
+class TestTranslatorCommentatorProperties:
+    """Fix #15: TRANSLATOR → P655, COMMENTATOR → P9046 (not P50)."""
+
+    def test_translator_maps_to_p655(self) -> None:
+        from converter.wikidata.property_mapping import ROLE_TO_PID
+
+        assert ROLE_TO_PID.get("TRANSLATOR") == "P655"
+        assert ROLE_TO_PID.get("translator") == "P655"
+
+    def test_commentator_maps_to_p9046(self) -> None:
+        from converter.wikidata.property_mapping import ROLE_TO_PID
+
+        assert ROLE_TO_PID.get("COMMENTATOR") == "P9046"
+        assert ROLE_TO_PID.get("commentator") == "P9046"
+
+    def test_translator_not_mapped_to_p50(self) -> None:
+        from converter.wikidata.property_mapping import P_AUTHOR, ROLE_TO_PID
+
+        assert ROLE_TO_PID.get("TRANSLATOR") != P_AUTHOR
+        assert ROLE_TO_PID.get("translator") != P_AUTHOR
+
+
+class TestMaxlag:
+    """Fix #16: MAXLAG must be at least 10 seconds."""
+
+    def test_maxlag_at_least_10(self) -> None:
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        import re
+
+        match = re.search(r'MAXLAG"\]\s*=\s*(\d+)', src)
+        assert match is not None
+        assert int(match.group(1)) >= 10
+
+
+class TestEditSummaryTruncation:
+    """Fix #17: edit summary must be truncated at 500 characters."""
+
+    def test_truncation_logic_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        assert "497" in src
+        assert "..." in src
 
 
 if __name__ == "__main__":

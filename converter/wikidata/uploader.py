@@ -156,7 +156,10 @@ class WikidataUploader:
             wbi_config["WIKIBASE_URL"] = _WIKIDATA_URL
 
         # Limit retries to avoid infinite waits during server load
-        wbi_config["MAXLAG"] = 5
+        # Fix 2026-04-15 third audit Fix #16: maxlag=5 was too aggressive —
+        # edits fail frequently during server load and burn retries. Best
+        # practice for bots is maxlag >= 10s (Wikidata:Bots).
+        wbi_config["MAXLAG"] = 10
         wbi_config["BACKOFF_MAX_TRIES"] = 3  # Max 3 retries (default 5)
         wbi_config["BACKOFF_MAX_VALUE"] = 30  # Max 30s backoff (default 3600!)
 
@@ -733,6 +736,11 @@ class WikidataUploader:
                     f"Hebrew Manuscripts catalog (Ktiv); +{new_claims} claims; "
                     f"local_id={item.local_id}"
                 )
+                # Fix 2026-04-15 third audit Fix #17: Wikidata API rejects
+                # edit summaries longer than 500 characters. Truncate to 497
+                # to leave room for the "..." suffix.
+                if len(edit_summary) > 497:
+                    edit_summary = edit_summary[:497] + "..."
                 # Bug fix 2026-04-16 (deeper audit Fix #3): mark every edit
                 # as a bot edit so it is filtered out of the human-default
                 # RecentChanges feed. Without this flag, all our edits flood

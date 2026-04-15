@@ -418,8 +418,11 @@ ROLE_TO_PID: dict[str, str] = {
     "TRANSCRIBER": P_TRANSCRIBED_BY,
     "OWNER": P_OWNED_BY,
     "CENSOR": P_OWNED_BY,  # No specific censor property; model as association
-    "TRANSLATOR": P_AUTHOR,  # Qualified with role
-    "COMMENTATOR": P_AUTHOR,  # Qualified with role
+    # Fix 2026-04-15 third audit Fix #15: translators belong on P655, not P50
+    # (author). Commentators belong on P9046 (commentary by). Using P50 for
+    # these roles produces constraint violations and misleading author links.
+    "TRANSLATOR": "P655",  # translator
+    "COMMENTATOR": "P9046",  # commentary by
     # MARC roles (lowercase)
     "author": P_AUTHOR,
     "scribe": P_TRANSCRIBED_BY,
@@ -427,8 +430,8 @@ ROLE_TO_PID: dict[str, str] = {
     "former owner": P_OWNED_BY,
     "בעלים קודמים": P_OWNED_BY,
     "illuminator": P_ILLUSTRATOR,
-    "translator": P_AUTHOR,
-    "commentator": P_AUTHOR,
+    "translator": "P655",
+    "commentator": "P9046",
     "editor": P_AUTHOR,
     "compiler": P_AUTHOR,
     "contributor": P_AUTHOR,
@@ -645,14 +648,42 @@ def _parse_hebrew_century(text: str) -> int | None:
     return None
 
 
-def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
+# Calendar model URIs for Wikidata time values.
+# Fix 2026-04-15 third audit Fix #13: all pre-1583 dates should use the
+# proleptic Julian calendar (Help:Dates). Default was Gregorian for everything.
+GREGORIAN_CALENDAR = "http://www.wikidata.org/entity/Q1985727"
+JULIAN_CALENDAR = "http://www.wikidata.org/entity/Q1985786"
+
+
+def _calendar_for_year(year: int | None) -> str:
+    """Return the correct calendar model URI for a given year.
+
+    Dates before 1583 (when the Gregorian calendar was first adopted) should
+    use the proleptic Julian calendar. See Help:Dates on Wikidata.
+    """
+    if year is not None and year < 1583:
+        return JULIAN_CALENDAR
+    return GREGORIAN_CALENDAR
+
+
+# DateResult: (ISO time string, precision int, calendarmodel URI,
+#              earliest_year int | None, latest_year int | None)
+# The last two fields are non-None only for century-precision dates and are
+# used to add P1319/P1326 qualifiers (Fix 2026-04-15 third audit Fix #12).
+DateResult = tuple[str, int, str, "int | None", "int | None"]
+
+
+def date_to_wikidata(dates_dict: dict[str, object]) -> DateResult | None:
     """Convert a pipeline dates dict to a Wikidata time value and precision.
 
     Handles: structured years, English century strings, Hebrew century strings
     (מאה ט"ז = 16th century), and approximate dates.
 
     Returns:
-        Tuple of (ISO time string, precision int) or None if no date available.
+        Tuple of (ISO time string, precision int, calendarmodel URI,
+        earliest_year | None, latest_year | None) or None if no date available.
+        The earliest/latest years are set for century-precision dates and should
+        be used to add P1319/P1326 qualifiers to the inception statement.
     """
     if not dates_dict:
         return None
@@ -662,9 +693,10 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
 
     if year is not None:
         year_int = int(year)
+        calendar = _calendar_for_year(year_int)
         if date_format == "FullDate":
-            return f"+{year_int:04d}-01-01T00:00:00Z", PRECISION_YEAR
-        return f"+{year_int:04d}-00-00T00:00:00Z", PRECISION_YEAR
+            return f"+{year_int:04d}-01-01T00:00:00Z", PRECISION_YEAR, calendar, None, None
+        return f"+{year_int:04d}-00-00T00:00:00Z", PRECISION_YEAR, calendar, None, None
 
     # No structured year — try to parse from original string
     original = str(dates_dict.get("original_string", "")).replace('""', '"')
@@ -680,19 +712,31 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
     if century_match:
         century = int(century_match.group(1))
         start_year = (century - 1) * 100 + 1
-        return f"+{start_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+        end_year = century * 100
+        return (
+            f"+{start_year:04d}-00-00T00:00:00Z",
+            PRECISION_CENTURY,
+            _calendar_for_year(start_year),
+            start_year,
+            end_year,
+        )
 
     # Hebrew century: "מאה ט"ז" (16th century)
     heb_century = _parse_hebrew_century(original)
     if heb_century:
         start_year = (heb_century - 1) * 100 + 1
-        return f"+{start_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+        end_year = heb_century * 100
+        return (
+            f"+{start_year:04d}-00-00T00:00:00Z",
+            PRECISION_CENTURY,
+            _calendar_for_year(start_year),
+            start_year,
+            end_year,
+        )
 
     # Hebrew century range: "מאה י"ד-ט"ו" — use the EARLIER century as the
-    # main value (precision 7 = century). A future enhancement could add
-    # P1319 (earliest date) and P1326 (latest date) qualifiers to preserve
-    # the full range; for now we encode the earlier bound, which is the
-    # safer default for SPARQL queries that filter by century.
+    # main value (precision 7 = century); the full range is captured via
+    # P1319/P1326 (Fix 2026-04-15 third audit Fix #12).
     range_match = re.search(
         r'מאה\s+([א-ת]["\u05F4\']?[א-ת]?)\s*[-–]\s*([א-ת]["\u05F4\']?[א-ת]?)',
         original.replace('""', '"'),
@@ -702,13 +746,28 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
         c2 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(2).strip())
         if c1 and c2:
             earlier = min(c1, c2)
+            later = max(c1, c2)
             start_year = (earlier - 1) * 100 + 1
-            return f"+{start_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+            end_year = later * 100
+            return (
+                f"+{start_year:04d}-00-00T00:00:00Z",
+                PRECISION_CENTURY,
+                _calendar_for_year(start_year),
+                start_year,
+                end_year,
+            )
 
     # Gregorian year in string: extract 4-digit year
     year_match = re.search(r"\b(\d{4})\b", original)
     if year_match:
-        return f"+{int(year_match.group(1)):04d}-00-00T00:00:00Z", PRECISION_YEAR
+        year_int = int(year_match.group(1))
+        return (
+            f"+{year_int:04d}-00-00T00:00:00Z",
+            PRECISION_YEAR,
+            _calendar_for_year(year_int),
+            None,
+            None,
+        )
 
     return None
 

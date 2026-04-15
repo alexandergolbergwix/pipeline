@@ -460,3 +460,29 @@ On 2026-04-15 Geagea (Wikidata sysop) flagged two further problems:
    Cleanup: the 94 already-uploaded items will be cleaned by `scripts/cleanup_generic_kovetz_labels.py` once the moratorium is lifted (the script refuses to run unless `MORATORIUM_LIFTED=true`). Likewise `scripts/fix_p3959_residual.py` for the remaining two P3959 items. Both scripts use the standard 3-rule `is_safe_to_revert()` guard so they cannot touch items I did not create or items where the community has since edited.
 
 Tests added (7): `TestKovetzPlaceholderTitleFilter` (6) + `TestP3959NotEmittedByPipeline` (1). Total now 91.
+
+### 28. Third audit pipeline fixes (added 2026-04-15)
+
+A third deeper web-research + code audit (2026-04-15) found 17 additional issues. All fixed in one commit. Tests now total 130.
+
+| Fix | Description | File | Wikidata policy |
+|---|---|---|---|
+| #1 | P217 (inventory number) gets required P195 (collection) qualifier | `item_builder.py` | [Property:P217](https://www.wikidata.org/wiki/Property:P217) |
+| #2 | P7153 (significant place) gets required P3831 (object has role) qualifier | `item_builder.py` | [Property:P7153](https://www.wikidata.org/wiki/Property:P7153) |
+| #3 | P887 (based on heuristic) moved from statement qualifier to reference block | `item_builder.py` | [Property:P887](https://www.wikidata.org/wiki/Property:P887) |
+| #4 | Notability gate: person items require at least one external ID (VIAF/NLI/LCCN/GND/ISNI/BnF) | `item_builder.py` | [Wikidata:Notability](https://www.wikidata.org/wiki/Wikidata:Notability) |
+| #5 | Anonymous/unknown person names filtered — never create items | `item_builder.py` | [Wikidata:Notability](https://www.wikidata.org/wiki/Wikidata:Notability) |
+| #6 | Work items get English label (shelfmark-based fallback when title is Hebrew) | `item_builder.py` | [Help:Label](https://www.wikidata.org/wiki/Help:Label) |
+| #7 | P407 (language of work) derived from manuscript MARC 008/041, not hardcoded Hebrew | `item_builder.py` | [WikiProject Books](https://www.wikidata.org/wiki/Wikidata:WikiProject_Books) |
+| #8 | P2093 (author name string) fallback for persons skipped by notability gate | `item_builder.py` | [Property:P2093](https://www.wikidata.org/wiki/Property:P2093) |
+| #9 | LCCN/ISNI format verified against live property constraint pages | `property_mapping.py` | [P244](https://www.wikidata.org/wiki/Property:P244), [P213](https://www.wikidata.org/wiki/Property:P213) |
+| #10 | P1343=Ktiv removed as main statement (catalog ≠ descriptive publication) | `item_builder.py` | [Property:P1343](https://www.wikidata.org/wiki/Property:P1343) |
+| #11 | P6216 (public domain) gets P1001=Q801 jurisdiction qualifier (Israel) | `item_builder.py` | [Property:P6216](https://www.wikidata.org/wiki/Property:P6216) |
+| #12 | Century P571 dates get P1319/P1326 start/end bounds as qualifiers | `item_builder.py`, `property_mapping.py` | [Help:Dates](https://www.wikidata.org/wiki/Help:Dates) |
+| #13 | Pre-1582 dates use Julian calendar model (Q1985786) | `property_mapping.py` | [Help:Dates](https://www.wikidata.org/wiki/Help:Dates) |
+| #14 | Descriptions capped at 250 characters (`_cap_description()`) | `item_builder.py` | [Help:Description](https://www.wikidata.org/wiki/Help:Description) |
+| #15 | TRANSLATOR → P655 (translator), COMMENTATOR → P9046 (commentary by), not P50 | `property_mapping.py` | [Property:P50](https://www.wikidata.org/wiki/Property:P50) |
+| #16 | MAXLAG raised from 5 to 10 seconds | `uploader.py` | [Wikidata:Bots](https://www.wikidata.org/wiki/Wikidata:Bots) |
+| #17 | Edit summary truncated at 497 chars (API 500-char limit) | `uploader.py` | [Wikidata:Bots](https://www.wikidata.org/wiki/Wikidata:Bots) |
+
+Tests added (39): `TestP217HasP195Qualifier`, `TestP7153HasP3831Qualifier`, `TestP887InReferenceNotQualifier`, `TestNotabilityGate`, `TestAnonymousPersonFilter`, `TestWorkItemEnglishLabel`, `TestWorkP407DerivedFromManuscript`, `TestP2093Fallback`, `TestP1343NotAsStatement`, `TestP6216HasJurisdictionQualifier`, `TestCenturyDateBounds`, `TestCalendarModel`, `TestDescriptionLengthCap`, `TestTranslatorCommentatorProperties`, `TestMaxlag`, `TestEditSummaryTruncation`. Total now **130**.
