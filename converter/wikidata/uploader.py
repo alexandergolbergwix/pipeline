@@ -26,7 +26,11 @@ _WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
 _WIKIDATA_URL = "https://www.wikidata.org"
 
 _TEST_API = "https://test.wikidata.org/w/api.php"
-_TEST_SPARQL = "https://test.wikidata.org/w/api.php"
+# Bug fix 2026-04-16 (deeper audit Fix #7): the previous value here was the
+# MediaWiki API URL, not a SPARQL endpoint — every SPARQL query in test
+# mode silently failed (got HTML back). test.wikidata.org has its own SPARQL
+# endpoint at /sparql.
+_TEST_SPARQL = "https://test.wikidata.org/sparql"
 _TEST_URL = "https://test.wikidata.org"
 
 _MAX_RETRIES = 3
@@ -278,8 +282,20 @@ class WikidataUploader:
                     continue
             wbi_item.labels.set(lang, label)
 
-        # Descriptions
+        # Descriptions — same protection as labels above. Bug fix
+        # 2026-04-16 (deeper audit Fix #17): previously overwrote
+        # community-improved descriptions on existing items.
         for lang, desc in item.descriptions.items():
+            if item.existing_qid:
+                try:
+                    current = wbi_item.descriptions.get(lang)
+                    current_val = (
+                        current.value if current and getattr(current, "value", None) else ""
+                    )
+                except Exception:
+                    current_val = ""
+                if current_val:
+                    continue
             wbi_item.descriptions.set(lang, desc)
 
         # Aliases
@@ -555,6 +571,59 @@ class WikidataUploader:
             logger.warning("Could not get first revision author for %s: %s", qid, exc)
         return None
 
+    def _bot_excluded(self, qid: str) -> bool:
+        """Check the item's talk page for a {{bots|deny=…}} exclusion.
+
+        Returns True if the bot should NOT edit this item. Caches results
+        per QID for the lifetime of the uploader instance. Bug fix
+        2026-04-16 (deeper audit Fix #9): respects the community convention
+        documented at https://www.wikidata.org/wiki/Wikidata:Bot_policy
+
+        Network failures or missing talk pages return False (allow edit) —
+        we only block when an explicit exclusion is found.
+        """
+        if not hasattr(self, "_bot_exclusion_cache"):
+            self._bot_exclusion_cache: dict[str, bool] = {}
+        if qid in self._bot_exclusion_cache:
+            return self._bot_exclusion_cache[qid]
+        try:
+            import re  # noqa: PLC0415
+
+            import requests  # noqa: PLC0415
+
+            api_url = _TEST_API if self._is_test else _WIKIDATA_API
+            resp = requests.get(
+                api_url,
+                params={
+                    "action": "parse",
+                    "page": f"Talk:{qid}",
+                    "prop": "wikitext",
+                    "format": "json",
+                    "redirects": "1",
+                },
+                headers={"User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)"},
+                timeout=10,
+            )
+            data = resp.json()
+            if "error" in data:
+                self._bot_exclusion_cache[qid] = False
+                return False
+            wikitext = (data.get("parse", {}).get("wikitext", {}).get("*", "") or "").lower()
+            # Match {{bots|deny=…}} where … contains "all" or our bot name.
+            auth_user = (self._get_authenticated_user() or "").lower()
+            patterns = [r"\{\{bots\s*\|\s*deny\s*=\s*all"]
+            if auth_user:
+                # Tolerate a few common bot-name variants.
+                for name in {auth_user, auth_user.replace(" ", "_"), "mhmpipeline"}:
+                    patterns.append(rf"\{{\{{bots\s*\|\s*deny\s*=[^}}]*\b{re.escape(name)}\b")
+            excluded = any(re.search(p, wikitext) for p in patterns)
+            self._bot_exclusion_cache[qid] = excluded
+            return excluded
+        except Exception as exc:
+            logger.warning("Could not check bot exclusion for %s: %s", qid, exc)
+            self._bot_exclusion_cache[qid] = False
+            return False
+
     def _is_our_item(self, qid: str) -> bool:
         """Check if an existing Wikidata item was created by the authenticated user.
 
@@ -623,6 +692,23 @@ class WikidataUploader:
                 message=f"Skipped {item.existing_qid} — not created by MHM Pipeline (safety guard)",
             )
 
+        # Bug fix 2026-04-16 (deeper audit Fix #9): respect the community
+        # convention {{bots|deny=…}} on the item's talk page. If the talk
+        # page denies our bot (or all bots), skip the write entirely. This
+        # is community norm rather than technically enforced by MediaWiki,
+        # but ignoring it has historically led to bot-blocks at WD:AN.
+        if item.existing_qid and self._bot_excluded(item.existing_qid):
+            logger.warning(
+                "Skipping %s — talk page has {{bots|deny=…}} excluding this bot",
+                item.existing_qid,
+            )
+            return UploadResult(
+                local_id=item.local_id,
+                qid=item.existing_qid,
+                status="skipped",
+                message=f"Skipped {item.existing_qid} — bot exclusion template on talk page",
+            )
+
         last_error = ""
         for attempt in range(1, _MAX_RETRIES + 1):
             self._rate_limit()
@@ -647,7 +733,14 @@ class WikidataUploader:
                     f"Hebrew Manuscripts catalog (Ktiv); +{new_claims} claims; "
                     f"local_id={item.local_id}"
                 )
-                result = wbi_item.write(summary=edit_summary)
+                # Bug fix 2026-04-16 (deeper audit Fix #3): mark every edit
+                # as a bot edit so it is filtered out of the human-default
+                # RecentChanges feed. Without this flag, all our edits flood
+                # community watchlists — the #1 reason bot operators get
+                # blocked at WD:AN. The flag is silently ignored if the
+                # account does not have a bot flag yet, so it is safe to
+                # always pass.
+                result = wbi_item.write(summary=edit_summary, bot=True)
                 qid = result.id if result else None
 
                 if item.existing_qid:
@@ -672,15 +765,31 @@ class WikidataUploader:
                 )
             except Exception as exc:
                 last_error = str(exc)
+                # Bug fix 2026-04-16 (deeper audit Fix #8): inspect the
+                # error to decide retry strategy. editconflict means
+                # someone edited the item between our get() and write();
+                # the fix is to re-fetch and re-build the WBI item from
+                # scratch (which the next loop iteration does, since
+                # _build_wbi_item is called inside the try block). badtoken
+                # means the CSRF token expired; same re-build path applies.
+                err_lower = last_error.lower()
+                is_conflict = "editconflict" in err_lower
+                is_badtoken = "badtoken" in err_lower
                 logger.warning(
-                    "Upload attempt %d/%d for %s failed: %s",
+                    "Upload attempt %d/%d for %s failed (%s%s): %s",
                     attempt,
                     _MAX_RETRIES,
                     item.local_id,
+                    "editconflict" if is_conflict else "error",
+                    " badtoken" if is_badtoken else "",
                     exc,
                 )
                 if attempt < _MAX_RETRIES:
-                    time.sleep(_RETRY_DELAY_SECONDS * attempt)
+                    # Shorter backoff for conflicts (someone is actively
+                    # editing this item, so a quick retry is more likely
+                    # to succeed); longer for unknown failures.
+                    delay = (_RETRY_DELAY_SECONDS * attempt) if not is_conflict else 1.0
+                    time.sleep(delay)
 
         return UploadResult(
             local_id=item.local_id,

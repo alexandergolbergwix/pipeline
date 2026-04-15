@@ -143,9 +143,14 @@ class WikidataReconciler:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        # Bug fix 2026-04-16 (deeper audit Fix #10): escape control_number
+        # before injecting into SPARQL. NLI IDs are typically numeric so
+        # this is defence-in-depth, but the shelfmark path uses the same
+        # escaping and consistency matters.
+        safe_ctrl = str(control_number).replace("\\", "\\\\").replace('"', '\\"')
         sparql = f"""
         SELECT ?item WHERE {{
-          ?item wdt:P8189 "{control_number}" .
+          ?item wdt:P8189 "{safe_ctrl}" .
           ?item wdt:P31 wd:{Q_MANUSCRIPT} .
         }} LIMIT 1
         """

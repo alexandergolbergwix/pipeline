@@ -443,4 +443,20 @@ Two audit items remain deferred (out of scope for this commit):
 - **VIAF cluster cross-validation (#9)**: harvested IDs cross-checked at upload time by `_candidate_conflicts()`; live VIAF re-validation per cluster would add latency. Re-evaluate after the test-batch run.
 - **Stop-on-revert mechanism (audit miscellaneous)**: needs a separate watchlist polling layer; the two-layer creator/latest-editor check on revert scripts already covers the live case.
 
-Tests: `tests/unit/test_safety_guards.py` now has 53 tests across all guards (was 19 → 34 after Geagea-fix batch → 53 after web-audit batch). Do NOT delete or weaken these tests — they are the regression barrier protecting against repeat incidents.
+Tests: `tests/unit/test_safety_guards.py` now has 91 tests across all guards (was 19 → 34 after Geagea-fix batch → 53 after web-audit batch → 84 after deeper-audit batch → 91 after Geagea P3959/kovetz batch). Do NOT delete or weaken these tests — they are the regression barrier protecting against repeat incidents.
+
+### 27. Geagea P3959 + "קובץ." label complaints (added 2026-04-15)
+
+On 2026-04-15 Geagea (Wikidata sysop) flagged two further problems:
+
+1. **P3959 (NNL item ID) misuse**: more than 100 of my person items had `P3959` (a BIBLIOGRAPHIC catalog identifier with prefix `99…`) instead of `P8189` (the AUTHORITY-record identifier with prefix `9870…`). Geagea cleaned them via `#temporary_batch_1776243998556`. Only **two** of my items still carry P3959 (Q139159451, Q139328025). Investigation showed the **current pipeline source code does not emit P3959** anywhere — the bad batch came from a one-off script that pre-dated the current safety guards.
+
+   Code-level enforcement: `tests/unit/test_safety_guards.py::TestP3959NotEmittedByPipeline` recursively grep-scans the entire `converter/` and `src/` trees for any non-comment occurrence of the literal `P3959` and fails the test suite if one is reintroduced.
+
+2. **Generic "קובץ." Hebrew labels**: 94 manuscript items had Hebrew labels `קובץ.` (= "compilation"), `קובץ בקבלה.` ("compilation on Kabbalah"), or similar generic catalog placeholders that NLI catalogers use when an anthology has no overarching real title. Emitted by the pipeline because MARC 245 was taken verbatim.
+
+   Pipeline fix: `_is_placeholder_title()` in `converter/wikidata/item_builder.py` now detects these placeholder strings. `_set_labels()` routes them to a Hebrew alias (preserving searchability) and emits a synthetic shelfmark-based Hebrew label (`כתב יד עברי, ספרייה לאומית, <shelfmark>`) instead of the placeholder.
+
+   Cleanup: the 94 already-uploaded items will be cleaned by `scripts/cleanup_generic_kovetz_labels.py` once the moratorium is lifted (the script refuses to run unless `MORATORIUM_LIFTED=true`). Likewise `scripts/fix_p3959_residual.py` for the remaining two P3959 items. Both scripts use the standard 3-rule `is_safe_to_revert()` guard so they cannot touch items I did not create or items where the community has since edited.
+
+Tests added (7): `TestKovetzPlaceholderTitleFilter` (6) + `TestP3959NotEmittedByPipeline` (1). Total now 91.

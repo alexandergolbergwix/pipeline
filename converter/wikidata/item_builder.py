@@ -48,6 +48,7 @@ from converter.wikidata.property_mapping import (
     P_MAIN_SUBJECT,
     P_MATERIAL,
     P_NLI_J9U_ID,
+    P_NUMBER_OF_FOLIOS,
     P_NUMBER_OF_PAGES,
     P_NUMBER_OF_PARTS,
     P_OBJECT_HAS_ROLE,
@@ -90,6 +91,7 @@ from converter.wikidata.property_mapping import (
     extract_wikidata_qid,
     nli_j9u_id,
     nli_reference,
+    viaf_reference,
 )
 
 logger = logging.getLogger(__name__)
@@ -242,6 +244,106 @@ def _build_work_description(author_name: str | None, century: str | None) -> str
     if century:
         parts.append(f"({century})")
     return " ".join(parts)
+
+
+_ROLE_TO_LABEL: dict[str, str] = {
+    "AUTHOR": "author",
+    "author": "author",
+    "SCRIBE": "scribe",
+    "scribe": "scribe",
+    "OWNER": "manuscript owner",
+    "owner": "manuscript owner",
+    "TRANSLATOR": "translator",
+    "translator": "translator",
+    "EDITOR": "editor",
+    "editor": "editor",
+    "COMMENTATOR": "commentator",
+    "commentator": "commentator",
+    "PATRON": "patron",
+    "patron": "patron",
+}
+
+
+def _is_placeholder_title(title: str | None) -> bool:
+    """Return True if a MARC 245 title is a generic catalog placeholder.
+
+    Bug fix 2026-04-15 (Geagea complaint, 2026-04-15): catalogers use
+    "קובץ" / "קבץ" (= "compilation" / "file") and short topical variants
+    ("קובץ בקבלה" = "Kabbalah compilation") as the title field of MARC
+    records for multi-text anthologies that have no overarching real
+    title. When emitted as a Wikidata Hebrew label, these strings are
+    useless for disambiguation and were flagged as nonsense by the
+    Hebrew-Wikidata community.
+
+    We treat as placeholder:
+    - exact "קובץ" / "קבץ" (with optional trailing punctuation)
+    - "קובץ X" / "קבץ X" where the whole string is short (≤ 25 chars)
+
+    The original string is preserved as a Hebrew alias by the caller so
+    it remains searchable; the Wikidata LABEL falls back to a synthetic
+    shelfmark-based label.
+    """
+    if not title:
+        return False
+    cleaned = title.strip().rstrip(".,;:")
+    if cleaned in {"קובץ", "קבץ"}:
+        return True
+    # Short topical placeholder like "קובץ בקבלה" or "קבץ מדרשים"
+    if cleaned.startswith(("קובץ ", "קבץ ")) and len(cleaned) <= 25:
+        return True
+    return False
+
+
+def _build_person_description(role: str, dates_str: str, is_org: bool) -> str:
+    """Build a disambiguating English description for a person item.
+
+    Wikidata expects descriptions to disambiguate same-label items.
+    Bug fix 2026-04-16 (deeper audit Fix #13): previously emitted a bare
+    "person (1200-1280)" or generic "person associated with Hebrew
+    manuscripts". Now incorporates the role so e.g. two different scribes
+    with the same name can be told apart.
+    """
+    if is_org:
+        if dates_str:
+            return f"organization ({dates_str})"
+        return "organization associated with Hebrew manuscripts"
+    role_label = _ROLE_TO_LABEL.get((role or "").strip(), "")
+    if role_label and dates_str:
+        return f"{role_label} ({dates_str})"
+    if role_label:
+        return f"Hebrew manuscript {role_label}"
+    if dates_str:
+        return f"person ({dates_str})"
+    return "person associated with Hebrew manuscripts"
+
+
+def _extract_inception_year(record: dict[str, object]) -> int | None:
+    """Return the manuscript's earliest known year (CE) if available.
+
+    Used by the public-domain (P6216) gate so we only assert public-domain
+    status on demonstrably pre-1900 works. Returns ``None`` when no year
+    can be determined — caller should err on the side of NOT asserting
+    public domain.
+
+    Looks at: record["dates"]["year"], MARC 008 date1, and a fallback
+    parse of the original Hebrew/English date string.
+    """
+    dates = record.get("dates")
+    if isinstance(dates, dict):
+        year = dates.get("year") or dates.get("date1") or dates.get("year_start")
+        if year is not None:
+            try:
+                return int(year)
+            except (TypeError, ValueError):
+                pass
+        original = str(dates.get("original_string") or "")
+        m = re.search(r"\b(\d{3,4})\b", original)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                return None
+    return None
 
 
 def _extract_century_for_work(source_record: dict[str, object]) -> str | None:
@@ -605,16 +707,21 @@ class WikidataItemBuilder:
         # ── Rights (MARC 540) → P6216 ───────────────────────────
         # Historical Hebrew manuscripts are public domain (pre-1900 works).
         # Rights statements from NLI describe digital copy access, not copyright.
+        # Bug fix 2026-04-16 (deeper audit Fix #15): only assert public-domain
+        # status when the inception date is known AND before 1900. A 20th-c.
+        # manuscript could otherwise receive an incorrect public-domain claim.
         rights = record.get("rights_statement")
         if rights and str(rights).strip() and str(rights) != "None":
-            item.statements.append(
-                WikidataStatement(
-                    property_id="P6216",
-                    value="Q19652",
-                    value_type="item",
-                    references=ref,
+            inception_year = _extract_inception_year(record)
+            if inception_year is not None and inception_year < 1900:
+                item.statements.append(
+                    WikidataStatement(
+                        property_id="P6216",
+                        value="Q19652",
+                        value_type="item",
+                        references=ref,
+                    )
                 )
-            )
 
         # ── Person claims (authors, scribes, owners from MARC + NER) ──
         self._add_person_claims(item, record, ref)
@@ -808,16 +915,33 @@ class WikidataItemBuilder:
         record: dict[str, object],
         title: str,
     ) -> None:
-        """Set labels, descriptions, and aliases for a manuscript item."""
-        if title:
+        """Set labels, descriptions, and aliases for a manuscript item.
+
+        Bug fix 2026-04-15 (Geagea complaint): MARC 245 sometimes contains
+        a generic placeholder like "קובץ." (= "compilation") rather than a
+        real title, used by catalogers when an anthology has no overarching
+        name. Emitting that as the Hebrew label produced 94 useless labels
+        on Wikidata. We now detect placeholder titles and route them to
+        an alias slot, falling back to a shelfmark-based label.
+        """
+        is_placeholder = _is_placeholder_title(title)
+        shelfmark = record.get("shelfmark")
+        if title and not is_placeholder:
             item.labels["he"] = title
             item.labels["en"] = title
+        elif title:
+            # Placeholder: keep the original cataloger string as a Hebrew
+            # alias for searchability, but do NOT use it as the label.
+            item.aliases.setdefault("he", []).append(title)
 
-        shelfmark = record.get("shelfmark")
         if shelfmark:
             item.labels["en"] = f"Jerusalem, NLI, {shelfmark}"
-            if title:
+            if title and not is_placeholder:
                 item.aliases.setdefault("he", []).append(title)
+            # When the title was a placeholder AND we have a shelfmark,
+            # synthesise a useful Hebrew label from the shelfmark.
+            if is_placeholder and "he" not in item.labels:
+                item.labels["he"] = f"כתב יד עברי, ספרייה לאומית, {shelfmark}"
 
         # Variant titles as aliases
         for vt in record.get("variant_titles") or []:
@@ -913,11 +1037,21 @@ class WikidataItemBuilder:
             )
         extent = record.get("extent")
         if extent:
-            folio_match = re.search(r"(\d+)", str(extent))
+            extent_str = str(extent)
+            folio_match = re.search(r"(\d+)", extent_str)
             if folio_match:
+                # Bug fix 2026-04-16 (deeper audit Fix #11): manuscripts are
+                # counted in folios (leaves), not pages. P1104 (number of
+                # pages) is wrong; the correct property is P7416 (number of
+                # folios). Heuristic: if the extent string explicitly says
+                # "page(s)" use P1104; otherwise default to P7416 since
+                # virtually all manuscript catalogues count in folios/leaves.
+                low = extent_str.lower()
+                says_pages = "page" in low or "עמוד" in low
+                prop = P_NUMBER_OF_PAGES if says_pages else P_NUMBER_OF_FOLIOS
                 item.statements.append(
                     WikidataStatement(
-                        property_id=P_NUMBER_OF_PAGES,
+                        property_id=prop,
                         value=int(folio_match.group(1)),
                         value_type="quantity",
                         references=ref,
@@ -1341,6 +1475,18 @@ class WikidataItemBuilder:
             self._person_items[key] = person
             return person
 
+        # Bug fix 2026-04-16 (deeper audit Fix #1): every person statement
+        # must carry a P248 reference. Use VIAF cluster URL when the person
+        # has a VIAF ID; otherwise fall back to the parent manuscript's
+        # NLI catalog URL where the name was first encountered. Without
+        # references, WikiProject Authority Control flags the bot at WD:AN.
+        viaf_id_for_ref = extract_viaf_id(str(viaf_uri)) if viaf_uri else None
+        if viaf_id_for_ref:
+            person_ref = viaf_reference(viaf_id_for_ref)
+        else:
+            ms_ctrl = str(source_record.get("_control_number") or "")
+            person_ref = nli_reference(ms_ctrl) if ms_ctrl else []
+
         # Detect script: Hebrew vs Latin
         has_hebrew = any("\u0590" <= c <= "\u05ff" for c in clean_name)
         label_lang = "he" if has_hebrew else "en"
@@ -1407,12 +1553,14 @@ class WikidataItemBuilder:
                         else:
                             death_year = yr
 
-        if dates_str:
-            person.descriptions["en"] = f"person ({dates_str})"
-        elif not is_org:
-            person.descriptions["en"] = "person associated with Hebrew manuscripts"
-        else:
-            person.descriptions["en"] = "organization associated with Hebrew manuscripts"
+        # Bug fix 2026-04-16 (deeper audit Fix #13): person descriptions
+        # should disambiguate, not just restate dates. Build as
+        # "<role> (<dates>)" when role is known. Falls back gracefully.
+        person.descriptions["en"] = _build_person_description(
+            role=role,
+            dates_str=dates_str,
+            is_org=is_org,
+        )
 
         # P569/P570 = birth/death dates
         if birth_year and not is_org:
@@ -1497,13 +1645,18 @@ class WikidataItemBuilder:
         )
 
         # P1412 = languages spoken, written or signed.
-        # Bug fix 2026-04-15 (web audit): previously hardcoded to Hebrew (Q9288)
-        # for every non-org person. Many manuscript persons wrote in Aramaic,
-        # Judeo-Arabic, Ladino, etc. — and most are unknown. Derive from the
-        # MANUSCRIPT's languages (MARC 008/35-37 + 041) when available; emit
-        # one P1412 per resolvable language code; omit entirely when no
-        # language data exists rather than asserting an unsourced default.
-        if not is_org:
+        # Bug fix 2026-04-15 (web audit): previously hardcoded to Hebrew.
+        # Bug fix 2026-04-16 (deeper audit Fix #12): the manuscript's MARC
+        # 008/041 languages are MANUSCRIPT-level data, NOT person-level.
+        # A scribe who only copied a Hebrew manuscript may not have written
+        # Hebrew themselves; an owner mentioned in provenance may speak
+        # something else entirely. Only emit P1412 when the role is
+        # "author" — for that role the manuscript's language is a defensible
+        # proxy for the author's writing language. For all other roles
+        # (scribe, owner, mentioned-person), omit P1412 to avoid asserting
+        # something we cannot defend.
+        role_norm = role.strip().lower() if role else ""
+        if not is_org and role_norm == "author":
             seen_lang_qids: set[str] = set()
             for lang_code in source_record.get("languages") or []:
                 lang_qid = LANG_TO_QID.get(str(lang_code))
@@ -1517,22 +1670,25 @@ class WikidataItemBuilder:
                         )
                     )
 
-        # P1559 = name in native language — use language matching the script
-        # Skip names with trailing commas/incomplete entries
+        # P1559 = name in native language — use language matching the script.
+        # Skip names with trailing commas/incomplete entries.
+        # Bug fix 2026-04-16 (deeper audit Fix #14): Latin-script names were
+        # being emitted with language "la" (Latin), which is wrong for modern
+        # European names like "Emanuel Sofino" (Italian). The label already
+        # carries the same value with a more accurate language tag (en),
+        # so omit P1559 entirely for Latin-script names.
         cleaned_name = name.strip().rstrip(",;:")
         if cleaned_name and not is_org and len(cleaned_name) >= 2:
-            # Detect script: Hebrew vs Latin vs Cyrillic etc.
+            # Detect script: Hebrew, Cyrillic, Arabic. Latin is intentionally
+            # excluded because we cannot reliably infer the true language.
             if any("\u0590" <= c <= "\u05ff" for c in cleaned_name):
                 native_lang = "he"
             elif any("\u0400" <= c <= "\u04ff" for c in cleaned_name):
                 native_lang = "ru"
             elif any("\u0600" <= c <= "\u06ff" for c in cleaned_name):
                 native_lang = "ar"
-            elif any("a" <= c.lower() <= "z" for c in cleaned_name):
-                # Latin script — could be many languages, default to Latin
-                native_lang = "la"
             else:
-                native_lang = None  # Skip if unknown script
+                native_lang = None  # Latin and unknown scripts → omit P1559
 
             if native_lang:
                 person.statements.append(
@@ -1582,6 +1738,15 @@ class WikidataItemBuilder:
                         )
                     )
                 break
+
+        # Bug fix 2026-04-16 (deeper audit Fix #1): attach person_ref to
+        # every statement that does not already carry references. Done as
+        # a post-build pass so each `WikidataStatement(...)` callsite above
+        # does not need an explicit references= kwarg.
+        if person_ref:
+            for stmt in person.statements:
+                if not stmt.references:
+                    stmt.references = list(person_ref)
 
         self._person_items[key] = person
         return person
@@ -1686,6 +1851,16 @@ class WikidataItemBuilder:
                             value_type="item",
                         )
                     )
+
+        # Bug fix 2026-04-16 (deeper audit Fix #2): attach a P248 reference
+        # to every work statement. Use the parent manuscript's NLI catalog
+        # URL — the work was extracted from that record.
+        ms_ctrl = str(source_record.get("_control_number") or "")
+        if ms_ctrl:
+            work_ref = nli_reference(ms_ctrl)
+            for stmt in work.statements:
+                if not stmt.references:
+                    stmt.references = list(work_ref)
 
         self._work_items[key] = work
         return work

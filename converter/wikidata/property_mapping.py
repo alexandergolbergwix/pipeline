@@ -46,6 +46,7 @@ P_MATERIAL = "P186"
 P_HEIGHT = "P2048"
 P_WIDTH = "P2049"
 P_NUMBER_OF_PAGES = "P1104"
+P_NUMBER_OF_FOLIOS = "P7416"  # preferred for manuscripts (counted in folios/leaves)
 
 # Digital access
 P_DESCRIBED_AT_URL = "P973"
@@ -500,6 +501,98 @@ def nli_reference(control_number: str) -> list[dict[str, str]]:
         {"property": P_REFERENCE_URL, "value": nli_catalog_url(control_number), "type": "url"},
         {"property": P_RETRIEVED, "value": today, "type": "time", "precision": PRECISION_DAY},
     ]
+
+
+def viaf_reference(viaf_id: str) -> list[dict[str, str]]:
+    """Build a Wikidata reference snak set for VIAF-cluster sourcing.
+
+    Used on person/work statements where the data was harvested from a
+    VIAF cluster (mirror of nli_reference). Bug fix 2026-04-16 (deeper
+    audit Fix #1): person items previously emitted ALL statements with
+    no references, which is a WikiProject Authority Control violation
+    and the most common trigger for bot-blocks at WD:AN.
+
+    Args:
+        viaf_id: numeric VIAF cluster ID (e.g. "51777166").
+
+    Returns:
+        Reference snak dicts. Stated-in: VIAF (Q54919); reference URL:
+        https://viaf.org/viaf/<id>; retrieved: today.
+    """
+    today = datetime.now(tz=UTC).strftime("+%Y-%m-%dT00:00:00Z")
+    return [
+        {"property": P_STATED_IN, "value": "Q54919", "type": "item"},
+        {
+            "property": P_REFERENCE_URL,
+            "value": f"https://viaf.org/viaf/{viaf_id}",
+            "type": "url",
+        },
+        {"property": P_RETRIEVED, "value": today, "type": "time", "precision": PRECISION_DAY},
+    ]
+
+
+# ── Identifier-format normalisers ────────────────────────────────────
+# Wikidata enforces strict format constraints on external identifiers.
+# These helpers normalise raw values from VIAF clusters to the canonical
+# format Wikidata expects, so we do not generate mass constraint
+# violations on every person item we write.
+# Bug fix 2026-04-16 (deeper audit Fixes #4-#6).
+
+
+def normalize_lccn(raw: str | None) -> str | None:
+    """Normalise an LCCN string to Wikidata's P244 canonical form.
+
+    P244 format constraint: ``^(n|nb|nr|no|ns|sh|sj) [0-9]{2,10}$`` —
+    a recognised prefix, exactly one space, then digits.
+
+    Returns the canonical form or ``None`` if the input cannot be
+    normalised (callers should drop unmatched values rather than
+    write them and trigger a constraint violation).
+    """
+    if not raw:
+        return None
+    s = str(raw).strip()
+    m = re.match(r"^(n|nb|nr|no|ns|sh|sj)\s*([0-9]{2,10})$", s)
+    if not m:
+        return None
+    return f"{m.group(1)} {m.group(2)}"
+
+
+def normalize_isni(raw: str | None) -> str | None:
+    """Normalise an ISNI string to Wikidata's P213 canonical form.
+
+    P213 format constraint: ``\\d{4} \\d{4} \\d{4} \\d{3}[\\dX]`` —
+    sixteen alphanumerics in four space-separated groups (final char
+    may be 'X' as ISNI checksum).
+
+    Returns the canonical form or ``None`` if the input is not a
+    valid ISNI.
+    """
+    if not raw:
+        return None
+    s = re.sub(r"\s+", "", str(raw))
+    if not re.fullmatch(r"\d{15}[\dX]", s):
+        return None
+    return f"{s[0:4]} {s[4:8]} {s[8:12]} {s[12:16]}"
+
+
+def normalize_bnf(raw: str | None) -> str | None:
+    """Normalise a BnF identifier to Wikidata's P268 canonical form.
+
+    P268 format constraint: ``\\d{8}[0-9bcdfghjkmnpqrstvwxz]`` — eight
+    digits followed by a single check character. The "cb" prefix used
+    by some BnF systems must be stripped.
+
+    Returns the canonical form or ``None`` if invalid.
+    """
+    if not raw:
+        return None
+    s = str(raw).strip().lower()
+    if s.startswith("cb"):
+        s = s[2:]
+    if not re.fullmatch(r"\d{8}[0-9bcdfghjkmnpqrstvwxz]", s):
+        return None
+    return s
 
 
 PRECISION_CENTURY = 7

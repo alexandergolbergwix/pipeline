@@ -106,14 +106,32 @@ class VIAFMatcher:
                 continue
             prefix, sid = text.split("|", 1)
             sid = str(sid).strip()
+            # Bug fix 2026-04-16 (deeper audit Fixes #4-#6): VIAF returns
+            # raw identifier strings that do NOT match Wikidata's strict
+            # P244/P213/P268 format constraints. Normalise here and drop
+            # entries that cannot be normalised (rather than emit them and
+            # generate constraint-violation reports). DNB/J9U pass through.
             if prefix == "DNB" and "gnd" not in ids:
                 ids["gnd"] = sid
             elif prefix == "LC" and "lc" not in ids:
-                ids["lc"] = sid.replace(" ", "")
+                # Lazy import to avoid cyclic dep through wikidata package
+                from converter.wikidata.property_mapping import normalize_lccn  # noqa: PLC0415
+
+                normalised = normalize_lccn(sid)
+                if normalised:
+                    ids["lc"] = normalised
             elif prefix == "BNF" and "bnf" not in ids:
-                ids["bnf"] = sid
+                from converter.wikidata.property_mapping import normalize_bnf  # noqa: PLC0415
+
+                normalised = normalize_bnf(sid)
+                if normalised:
+                    ids["bnf"] = normalised
             elif prefix == "ISNI" and "isni" not in ids:
-                ids["isni"] = sid
+                from converter.wikidata.property_mapping import normalize_isni  # noqa: PLC0415
+
+                normalised = normalize_isni(sid)
+                if normalised:
+                    ids["isni"] = normalised
             elif prefix == "J9U" and "j9u" not in ids:
                 ids["j9u"] = sid
 

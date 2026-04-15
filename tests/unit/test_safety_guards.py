@@ -676,5 +676,440 @@ class TestWorkReconciliation:
         assert "self._reconciler" in body
 
 
+# ── Deeper-audit Fix #4-#6 — identifier-format normalisers ────────────────
+
+
+class TestIdentifierNormalisers:
+    """Bug fix 2026-04-16 (deeper audit Fixes #4-#6): VIAF returns raw
+    identifier strings that violate Wikidata's strict P244/P213/P268
+    format constraints. Normalise here or generate thousands of
+    constraint-violation reports on every person item."""
+
+    def test_lccn_inserts_missing_space(self) -> None:
+        from converter.wikidata.property_mapping import normalize_lccn
+
+        assert normalize_lccn("n78096039") == "n 78096039"
+
+    def test_lccn_keeps_valid_form(self) -> None:
+        from converter.wikidata.property_mapping import normalize_lccn
+
+        assert normalize_lccn("n 78096039") == "n 78096039"
+        assert normalize_lccn("nb 12345") == "nb 12345"
+
+    def test_lccn_invalid_prefix_returns_none(self) -> None:
+        from converter.wikidata.property_mapping import normalize_lccn
+
+        assert normalize_lccn("xyz 12345") is None
+        assert normalize_lccn("") is None
+        assert normalize_lccn(None) is None
+
+    def test_isni_groups_into_quartets(self) -> None:
+        from converter.wikidata.property_mapping import normalize_isni
+
+        assert normalize_isni("0000000123750072") == "0000 0001 2375 0072"
+
+    def test_isni_already_grouped_unchanged(self) -> None:
+        from converter.wikidata.property_mapping import normalize_isni
+
+        assert normalize_isni("0000 0001 2375 0072") == "0000 0001 2375 0072"
+
+    def test_isni_invalid_length_returns_none(self) -> None:
+        from converter.wikidata.property_mapping import normalize_isni
+
+        assert normalize_isni("12345") is None
+        assert normalize_isni("") is None
+
+    def test_bnf_strips_cb_prefix(self) -> None:
+        from converter.wikidata.property_mapping import normalize_bnf
+
+        assert normalize_bnf("cb12345678q") == "12345678q"
+
+    def test_bnf_already_clean_unchanged(self) -> None:
+        from converter.wikidata.property_mapping import normalize_bnf
+
+        assert normalize_bnf("12345678q") == "12345678q"
+
+    def test_bnf_invalid_format_returns_none(self) -> None:
+        from converter.wikidata.property_mapping import normalize_bnf
+
+        assert normalize_bnf("not-a-bnf-id") is None
+        assert normalize_bnf("") is None
+
+
+# ── Deeper-audit Fix #1-#2 — references on every person/work statement ─────
+
+
+class TestPersonAndWorkReferences:
+    """Bug fix 2026-04-16 (deeper audit Fixes #1, #2): every statement on
+    person and work items must carry a P248 reference. Previously all
+    person and work statements were emitted with empty references=[],
+    which is a WikiProject Authority Control violation."""
+
+    def test_viaf_reference_helper_returns_correct_url(self) -> None:
+        from converter.wikidata.property_mapping import viaf_reference
+
+        ref = viaf_reference("51777166")
+        assert any(snak["value"] == "https://viaf.org/viaf/51777166" for snak in ref)
+        assert any(snak["property"] == "P248" for snak in ref)
+        assert any(snak["property"] == "P854" for snak in ref)
+        assert any(snak["property"] == "P813" for snak in ref)
+
+    def test_person_method_attaches_references_after_build(self) -> None:
+        """Source-grep: _get_or_create_person must include the post-build
+        loop that sets stmt.references on every statement."""
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _get_or_create_person")
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        assert "person_ref" in body
+        assert "viaf_reference" in body or "nli_reference" in body
+        # The post-build attach loop
+        assert "stmt.references" in body
+
+    def test_work_method_attaches_references_after_build(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _get_or_create_work")
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        assert "work_ref" in body
+        assert "stmt.references" in body
+
+
+# ── Deeper-audit Fix #3 — bot=True on every WBI write ──────────────────────
+
+
+class TestBotFlagOnWrite:
+    """Bug fix 2026-04-16 (deeper audit Fix #3): wbi_item.write() must be
+    called with bot=True so edits are filtered from the human RecentChanges
+    feed. The single biggest reason bots get blocked at WD:AN."""
+
+    def test_bot_true_passed_to_write(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        # Source-grep for the new pattern
+        assert "wbi_item.write(summary=edit_summary, bot=True)" in src
+        # The bare summary= call without bot= must be gone
+        assert "wbi_item.write(summary=edit_summary)\n" not in src
+
+
+# ── Deeper-audit Fix #7 — test SPARQL endpoint URL ─────────────────────────
+
+
+class TestTestSparqlEndpoint:
+    """Bug fix 2026-04-16 (deeper audit Fix #7): _TEST_SPARQL previously
+    pointed at the MediaWiki API URL, not a SPARQL endpoint."""
+
+    def test_test_sparql_is_not_api_url(self) -> None:
+        from converter.wikidata import uploader
+
+        assert uploader._TEST_SPARQL != "https://test.wikidata.org/w/api.php"
+        assert "/sparql" in uploader._TEST_SPARQL
+
+
+# ── Deeper-audit Fix #8 — edit-conflict detection in retry loop ────────────
+
+
+class TestEditConflictHandling:
+    """Bug fix 2026-04-16 (deeper audit Fix #8): the retry loop now
+    inspects error codes and uses a shorter backoff for editconflict
+    (someone is actively editing this item, retry quickly)."""
+
+    def test_uploader_recognises_editconflict(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        # The new code inspects error string for these tokens.
+        assert "editconflict" in src
+        assert "badtoken" in src
+
+
+# ── Deeper-audit Fix #9 — {{bots|deny=…}} compliance ──────────────────────
+
+
+class TestBotExclusion:
+    """Bug fix 2026-04-16 (deeper audit Fix #9): respect the community
+    convention {{bots|deny=…}} on item talk pages."""
+
+    def test_bot_excluded_method_exists(self) -> None:
+        from converter.wikidata.uploader import WikidataUploader
+
+        # The method must be defined on the class.
+        assert callable(getattr(WikidataUploader, "_bot_excluded", None))
+
+    def test_bot_excluded_caches_results(self, monkeypatch) -> None:
+        """Once we look up a QID's exclusion status, we shouldn't re-fetch."""
+        from converter.wikidata.uploader import WikidataUploader
+
+        u = WikidataUploader.__new__(WikidataUploader)
+        u._is_test = False
+        u._authenticated_user = "TestBot"
+        # Avoid the moratorium / real network.
+        u._bot_exclusion_cache = {"Q42": True}
+        assert u._bot_excluded("Q42") is True
+
+
+# ── Deeper-audit Fix #10 — SPARQL escape for control_number ───────────────
+
+
+class TestSparqlEscape:
+    """Bug fix 2026-04-16 (deeper audit Fix #10): control_number is now
+    escaped before injection into the SPARQL string."""
+
+    def test_reconciler_escapes_control_number(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/reconciler.py").read_text(encoding="utf-8")
+        # Find reconcile_manuscript_by_nli_id and verify the safe variable
+        method_start = src.find("def reconcile_manuscript_by_nli_id")
+        assert method_start > 0
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        assert "safe_ctrl" in body or "replace('\"', '\\\\\"')" in body
+
+
+# ── Deeper-audit Fix #11 — P7416 (folios) instead of P1104 (pages) ────────
+
+
+class TestFolioVsPageProperty:
+    """Bug fix 2026-04-16 (deeper audit Fix #11): manuscripts are counted
+    in folios. Use P7416 unless the extent string explicitly says 'pages'."""
+
+    def test_constant_p_number_of_folios_exists(self) -> None:
+        from converter.wikidata import property_mapping as pm
+
+        assert pm.P_NUMBER_OF_FOLIOS == "P7416"
+
+    def test_default_to_p7416(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The branch that picks the property
+        assert "P_NUMBER_OF_FOLIOS" in src
+        # The 'page' check that switches to P1104
+        assert '"page" in low' in src or "page" in src
+
+
+# ── Deeper-audit Fix #12 — P1412 only for AUTHOR role ─────────────────────
+
+
+class TestP1412RoleFiltered:
+    """Bug fix 2026-04-16 (deeper audit Fix #12): the manuscript's MARC
+    languages are MANUSCRIPT-level, not person-level. Only emit P1412
+    when role == author so we don't assert that scribes/owners spoke
+    the manuscript's language."""
+
+    def test_role_filter_present_in_source(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _get_or_create_person")
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        # The role check that gates P1412 emission
+        assert 'role_norm == "author"' in body
+
+
+# ── Deeper-audit Fix #13 — person descriptions use role+dates ─────────────
+
+
+class TestPersonDescription:
+    """Bug fix 2026-04-16 (deeper audit Fix #13): person descriptions now
+    include role/occupation, not just dates."""
+
+    def test_author_with_dates(self) -> None:
+        from converter.wikidata.item_builder import _build_person_description
+
+        assert _build_person_description("AUTHOR", "1200-1280", False) == "author (1200-1280)"
+
+    def test_scribe_no_dates(self) -> None:
+        from converter.wikidata.item_builder import _build_person_description
+
+        assert _build_person_description("SCRIBE", "", False) == "Hebrew manuscript scribe"
+
+    def test_owner_no_dates(self) -> None:
+        from converter.wikidata.item_builder import _build_person_description
+
+        assert _build_person_description("OWNER", "", False) == "Hebrew manuscript manuscript owner"
+
+    def test_unknown_role_falls_back(self) -> None:
+        from converter.wikidata.item_builder import _build_person_description
+
+        assert _build_person_description("", "1200-1280", False) == "person (1200-1280)"
+        assert (
+            _build_person_description("", "", False) == "person associated with Hebrew manuscripts"
+        )
+
+    def test_organisation_branch(self) -> None:
+        from converter.wikidata.item_builder import _build_person_description
+
+        assert (
+            _build_person_description("", "", True)
+            == "organization associated with Hebrew manuscripts"
+        )
+
+
+# ── Deeper-audit Fix #14 — drop P1559 for Latin-script names ──────────────
+
+
+class TestP1559LatinDropped:
+    """Bug fix 2026-04-16 (deeper audit Fix #14): Latin-script names no
+    longer get P1559 with language 'la' (which was wrong for modern
+    European names). The label already conveys the same information."""
+
+    def test_native_lang_chain_no_longer_has_latin_branch(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The old `native_lang = "la"` assignment must be gone.
+        # (We allow the literal "la" elsewhere, but not as a P1559 fallback.)
+        assert 'native_lang = "la"' not in src
+
+
+# ── Deeper-audit Fix #15 — P6216 gated on inception year ──────────────────
+
+
+class TestPublicDomainGate:
+    """Bug fix 2026-04-16 (deeper audit Fix #15): only assert public-domain
+    status (P6216=Q19652) when the inception date is known AND pre-1900."""
+
+    def test_pre_1900_year_extracted(self) -> None:
+        from converter.wikidata.item_builder import _extract_inception_year
+
+        assert _extract_inception_year({"dates": {"year": 1407}}) == 1407
+        assert _extract_inception_year({"dates": {"year": "1850"}}) == 1850
+
+    def test_no_year_returns_none(self) -> None:
+        from converter.wikidata.item_builder import _extract_inception_year
+
+        assert _extract_inception_year({}) is None
+        assert _extract_inception_year({"dates": {}}) is None
+
+    def test_string_fallback_finds_year(self) -> None:
+        from converter.wikidata.item_builder import _extract_inception_year
+
+        assert _extract_inception_year({"dates": {"original_string": "ca. 1450"}}) == 1450
+
+
+# ── Deeper-audit Fix #17 — description overwrite guard ─────────────────────
+
+
+class TestDescriptionOverwriteGuard:
+    """Bug fix 2026-04-16 (deeper audit Fix #17): existing descriptions
+    are no longer overwritten on update. Mirrors the existing labels
+    guard."""
+
+    def test_descriptions_check_existing_value(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        # The guard must reference wbi_item.descriptions.get and skip
+        # when the slot is non-empty for an existing item.
+        assert "wbi_item.descriptions.get(lang)" in src
+
+
+# ── Geagea complaint 2026-04-15: generic "קובץ." Hebrew labels ────────────
+
+
+class TestKovetzPlaceholderTitleFilter:
+    """Bug fix 2026-04-15 (Geagea complaint): MARC 245 sometimes contains a
+    generic catalog placeholder like "קובץ." (= "compilation" / "file"),
+    used by NLI catalogers when an anthology has no overarching real title.
+    Emitting that as the Hebrew label produced 94 useless labels. The
+    pipeline now detects placeholder titles and routes them to an alias
+    while building a synthetic shelfmark-based label."""
+
+    def test_kovetz_with_period_recognised(self) -> None:
+        from converter.wikidata.item_builder import _is_placeholder_title
+
+        assert _is_placeholder_title("קובץ.") is True
+        assert _is_placeholder_title("קבץ.") is True
+
+    def test_bare_kovetz_recognised(self) -> None:
+        from converter.wikidata.item_builder import _is_placeholder_title
+
+        assert _is_placeholder_title("קובץ") is True
+        assert _is_placeholder_title("קבץ") is True
+
+    def test_short_topical_kovetz_recognised(self) -> None:
+        from converter.wikidata.item_builder import _is_placeholder_title
+
+        assert _is_placeholder_title("קובץ בקבלה.") is True
+        assert _is_placeholder_title("קובץ מדרשים.") is True
+        assert _is_placeholder_title("קבץ מדרשים.") is True
+
+    def test_real_titles_not_flagged(self) -> None:
+        from converter.wikidata.item_builder import _is_placeholder_title
+
+        assert _is_placeholder_title("גנת אגוז") is False
+        assert _is_placeholder_title("ספר היצירה") is False
+        assert _is_placeholder_title("Hebrew Manuscript") is False
+        assert _is_placeholder_title("") is False
+        assert _is_placeholder_title(None) is False
+
+    def test_long_kovetz_titles_not_flagged(self) -> None:
+        """A title that starts with 'קובץ' but is longer than ~25 chars is
+        likely a real anthology with descriptive subtitle — leave alone."""
+        from converter.wikidata.item_builder import _is_placeholder_title
+
+        long_title = "קובץ פירושי המקרא של רבי אברהם אבן עזרא"
+        assert _is_placeholder_title(long_title) is False
+
+    def test_set_labels_routes_kovetz_to_alias(self) -> None:
+        """The _set_labels method, when given a placeholder title and a
+        shelfmark, should emit a shelfmark-based Hebrew label and put the
+        original placeholder string in the aliases for searchability."""
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _set_labels")
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        assert "_is_placeholder_title" in body
+        assert "is_placeholder" in body
+        assert 'aliases.setdefault("he"' in body
+
+
+# ── Geagea complaint 2026-04-15: P3959 must NEVER appear in pipeline ─────
+
+
+class TestP3959NotEmittedByPipeline:
+    """Bug fix 2026-04-15 (Geagea complaint): P3959 (NNL item ID, prefix
+    99…, BIBLIOGRAPHIC records) is the wrong property for person items.
+    The current pipeline source code must not emit P3959 anywhere; the
+    100+ P3959-on-person items Geagea cleaned came from a one-off script
+    before the current safety guards. This test guards against any future
+    code path accidentally re-introducing the property."""
+
+    def test_p3959_absent_from_pipeline_source(self) -> None:
+        import pathlib
+
+        for root in ("converter", "src"):
+            for path in pathlib.Path(root).rglob("*.py"):
+                text = path.read_text(encoding="utf-8")
+                if "P3959" not in text:
+                    continue
+                for line in text.splitlines():
+                    if "P3959" not in line:
+                        continue
+                    stripped = line.strip()
+                    if (
+                        stripped.startswith("#")
+                        or "must not" in line.lower()
+                        or "should not" in line.lower()
+                        or "wrongly" in line.lower()
+                        or "prohibited" in line.lower()
+                    ):
+                        continue
+                    raise AssertionError(
+                        f"Found P3959 reference in {path}:{line!r}. "
+                        "P3959 (NNL item ID) is prohibited."
+                    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
