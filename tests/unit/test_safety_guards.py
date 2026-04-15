@@ -270,5 +270,153 @@ class TestIsSafeToRevert:
         assert "latest" in reason
 
 
+# ── Rule 25 — moratorium on Wikidata bulk operations ────────────────────────
+
+
+class TestMoratorium:
+    """The WikidataUploader must refuse to write against production Wikidata
+    while CLAUDE.md rule 25 is in effect, unless MORATORIUM_LIFTED=true."""
+
+    def test_live_uploader_refuses_without_lifted_env(self, monkeypatch) -> None:
+        from converter.wikidata.uploader import WikidataUploader
+
+        monkeypatch.delenv("MORATORIUM_LIFTED", raising=False)
+        u = WikidataUploader(token="dummy", is_test=False)
+        with pytest.raises(RuntimeError, match="MORATORIUM"):
+            u._check_moratorium_for_live()
+
+    def test_test_mode_bypasses_moratorium(self, monkeypatch) -> None:
+        from converter.wikidata.uploader import WikidataUploader
+
+        monkeypatch.delenv("MORATORIUM_LIFTED", raising=False)
+        u = WikidataUploader(token="dummy", is_test=True)
+        u._check_moratorium_for_live()  # should not raise
+
+    def test_lifted_env_unlocks_live_uploads(self, monkeypatch) -> None:
+        from converter.wikidata.uploader import WikidataUploader
+
+        monkeypatch.setenv("MORATORIUM_LIFTED", "true")
+        u = WikidataUploader(token="dummy", is_test=False)
+        u._check_moratorium_for_live()  # should not raise
+
+
+# ── Fix #2 — P8189 must not be attached to bibliographic IDs ───────────────
+
+
+class TestP8189Restriction:
+    """Bug fix 2026-04-15 (Geagea complaint): P8189 (NLI J9U ID) is for
+    authority records only. Bibliographic IDs (prefix 990…) and non-Q5
+    items must NOT receive P8189."""
+
+    def test_authority_id_attached_to_person(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The fix introduces the check `mazal_str.startswith("9870") and not is_org`
+        assert 'mazal_str.startswith("9870")' in src
+        assert "not is_org" in src
+
+    def test_bibliographic_prefix_rejected(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert 'not mazal_str.startswith("9870")' in src
+
+
+# ── Fix #3 — Hebrew labels in natural order ────────────────────────────────
+
+
+class TestNaturalNameOrder:
+    """Bug fix 2026-04-15 (Geagea complaint on Q139230386): Wikidata labels
+    must be in natural order (Given Surname), not MARC's inverted form
+    (Surname, Given). The inverted form is preserved in P1559."""
+
+    def test_inverted_form_is_flipped(self) -> None:
+        from converter.wikidata.item_builder import _to_natural_name_order
+
+        assert _to_natural_name_order("סופינו, עמנואל") == "עמנואל סופינו"
+        assert _to_natural_name_order("Smith, John") == "John Smith"
+
+    def test_unchanged_when_no_comma(self) -> None:
+        from converter.wikidata.item_builder import _to_natural_name_order
+
+        assert _to_natural_name_order("עמנואל סופינו") == "עמנואל סופינו"
+        assert _to_natural_name_order("Joseph Gikatilla") == "Joseph Gikatilla"
+
+    def test_trailing_dates_become_qualifier(self) -> None:
+        from converter.wikidata.item_builder import _to_natural_name_order
+
+        assert _to_natural_name_order("Smith, John, 1850-1900") == "John Smith (1850-1900)"
+
+    def test_three_commas_left_unchanged(self) -> None:
+        from converter.wikidata.item_builder import _to_natural_name_order
+
+        # Conservative — don't try to flip ambiguous multi-part names
+        assert "b a" not in _to_natural_name_order("a, b, c, d")
+
+    def test_empty_string_safe(self) -> None:
+        from converter.wikidata.item_builder import _to_natural_name_order
+
+        assert _to_natural_name_order("") == ""
+
+
+# ── Fix #4 — MARC 710 institutional names → P195, never P50 ────────────────
+
+
+class TestInstitutionalNameRouting:
+    """Bug fix 2026-04-15 (Geagea complaint on Q139085958): institutional
+    contributors (MARC 710) must not become P50 (author). They route to
+    P195 (collection) instead."""
+
+    def test_library_recognised_as_institution(self) -> None:
+        from converter.wikidata.item_builder import _is_institutional_name
+
+        assert _is_institutional_name("National Library of Israel") is True
+        assert _is_institutional_name("Bodleian Library") is True
+        assert _is_institutional_name("Vatican Library") is True
+
+    def test_hebrew_institution_recognised(self) -> None:
+        from converter.wikidata.item_builder import _is_institutional_name
+
+        assert _is_institutional_name("הספרייה הלאומית של ישראל") is True
+        assert _is_institutional_name("מכון בן-צבי") is True
+
+    def test_person_name_not_flagged(self) -> None:
+        from converter.wikidata.item_builder import _is_institutional_name
+
+        assert _is_institutional_name("Joseph Gikatilla") is False
+        assert _is_institutional_name("עמנואל סופינו") is False
+
+    def test_routing_table_uses_p195_for_institutions(self) -> None:
+        """The fix introduces a check that flips P50 → P195 when
+        _is_institutional_name returns True."""
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert "_is_institutional_name(name)" in src
+        assert 'pid = "P195"' in src or "pid = P_COLLECTION" in src
+
+
+# ── Fix #1 — Reconciler always receives all 5 identifiers ──────────────────
+
+
+class TestReconcilerCallsiteCompleteness:
+    """Bug fix 2026-04-15 (Geagea complaint about duplicates page): the
+    NER-entity branch of the reconcile loop must pass all 5 IDs
+    (lc_id/gnd_id/isni in addition to viaf/nli) so existing community
+    items are found before we create duplicates."""
+
+    def test_ner_branch_passes_all_identifiers(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/reconciler.py").read_text(encoding="utf-8")
+        ner_block_start = src.find("Reconcile NER entities")
+        assert ner_block_start > 0, "NER entity block not found"
+        ner_block = src[ner_block_start : ner_block_start + 1500]
+        assert 'entity.get("lc_id")' in ner_block
+        assert 'entity.get("gnd_id")' in ner_block
+        assert 'entity.get("isni")' in ner_block
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -140,6 +140,83 @@ def _person_key(name: str, viaf_uri: str | None, mazal_id: str | None) -> str:
     return f"name:{normalized}"
 
 
+_INSTITUTIONAL_KEYWORDS: tuple[str, ...] = (
+    "library",
+    "museum",
+    "university",
+    "institute",
+    "seminary",
+    "school",
+    "college",
+    "society",
+    "academy",
+    "foundation",
+    "association",
+    "trust",
+    "centre",
+    "center",
+    "archive",
+    "ספרייה",
+    "מכון",
+    "אוניברסיטה",
+    "מוזיאון",
+    "קהילה",
+    "מכללה",
+    "ארכיון",
+)
+
+
+def _is_institutional_name(name: str) -> bool:
+    """True if the name looks like an institution (library, museum, etc.).
+
+    Used to re-route MARC 710 (added entry — corporate name) values away
+    from P50 (author) to P195 (collection) — fix for the Q139085958 pattern
+    Geagea reported (2026-04-15) where institutions were being assigned as
+    authors of manuscripts.
+    """
+    if not name:
+        return False
+    lowered = name.lower()
+    return any(kw in lowered for kw in _INSTITUTIONAL_KEYWORDS)
+
+
+def _to_natural_name_order(name: str) -> str:
+    """Convert MARC's inverted name form 'Surname, Given' to Wikidata's
+    natural-order convention 'Given Surname'.
+
+    Bug fix (2026-04-15, Geagea complaint on Q139230386, label "סופינו, עמנואל"):
+    Wikidata expects person labels in natural order. The inverted form is a
+    cataloging convention that belongs in P1559 (native name) for searchability,
+    not in the human-facing label.
+
+    Rules:
+    - "Surname, Given" → "Given Surname"
+    - "Surname, Given (qualifier)" → "Given Surname (qualifier)"
+    - "Surname, Given, second-Given" → "second-Given Given Surname" (rare,
+      conservatively NOT flipped — leave as-is to avoid worse mistakes)
+    - Names without exactly one comma → returned unchanged
+    - Trailing dates "Surname, Given, 1850-1900" → "Given Surname (1850-1900)"
+    """
+    if not name or "," not in name:
+        return name
+    # Split off any trailing date range like ", 1850-1900" or ", -1900"
+    date_match = re.search(r",\s*(-?\d{2,4}(?:[-–]\d{0,4})?)\s*$", name)
+    date_suffix = ""
+    base = name
+    if date_match:
+        date_suffix = f" ({date_match.group(1)})"
+        base = name[: date_match.start()]
+    parts = [p.strip() for p in base.split(",")]
+    # Drop empty parts (trailing comma case)
+    parts = [p for p in parts if p]
+    if len(parts) != 2:
+        # Either zero commas (unchanged) or more than one comma (ambiguous);
+        # return unchanged + any trailing date suffix.
+        return name if not date_suffix else (base.strip() + date_suffix)
+    surname, given = parts
+    return f"{given} {surname}{date_suffix}"
+
+
 # ── Work deduplication key ──────────────────────────────────────────
 
 
@@ -1130,6 +1207,18 @@ class WikidataItemBuilder:
             # Normalize role for lookup (case-insensitive, strip whitespace)
             role_norm = role.strip().lower()
             pid = ROLE_TO_PID.get(role_norm, ROLE_TO_PID.get(role, P_AUTHOR))
+
+            # Bug fix (2026-04-15, Geagea complaint on Q139085958): an
+            # institutional contributor (MARC 710 "current owner" = National
+            # Library of Israel, etc.) was being attached as P50 (author).
+            # Institutions cannot be authors of manuscripts. Re-route them:
+            #   - If pid would be P50 (author) AND the name is institutional,
+            #     change pid to P195 (collection) instead.
+            #   - "owner" / "current_owner" roles already map to P127 (owned
+            #     by) which is correct.
+            if pid == P_AUTHOR and _is_institutional_name(name):
+                pid = "P195"  # collection
+
             person_item = self._get_or_create_person(name, viaf_uri, mazal_id, role, record)
             resolved_qid = self._person_qids.get(key) or person_item.existing_qid
 
@@ -1200,34 +1289,16 @@ class WikidataItemBuilder:
         # Detect script: Hebrew vs Latin
         has_hebrew = any("\u0590" <= c <= "\u05ff" for c in clean_name)
         label_lang = "he" if has_hebrew else "en"
-        person.labels[label_lang] = clean_name
+        # Wikidata convention is "Given Surname" (natural order), NOT MARC's
+        # inverted "Surname, Given" form. Bug fix (2026-04-15, Geagea complaint
+        # on Q139230386 where label was "סופינו, עמנואל"): flip inverted forms
+        # to natural order for the LABEL. The original inverted form is
+        # preserved in P1559 (native name) below for searchability.
+        person.labels[label_lang] = _to_natural_name_order(clean_name)
 
-        # P31 = human (or organization) — expanded keyword list
-        is_org = any(
-            kw in name.lower()
-            for kw in (
-                "library",
-                "museum",
-                "university",
-                "institute",
-                "seminary",
-                "school",
-                "college",
-                "society",
-                "academy",
-                "foundation",
-                "association",
-                "trust",
-                "centre",
-                "center",
-                "archive",
-                "ספרייה",
-                "מכון",
-                "אוניברסיטה",
-                "מוזיאון",
-                "קהילה",
-            )
-        )
+        # P31 = human (or organization) — uses the shared institutional
+        # keyword list (see _is_institutional_name above).
+        is_org = _is_institutional_name(name)
         person.statements.append(
             WikidataStatement(
                 property_id=P_INSTANCE_OF,
@@ -1330,15 +1401,27 @@ class WikidataItemBuilder:
                 )
             )
 
-        # P8189 = NLI J9U ID (links to Mazal authority)
-        if mazal_id:
+        # P8189 = NLI J9U ID — STRICT: only attach when ALL three are true:
+        #   1. The ID exists (mazal_id is non-empty)
+        #   2. The ID has the AUTHORITY-record prefix '9870…' (NOT bibliographic '990…')
+        #   3. The target item is a person, not an organisation
+        # Bug fix (2026-04-15, Geagea complaint): bibliographic record IDs were
+        # being attached to person items, causing the Property talk:P8189
+        # /Duplicates/humans page to flood with false-positive duplicates.
+        # P8189's format URL is nli.org.il/en/authorities/$1 — authority-only.
+        mazal_str = str(mazal_id) if mazal_id else ""
+        if mazal_str and mazal_str.startswith("9870") and not is_org:
             person.statements.append(
                 WikidataStatement(
                     property_id=P_NLI_J9U_ID,
-                    value=str(mazal_id),
+                    value=mazal_str,
                     value_type="external-id",
                 )
             )
+        elif mazal_str and not mazal_str.startswith("9870"):
+            # Bibliographic ID (990…) or unknown prefix — do NOT attach P8189.
+            # Could be logged for offline review.
+            pass
 
         # P21 = sex or gender (male for historical Hebrew manuscript persons)
         # Nearly all historical manuscript authors/scribes were male

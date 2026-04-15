@@ -565,7 +565,12 @@ class WikidataReconciler:
                 else:
                     report.persons_new += 1
 
-            # Reconcile NER entities
+            # Reconcile NER entities — pass ALL available identifiers so the
+            # reconciler can find existing Wikidata items matched by any of
+            # P244 (LCCN), P227 (GND), P213 (ISNI), in addition to VIAF/NLI.
+            # Bug fix (2026-04-15, Geagea complaint): omitting lc_id/gnd_id/isni
+            # caused the pipeline to create duplicate person items even when
+            # the existing community item could have been found by one of those.
             for entity in record.get("entities") or []:
                 name = str(entity.get("person", ""))
                 viaf_uri = entity.get("viaf_uri")
@@ -575,7 +580,14 @@ class WikidataReconciler:
                 if person_key in persons_seen:
                     continue
 
-                person_qid = self.reconcile_person(name, viaf_uri, mazal_id)
+                person_qid = self.reconcile_person(
+                    name,
+                    viaf_uri,
+                    mazal_id,
+                    lc_id=entity.get("lc_id"),
+                    gnd_id=entity.get("gnd_id"),
+                    isni=entity.get("isni"),
+                )
                 person_result = ReconciliationResult(
                     entity_type="person",
                     local_id=person_key,

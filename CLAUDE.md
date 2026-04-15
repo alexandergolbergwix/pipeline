@@ -394,3 +394,28 @@ Every script in `scripts/` that issues `action=edit&undo=<my_revid>` MUST go thr
 The Epìdosis incident: on 2026-04-13 Epìdosis re-applied four merges I had wrongly reverted (Q109877110, Q479063, Q159933, Q55902460), commenting "Already checked, correct merge". A naive re-run of the revert script would have undone those corrections. The latest-editor check makes that impossible.
 
 Use `RetryingSession` from the same module for all HTTP — it survives transient DNS / TCP outages with exponential backoff (six attempts, capped at 30 s). See `scripts/revert_my_modifications.py` for the canonical pattern.
+
+### 25. Wikidata bulk operations — MORATORIUM until pipeline bugs are fixed (added 2026-04-15)
+
+After community feedback from Geagea (Wikidata sysop) on 2026-04-14, the MHM Pipeline is under a self-imposed moratorium on automated Wikidata operations. NO bulk uploads, merges, or edits to Wikidata are permitted until ALL of the following are true:
+
+1. **Bug #1 (reconciler false negatives) — FIXED**: The reconciler in `converter/wikidata/reconciler.py` checks all five identifier types (P244 LCCN, P227 GND, P213 ISNI, P214 VIAF, P8189 J9U) before creating any new person item. Most of the duplicates Geagea flagged were existing Wikidata items the reconciler missed. Fix is verified by `tests/unit/test_safety_guards.py::TestReconcilerVerification`.
+
+2. **Bug #2 (P8189 type confusion) — FIXED**: The item builder in `converter/wikidata/item_builder.py` only attaches P8189 (NLI J9U ID) when ALL three are true: the source NLI ID has prefix `9870…` (authority record, not bibliographic `990…`), the target item is `P31=Q5` (human), and the Mazal entity_type is `person`. Never on manuscripts (Q87167) or works.
+
+3. **Bug #3 (Hebrew label form) — FIXED**: Hebrew labels on person items use natural order (`Given Surname`), not the MARC inverted form (`Surname, Given`). The inverted form is preserved in P1559 (native name) for searchability.
+
+4. **Bug #4 (institutional holders mis-mapped to P50) — FIXED**: MARC 710 (added entry — corporate name) is mapped to P195 (collection) or P127 (owned by), never to P50 (author). The MHM mapper only assigns P50 from MARC 100 (main entry — personal name) or 700 (added entry — personal name) where the contributor role is verified as author/scribe.
+
+5. **Manual experience requirement**: I have made at least 20 manual (non-scripted) edits on Wikidata to learn the system's conventions, as Geagea explicitly requested.
+
+6. **Community announcement**: Before any bulk operation resumes, a notice is posted on [Wikidata:Project chat](https://www.wikidata.org/wiki/Wikidata:Project_chat) describing the planned operation, the corpus size, and the safety guards. Wait at least 48 hours for community feedback before running.
+
+7. **Test batch**: First run after the moratorium is at most 10 items, manually reviewed by me before scaling up. If the community raises any concern within 48 hours, halt and address before continuing.
+
+This rule has no expiry. It is lifted only when conditions 1–7 are jointly met. The `WikidataUploader` should refuse to run in non-dry-run mode if a `MORATORIUM_LIFTED=true` environment variable is not set; this lets the moratorium be enforced at the code level.
+
+Related community talk threads:
+- User talk:Alexander Goldberg IL § "Please stop your edits" (Geagea, 2026-04-14)
+- User talk:Alexander Goldberg IL § "Wrong merge" (Pallor, Kolja21, Epìdosis, 2026-04-12 → 2026-04-14)
+- Property talk:P8189/Duplicates/humans

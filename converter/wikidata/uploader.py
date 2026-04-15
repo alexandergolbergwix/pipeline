@@ -64,6 +64,11 @@ class WikidataUploader:
             token: OAuth bearer token or bot password for Wikidata API.
             is_test: If True, use test.wikidata.org instead of production.
             batch_mode: If True, pause 60s every 45 items to stay under rate limits.
+
+        Raises:
+            RuntimeError: If the Wikidata moratorium (CLAUDE.md rule 25) is in
+                effect and `MORATORIUM_LIFTED=true` is not set in the
+                environment. Test mode (``is_test=True``) bypasses the check.
         """
         self._token = token
         self._is_test = is_test
@@ -72,6 +77,45 @@ class WikidataUploader:
         self._last_edit_time: float = 0.0
         self._authenticated_user: str | None = None  # Set after first auth
         self._creator_cache: dict[str, str] = {}  # qid → first revision author
+        self._enforce_moratorium()
+
+    @staticmethod
+    def _enforce_moratorium() -> None:
+        """Refuse to run against production Wikidata while the moratorium is on.
+
+        Lifted only when ``MORATORIUM_LIFTED=true`` is set in the environment.
+        See CLAUDE.md rule 25 for the conditions that must hold before
+        lifting the moratorium.
+
+        ``is_test=True`` bypasses this check (test.wikidata.org is fine for
+        development and CI).
+        """
+        import os  # noqa: PLC0415
+
+        if os.environ.get("MORATORIUM_LIFTED", "").lower() == "true":
+            return
+        # Inspect the caller's `is_test` arg from the bound instance after init.
+        # We do that in upload_item / upload_all instead of here so test-mode
+        # uploaders still construct cleanly. See _check_moratorium_for_live().
+
+    def _check_moratorium_for_live(self) -> None:
+        """Block any live Wikidata write while the moratorium is on."""
+        import os  # noqa: PLC0415
+
+        if self._is_test:
+            return
+        if os.environ.get("MORATORIUM_LIFTED", "").lower() == "true":
+            return
+        raise RuntimeError(
+            "WIKIDATA MORATORIUM IN EFFECT (CLAUDE.md rule 25). "
+            "All bulk Wikidata operations are blocked until pipeline bugs "
+            "#1-#4 are fixed and verified, 20+ manual edits have been made, "
+            "and a notice has been posted on Wikidata:Project chat. "
+            "To override (only after the conditions are satisfied), set "
+            "MORATORIUM_LIFTED=true in the environment. "
+            "See User talk:Alexander Goldberg IL § 'Please stop your edits' "
+            "(Geagea, 2026-04-14)."
+        )
 
     def _init_wbi(self) -> object:
         """Lazily initialize WikibaseIntegrator.
@@ -562,6 +606,7 @@ class WikidataUploader:
         Returns:
             UploadResult with QID and status.
         """
+        self._check_moratorium_for_live()
         self._init_wbi()
 
         # SAFETY: If this item has an existing_qid, verify it's OUR item before modifying
