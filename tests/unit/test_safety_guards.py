@@ -1469,5 +1469,137 @@ class TestEditSummaryTruncation:
         assert "..." in src
 
 
+# ── VIAF nameType cross-validation (2026-04-15) ─────────────────────────────
+
+
+class TestVIAFNameTypeGuard:
+    """VIAF search results must be validated by nameType to prevent cross-type matches.
+
+    Root cause of the library-items-getting-person-VIAF-IDs incident (2026-04-15):
+    VIAFMatcher._query_api() returned the top SRU result without checking nameType,
+    so a Corporate cluster (e.g. Josef Chasanowich / NLI predecessor) surfaced by
+    local.personalNames could be silently attached to person items, and conversely
+    person clusters could be attached to place items.
+    """
+
+    def _make_sru_response(self, viaf_id: str, name_type: str | None) -> dict:
+        cluster: dict = {"ns2:viafID": viaf_id}
+        if name_type is not None:
+            cluster["ns2:nameType"] = name_type
+        return {
+            "searchRetrieveResponse": {
+                "records": {
+                    "record": {
+                        "recordData": {"ns2:VIAFCluster": cluster}
+                    }
+                }
+            }
+        }
+
+    def _patched_matcher_get(self, matcher, response_data):
+        """Context-manager helper: patch session.get to return response_data."""
+        from unittest.mock import MagicMock, patch
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = response_data
+        mock_resp.raise_for_status.return_value = None
+        return patch.object(matcher._session, "get", return_value=mock_resp)
+
+    def test_match_person_rejects_corporate_cluster(self) -> None:
+        """match_person() must return None when VIAF returns a Corporate nameType."""
+        from converter.authority.viaf_matcher import VIAFMatcher
+
+        matcher = VIAFMatcher()
+        data = self._make_sru_response("123456", "Corporate")
+        with self._patched_matcher_get(matcher, data):
+            result = matcher.match_person("National Library of Israel")
+        assert result is None, "Corporate cluster must be rejected for personal name search"
+
+    def test_match_person_accepts_personal_cluster(self) -> None:
+        """match_person() must return a URI when VIAF returns a Personal nameType."""
+        from converter.authority.viaf_matcher import VIAFMatcher
+
+        matcher = VIAFMatcher()
+        data = self._make_sru_response("97804603", "Personal")
+        with self._patched_matcher_get(matcher, data):
+            result = matcher.match_person("Maimonides")
+        assert result == "https://viaf.org/viaf/97804603"
+
+    def test_match_place_rejects_personal_cluster(self) -> None:
+        """match_place() must return None when VIAF returns a Personal nameType."""
+        from converter.authority.viaf_matcher import VIAFMatcher
+
+        matcher = VIAFMatcher()
+        data = self._make_sru_response("78090059", "Personal")
+        with self._patched_matcher_get(matcher, data):
+            result = matcher.match_place("Jerusalem")
+        assert result is None, "Personal cluster must be rejected for geographic name search"
+
+    def test_match_place_accepts_geographic_cluster(self) -> None:
+        """match_place() must accept a Geographic cluster."""
+        from converter.authority.viaf_matcher import VIAFMatcher
+
+        matcher = VIAFMatcher()
+        data = self._make_sru_response("12345", "Geographic")
+        with self._patched_matcher_get(matcher, data):
+            result = matcher.match_place("Jerusalem")
+        assert result == "https://viaf.org/viaf/12345"
+
+    def test_missing_name_type_not_rejected(self) -> None:
+        """If nameType is absent from the SRU response, accept the cluster."""
+        from converter.authority.viaf_matcher import VIAFMatcher
+
+        matcher = VIAFMatcher()
+        data = self._make_sru_response("97804603", None)  # no nameType key
+        with self._patched_matcher_get(matcher, data):
+            result = matcher.match_person("Maimonides")
+        assert result == "https://viaf.org/viaf/97804603", (
+            "Absent nameType must not cause rejection"
+        )
+
+    def test_get_cluster_identifiers_returns_name_type(self) -> None:
+        """get_cluster_identifiers() must include 'name_type' in the returned dict."""
+        from unittest.mock import MagicMock, patch
+
+        from converter.authority.viaf_matcher import VIAFMatcher
+
+        cluster_response = {
+            "ns1:VIAFCluster": {
+                "ns1:viafID": "97804603",
+                "ns1:nameType": "Personal",
+                "ns1:sources": {"ns1:source": []},
+            }
+        }
+        matcher = VIAFMatcher()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = cluster_response
+        mock_resp.raise_for_status.return_value = None
+        with patch.object(matcher._session, "get", return_value=mock_resp):
+            result = matcher.get_cluster_identifiers("97804603")
+        assert result.get("name_type") == "Personal"
+
+    def test_p214_guarded_by_not_is_org_in_source(self) -> None:
+        """P214 (VIAF ID) assignment must be guarded by 'not is_org' in item_builder."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("# P214 = VIAF ID")
+        assert idx != -1, "P214 comment block not found in item_builder.py"
+        block = src[idx : idx + 700]
+        assert "not is_org" in block, "P214 assignment must be guarded by 'not is_org'"
+
+    def test_match_person_passes_expected_name_type_personal(self) -> None:
+        """Source code: match_person() must pass expected_name_type='Personal'."""
+        src = pathlib.Path("converter/authority/viaf_matcher.py").read_text(encoding="utf-8")
+        assert (
+            'expected_name_type="Personal"' in src or "expected_name_type='Personal'" in src
+        ), "match_person must pass expected_name_type='Personal'"
+
+    def test_match_place_passes_expected_name_type_geographic(self) -> None:
+        """Source code: match_place() must pass expected_name_type='Geographic'."""
+        src = pathlib.Path("converter/authority/viaf_matcher.py").read_text(encoding="utf-8")
+        assert (
+            'expected_name_type="Geographic"' in src or "expected_name_type='Geographic'" in src
+        ), "match_place must pass expected_name_type='Geographic'"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

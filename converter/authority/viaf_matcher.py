@@ -42,12 +42,16 @@ class VIAFMatcher:
 
         Searches VIAF personal-name headings.  Returns the URI of the
         top-ranked cluster, e.g. ``https://viaf.org/viaf/97804603``.
+
+        Clusters whose ``nameType`` is not ``"Personal"`` are rejected —
+        this prevents corporate or geographic clusters (which VIAF sometimes
+        returns via ``local.personalNames``) from being attached to person items.
         """
-        return self._search(name, cql_field="local.personalNames")
+        return self._search(name, cql_field="local.personalNames", expected_name_type="Personal")
 
     def match_place(self, name: str) -> str | None:
         """Return the VIAF cluster URI for a geographic name, or None."""
-        return self._search(name, cql_field="local.geographicNames")
+        return self._search(name, cql_field="local.geographicNames", expected_name_type="Geographic")
 
     def match_work(self, title: str) -> str | None:
         """Return the VIAF cluster URI for a uniform title, or None."""
@@ -143,22 +147,27 @@ class VIAFMatcher:
         if death and str(death) not in ("0",):
             ids["death_date"] = str(death)
 
+        # Extract nameType — returned to callers so they can validate entity type
+        name_type = cluster.get("ns1:nameType", cluster.get("nameType", ""))
+        if name_type:
+            ids["name_type"] = str(name_type)
+
         self._cluster_cache[viaf_id] = ids
         logger.debug("VIAF cluster %s: extracted %d identifiers", viaf_id, len(ids))
         return ids
 
     # ── internals ─────────────────────────────────────────────────────
 
-    def _search(self, name: str, cql_field: str) -> str | None:
+    def _search(self, name: str, cql_field: str, expected_name_type: str | None = None) -> str | None:
         cache_key = f"{cql_field}:{name}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        result = self._query_api(name, cql_field)
+        result = self._query_api(name, cql_field, expected_name_type=expected_name_type)
         self._cache[cache_key] = result
         return result
 
-    def _query_api(self, name: str, cql_field: str) -> str | None:
+    def _query_api(self, name: str, cql_field: str, expected_name_type: str | None = None) -> str | None:
         # Respect rate limit
         elapsed = time.monotonic() - self._last_request
         if elapsed < _RATE_LIMIT:
@@ -198,9 +207,24 @@ class VIAFMatcher:
 
         # viafID lives at recordData.ns2:VIAFCluster.ns2:viafID
         record_data = first.get("recordData", {})
-        viaf_id = record_data.get("ns2:VIAFCluster", {}).get("ns2:viafID") or record_data.get(
-            "viafID"
-        )
+        cluster_data = record_data.get("ns2:VIAFCluster", {})
+        viaf_id = cluster_data.get("ns2:viafID") or record_data.get("viafID")
         if not viaf_id:
             return None
+
+        # Guard: reject cross-type matches (e.g. Corporate cluster returned by
+        # local.personalNames search). When nameType is absent from the response
+        # (older API versions), we accept the result rather than reject on uncertainty.
+        if expected_name_type is not None:
+            name_type = cluster_data.get("ns2:nameType", "") or record_data.get("nameType", "")
+            if name_type and name_type != expected_name_type:
+                logger.debug(
+                    "VIAF: rejecting cluster %s (nameType=%r, expected=%r) for %r",
+                    viaf_id,
+                    name_type,
+                    expected_name_type,
+                    name,
+                )
+                return None
+
         return f"https://viaf.org/viaf/{viaf_id}"

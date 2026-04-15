@@ -1740,8 +1740,12 @@ class WikidataItemBuilder:
             )
 
         # P214 = VIAF ID (critical for LOD linking)
+        # Guard: never assign a person-type VIAF ID to an organisation item.
+        # Root cause of 2026-04-15 library-items incident: corporate clusters
+        # surfaced by local.personalNames search were silently attached to
+        # items whose is_org=True flag should have prevented it.
         viaf_id = extract_viaf_id(str(viaf_uri)) if viaf_uri else None
-        if viaf_id:
+        if viaf_id and not is_org:
             person.statements.append(
                 WikidataStatement(
                     property_id=P_VIAF_ID,

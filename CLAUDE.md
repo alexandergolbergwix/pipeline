@@ -486,3 +486,23 @@ A third deeper web-research + code audit (2026-04-15) found 17 additional issues
 | #17 | Edit summary truncated at 497 chars (API 500-char limit) | `uploader.py` | [Wikidata:Bots](https://www.wikidata.org/wiki/Wikidata:Bots) |
 
 Tests added (39): `TestP217HasP195Qualifier`, `TestP7153HasP3831Qualifier`, `TestP887InReferenceNotQualifier`, `TestNotabilityGate`, `TestAnonymousPersonFilter`, `TestWorkItemEnglishLabel`, `TestWorkP407DerivedFromManuscript`, `TestP2093Fallback`, `TestP1343NotAsStatement`, `TestP6216HasJurisdictionQualifier`, `TestCenturyDateBounds`, `TestCalendarModel`, `TestDescriptionLengthCap`, `TestTranslatorCommentatorProperties`, `TestMaxlag`, `TestEditSummaryTruncation`. Total now **130**.
+
+### 29. VIAF nameType cross-validation (added 2026-04-15)
+
+After the 2026-04-15 Wikidata talk report (three library items — Q138937383, Q139185337, Q139169280 — received person-type VIAF IDs), an investigation found three code gaps that together caused the incident:
+
+1. **`VIAFMatcher._query_api()`** never read the `ns2:nameType` field from the SRU response, so Corporate or Geographic clusters surfaced by `local.personalNames` were returned as if they were valid person matches.
+2. **`item_builder.py` P214 assignment** had no `is_org` guard — even if the pipeline detected the holder as an organisation, the VIAF ID was still attached.
+3. **`VIAFMatcher.get_cluster_identifiers()`** did not extract `nameType`, so callers could not validate the cluster type independently.
+
+**Fixes applied (commit after 571d2e9):**
+
+| Fix | File | Description |
+|---|---|---|
+| nameType SRU filter | `converter/authority/viaf_matcher.py:_query_api` | Reads `ns2:nameType`; rejects cluster if `nameType != expected_name_type`. Absent nameType is accepted (backward compatibility with older API responses). |
+| match_person type guard | `converter/authority/viaf_matcher.py:match_person` | Passes `expected_name_type="Personal"` to `_search()` → `_query_api()`. |
+| match_place type guard | `converter/authority/viaf_matcher.py:match_place` | Passes `expected_name_type="Geographic"`. |
+| name_type in cluster dict | `converter/authority/viaf_matcher.py:get_cluster_identifiers` | Extracts `ns1:nameType` and stores it as `ids["name_type"]` for callers. |
+| P214 is_org guard | `converter/wikidata/item_builder.py` | `if viaf_id and not is_org:` — P214 is never attached to organisation items. |
+
+Tests added (9): `TestVIAFNameTypeGuard` (9 tests — `test_match_person_rejects_corporate_cluster`, `test_match_person_accepts_personal_cluster`, `test_match_place_rejects_personal_cluster`, `test_match_place_accepts_geographic_cluster`, `test_missing_name_type_not_rejected`, `test_get_cluster_identifiers_returns_name_type`, `test_p214_guarded_by_not_is_org_in_source`, `test_match_person_passes_expected_name_type_personal`, `test_match_place_passes_expected_name_type_geographic`). Total now **139**.
