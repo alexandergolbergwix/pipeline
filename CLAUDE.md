@@ -413,9 +413,34 @@ After community feedback from Geagea (Wikidata sysop) on 2026-04-14, the MHM Pip
 
 7. **Test batch**: First run after the moratorium is at most 10 items, manually reviewed by me before scaling up. If the community raises any concern within 48 hours, halt and address before continuing.
 
-This rule has no expiry. It is lifted only when conditions 1–7 are jointly met. The `WikidataUploader` should refuse to run in non-dry-run mode if a `MORATORIUM_LIFTED=true` environment variable is not set; this lets the moratorium be enforced at the code level.
+8. **Bot flag granted** (added 2026-04-15 web audit): A Wikidata bot flag has been issued via the standard RfP process at [Wikidata:Requests for permissions/Bot](https://www.wikidata.org/wiki/Wikidata:Requests_for_permissions/Bot). Edit summaries are passed on every WBI write (enforced by `tests/unit/test_safety_guards.py::TestEditSummaryPassed`).
+
+9. **Pipeline data-quality fixes verified** (added 2026-04-15 web audit): All eight fixes from the 2026-04-15 web audit (century date encoding, P21 omission, edit summaries, P1412 derivation, work-description disambiguation, work-item reconciliation against Wikidata, MARC 710 institutional re-routing, P8189 prefix restriction) have unit tests in `tests/unit/test_safety_guards.py` and the tests pass.
+
+This rule has no expiry. It is lifted only when conditions 1–9 are jointly met. The `WikidataUploader` refuses to run against production Wikidata if a `MORATORIUM_LIFTED=true` environment variable is not set; this enforces the moratorium at the code level (see `_check_moratorium_for_live`).
 
 Related community talk threads:
 - User talk:Alexander Goldberg IL § "Please stop your edits" (Geagea, 2026-04-14)
 - User talk:Alexander Goldberg IL § "Wrong merge" (Pallor, Kolja21, Epìdosis, 2026-04-12 → 2026-04-14)
 - Property talk:P8189/Duplicates/humans
+
+### 26. Pipeline data-quality fixes from web audit (added 2026-04-15)
+
+A thorough web-research audit on 2026-04-15 identified ten Wikidata best-practice violations beyond those Geagea explicitly named. Eight of them were fixed in commit (this commit). Each fix has a unit test in `tests/unit/test_safety_guards.py`.
+
+| Fix | File | Wikidata policy / source |
+|---|---|---|
+| #1 Century dates encode the START of the century, not the midpoint | `converter/wikidata/property_mapping.py:date_to_wikidata` | [Help:Dates](https://www.wikidata.org/wiki/Help:Dates), [Phabricator T73459](https://phabricator.wikimedia.org/T73459) |
+| #2 Work-item reconciliation by Hebrew label + author before creating | `converter/wikidata/reconciler.py:reconcile_work_by_label_and_author` + `item_builder.py:_get_or_create_work` | [WikiProject Duplicates](https://www.wikidata.org/wiki/Wikidata:WikiProject_Duplicates) |
+| #4 P21 (gender) NOT blanket-set to male; omit when source has no gender data | `converter/wikidata/item_builder.py:_get_or_create_person` | [UW iSchool 2023 P21 study](https://ischool.uw.edu/capstone/projects/2023/p21-problem-proposing-more-ethical-best-practice-sex-and-gender-wikidata) |
+| #5 `maxlag=5` already set in WBI config | `converter/wikidata/uploader.py:_init_wbi` | [Wikidata:Bots](https://www.wikidata.org/wiki/Wikidata:Bots) |
+| #6 Descriptive `summary=` parameter on every WBI write | `converter/wikidata/uploader.py:upload_item` | [Wikidata:Bots](https://www.wikidata.org/wiki/Wikidata:Bots) |
+| #7 P1412 (language) derived from manuscript MARC 008/041, not blanket Hebrew | `converter/wikidata/item_builder.py:_get_or_create_person` | [Sourcing requirements for bots RfC](https://www.wikidata.org/wiki/Wikidata:Requests_for_comment/Sourcing_requirements_for_bots) |
+| #8 Disambiguating work descriptions (include author + century) | `converter/wikidata/item_builder.py:_build_work_description` | Wikidata description-uniqueness convention |
+
+Two audit items remain deferred (out of scope for this commit):
+
+- **VIAF cluster cross-validation (#9)**: harvested IDs cross-checked at upload time by `_candidate_conflicts()`; live VIAF re-validation per cluster would add latency. Re-evaluate after the test-batch run.
+- **Stop-on-revert mechanism (audit miscellaneous)**: needs a separate watchlist polling layer; the two-layer creator/latest-editor check on revert scripts already covers the live case.
+
+Tests: `tests/unit/test_safety_guards.py` now has 53 tests across all guards (was 19 → 34 after Geagea-fix batch → 53 after web-audit batch). Do NOT delete or weaken these tests — they are the regression barrier protecting against repeat incidents.

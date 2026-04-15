@@ -579,19 +579,27 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
         return None
 
     # English century: "16th century"
+    # Wikidata precision-7 (PRECISION_CENTURY) interprets the stored year
+    # as the START of the century, NOT the midpoint. The 16th century
+    # (1501-1600) must be encoded as +1501-00-00, not +1550-00-00.
+    # Bug fix 2026-04-15: changed +50 → +1.
     century_match = re.search(r"(\d{1,2})(?:th|st|nd|rd)\s*cent", original, re.IGNORECASE)
     if century_match:
         century = int(century_match.group(1))
-        mid_year = (century - 1) * 100 + 50
-        return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+        start_year = (century - 1) * 100 + 1
+        return f"+{start_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
     # Hebrew century: "מאה ט"ז" (16th century)
     heb_century = _parse_hebrew_century(original)
     if heb_century:
-        mid_year = (heb_century - 1) * 100 + 50
-        return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+        start_year = (heb_century - 1) * 100 + 1
+        return f"+{start_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
-    # Hebrew century range: "מאה י"ד-ט"ו" → use midpoint
+    # Hebrew century range: "מאה י"ד-ט"ו" — use the EARLIER century as the
+    # main value (precision 7 = century). A future enhancement could add
+    # P1319 (earliest date) and P1326 (latest date) qualifiers to preserve
+    # the full range; for now we encode the earlier bound, which is the
+    # safer default for SPARQL queries that filter by century.
     range_match = re.search(
         r'מאה\s+([א-ת]["\u05F4\']?[א-ת]?)\s*[-–]\s*([א-ת]["\u05F4\']?[א-ת]?)',
         original.replace('""', '"'),
@@ -600,8 +608,9 @@ def date_to_wikidata(dates_dict: dict[str, object]) -> tuple[str, int] | None:
         c1 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(1).strip())
         c2 = _HEBREW_ORDINAL_TO_INT.get(range_match.group(2).strip())
         if c1 and c2:
-            mid_year = ((c1 - 1) * 100 + (c2 - 1) * 100) // 2 + 50
-            return f"+{mid_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
+            earlier = min(c1, c2)
+            start_year = (earlier - 1) * 100 + 1
+            return f"+{start_year:04d}-00-00T00:00:00Z", PRECISION_CENTURY
 
     # Gregorian year in string: extract 4-digit year
     year_match = re.search(r"\b(\d{4})\b", original)

@@ -418,5 +418,263 @@ class TestReconcilerCallsiteCompleteness:
         assert 'entity.get("isni")' in ner_block
 
 
+# ── Web-audit Fix #1 — century date encoding ────────────────────────────────
+
+
+class TestCenturyDateEncoding:
+    """Bug fix 2026-04-15 (web audit Fix #1): Wikidata precision-7 dates
+    interpret the stored year as the START of the century, not the midpoint.
+    Previously the pipeline emitted `+1550-00-00` for 16th century, causing
+    silent SPARQL query corruption."""
+
+    def test_english_16th_century_starts_at_1501(self) -> None:
+        from converter.wikidata.property_mapping import date_to_wikidata
+
+        result = date_to_wikidata({"original_string": "16th century"})
+        assert result is not None
+        assert result[0] == "+1501-00-00T00:00:00Z"
+
+    def test_english_1st_century_starts_at_0001(self) -> None:
+        from converter.wikidata.property_mapping import date_to_wikidata
+
+        result = date_to_wikidata({"original_string": "1st century"})
+        assert result is not None
+        assert result[0] == "+0001-00-00T00:00:00Z"
+
+    def test_hebrew_century_starts_at_century_year_1(self) -> None:
+        from converter.wikidata.property_mapping import date_to_wikidata
+
+        # מאה ט"ז = 16th century → must start at 1501, not 1550
+        result = date_to_wikidata({"original_string": 'מאה ט"ז'})
+        assert result is not None
+        assert result[0] == "+1501-00-00T00:00:00Z"
+
+    def test_full_year_unchanged(self) -> None:
+        from converter.wikidata.property_mapping import date_to_wikidata
+
+        # Regression: full-year input must still encode the year, not the century start.
+        result = date_to_wikidata({"year": 1407, "date_format": "FullDate"})
+        assert result is not None
+        assert result[0] == "+1407-01-01T00:00:00Z"
+
+
+# ── Web-audit Fix #4 — P21 (gender) NOT blanket-set ────────────────────────
+
+
+class TestP21NotBlanketAssigned:
+    """Bug fix 2026-04-15 (web audit Fix #4): every non-org person was being
+    unconditionally assigned P21=Q6581097 (male). Source MARC carries no
+    gender info; unsourced gender claims are flagged by the community
+    (UW iSchool 2023 'P21 Problem' study)."""
+
+    def test_p21_male_constant_not_emitted_in_person_creation(self) -> None:
+        """Source-grep: the literal Q6581097 male-constant assignment must
+        be removed from _get_or_create_person. The string can still appear
+        in comments documenting why it was removed."""
+        import pathlib
+        import re
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find the _get_or_create_person body
+        method_start = src.find("def _get_or_create_person")
+        assert method_start > 0
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        # No WikidataStatement should attach P21 in this method body
+        # (allow Q6581097 to appear ONLY in comments/docstrings, not in code)
+        code_lines = [
+            line for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")
+        ]
+        joined = "\n".join(code_lines)
+        # Strip docstrings (triple-quoted blocks)
+        joined_no_doc = re.sub(r'"""[\s\S]*?"""', "", joined)
+        assert 'property_id="P21"' not in joined_no_doc
+        assert "Q6581097" not in joined_no_doc
+
+
+# ── Web-audit Fix #6 — edit summary on every WBI write ─────────────────────
+
+
+class TestEditSummaryPassed:
+    """Bot policy compliance: every wbi_item.write() must include a
+    descriptive edit summary."""
+
+    def test_uploader_passes_summary_to_write(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        assert "wbi_item.write(summary=" in src
+        # The bare `wbi_item.write()` call should be gone
+        assert "wbi_item.write()" not in src
+
+    def test_summary_template_mentions_pipeline_and_source(self) -> None:
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        # The template includes "MHM Pipeline" and a Ktiv attribution
+        assert "MHM Pipeline" in src
+        assert "Ktiv" in src
+
+
+# ── Web-audit Fix #7 — P1412 derived from MARC, not blanket Hebrew ─────────
+
+
+class TestP1412DerivedFromManuscript:
+    """Bug fix 2026-04-15 (web audit Fix #7): P1412 (language) was hardcoded
+    to Hebrew (Q9288) for every non-org person. Now derived from the
+    manuscript's languages (MARC 008/35-37 + 041); omitted when no language
+    data exists."""
+
+    def test_hardcoded_hebrew_language_removed_from_person_creation(self) -> None:
+        """The literal hardcoded value="Q9288" assignment with property_id
+        P1412 must NOT be present in _get_or_create_person."""
+        import pathlib
+        import re
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _get_or_create_person")
+        assert method_start > 0
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        # Look for the OLD pattern: P1412 with hardcoded Q9288 string literal.
+        # The new code uses a variable lang_qid sourced from LANG_TO_QID.
+        offending = re.search(
+            r'property_id="P1412"[\s\S]{0,80}value="Q9288"',
+            body,
+        )
+        assert offending is None, "P1412 must not be hardcoded to Q9288"
+
+    def test_p1412_loop_iterates_over_source_languages(self) -> None:
+        """The new code reads source_record.get('languages', ...) and emits
+        one P1412 statement per language."""
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _get_or_create_person")
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        assert 'source_record.get("languages")' in body
+        assert "LANG_TO_QID.get" in body
+
+
+# ── Web-audit Fix #8 — disambiguating work descriptions ────────────────────
+
+
+class TestWorkDescriptionDisambiguation:
+    """Bug fix 2026-04-15 (web audit Fix #8): all 3,970 work items got the
+    identical description 'Hebrew manuscript work'. Wikidata requires
+    descriptions to disambiguate same-label items."""
+
+    def test_includes_author_when_known(self) -> None:
+        from converter.wikidata.item_builder import _build_work_description
+
+        desc = _build_work_description(author_name="Maimonides", century=None)
+        assert "Maimonides" in desc
+        assert "Hebrew manuscript work" in desc
+
+    def test_includes_century_when_known(self) -> None:
+        from converter.wikidata.item_builder import _build_work_description
+
+        desc = _build_work_description(author_name="Maimonides", century="12th century")
+        assert "Maimonides" in desc
+        assert "12th century" in desc
+
+    def test_falls_back_to_generic_when_nothing_known(self) -> None:
+        from converter.wikidata.item_builder import _build_work_description
+
+        desc = _build_work_description(author_name=None, century=None)
+        assert desc == "Hebrew manuscript work"
+
+    def test_strips_trailing_punctuation_from_author(self) -> None:
+        from converter.wikidata.item_builder import _build_work_description
+
+        desc = _build_work_description(author_name="Smith, John,", century=None)
+        # The MARC trailing comma should be stripped before display.
+        assert desc.endswith("Smith, John")
+
+
+# ── Web-audit Fix #2 — work-item reconciliation ────────────────────────────
+
+
+class TestWorkReconciliation:
+    """Bug fix 2026-04-15 (web audit Fix #2): the pipeline created duplicate
+    work items for classical Hebrew works. The reconciler now has a
+    reconcile_work_by_label_and_author() method and the builder consults
+    it before creating new work items."""
+
+    def test_reconciler_method_returns_qid_on_match(self, monkeypatch) -> None:
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        r = WikidataReconciler()
+        # Stub _query to return a single fake binding
+        monkeypatch.setattr(
+            r,
+            "_query",
+            lambda _sparql: [
+                {"item": {"value": "http://www.wikidata.org/entity/Q42"}, "author": {"value": ""}}
+            ],
+        )
+        result = r.reconcile_work_by_label_and_author("ספר היצירה", lang="he")
+        assert result == "Q42"
+
+    def test_reconciler_returns_none_when_no_match(self, monkeypatch) -> None:
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        r = WikidataReconciler()
+        monkeypatch.setattr(r, "_query", lambda _sparql: [])
+        result = r.reconcile_work_by_label_and_author("nonexistent work title", lang="he")
+        assert result is None
+
+    def test_author_conflict_rejects_candidate(self, monkeypatch) -> None:
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        r = WikidataReconciler()
+        # Candidate work has author Q999, but we proposed Q42 — must reject.
+        monkeypatch.setattr(
+            r,
+            "_query",
+            lambda _sparql: [
+                {
+                    "item": {"value": "http://www.wikidata.org/entity/Q1234"},
+                    "author": {"value": "http://www.wikidata.org/entity/Q999"},
+                }
+            ],
+        )
+        result = r.reconcile_work_by_label_and_author(
+            "Conflicting Work",
+            lang="he",
+            author_qid="Q42",
+        )
+        assert result is None
+
+    def test_empty_title_returns_none(self) -> None:
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        r = WikidataReconciler()
+        assert r.reconcile_work_by_label_and_author("") is None
+        assert r.reconcile_work_by_label_and_author("   ") is None
+
+    def test_builder_accepts_optional_reconciler(self) -> None:
+        """WikidataItemBuilder must accept reconciler=None (offline mode)
+        and not crash when _get_or_create_work is called."""
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        b = WikidataItemBuilder(reconciler=None)
+        # Just constructing it should be fine.
+        assert b._reconciler is None
+
+    def test_builder_consults_reconciler_when_provided(self) -> None:
+        """When a reconciler is wired in, _get_or_create_work calls
+        reconcile_work_by_label_and_author() before creating."""
+        import pathlib
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        method_start = src.find("def _get_or_create_work")
+        method_end = src.find("\n    def ", method_start + 1)
+        body = src[method_start:method_end]
+        assert "reconcile_work_by_label_and_author" in body
+        assert "self._reconciler" in body
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

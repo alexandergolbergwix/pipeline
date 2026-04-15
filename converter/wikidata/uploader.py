@@ -638,7 +638,16 @@ class WikidataUploader:
                         message=f"No changes needed for {item.existing_qid}",
                     )
 
-                result = wbi_item.write()
+                # Bot policy compliance (Wikidata:Bots): every write needs
+                # a descriptive edit summary so reviewers can understand
+                # the change at a glance.
+                action = "Update" if item.existing_qid else "Create"
+                edit_summary = (
+                    f"MHM Pipeline: {action} {item.entity_type} from NLI "
+                    f"Hebrew Manuscripts catalog (Ktiv); +{new_claims} claims; "
+                    f"local_id={item.local_id}"
+                )
+                result = wbi_item.write(summary=edit_summary)
                 qid = result.id if result else None
 
                 if item.existing_qid:

@@ -246,6 +246,72 @@ class WikidataReconciler:
         self._cache[cache_key] = qid
         return qid
 
+    def reconcile_work_by_label_and_author(
+        self,
+        title: str,
+        lang: str = "he",
+        author_qid: str | None = None,
+    ) -> str | None:
+        """Find an existing Wikidata work item matching the given label.
+
+        Bug fix 2026-04-15 (web audit Fix #2): the pipeline was creating
+        duplicate work items for classical Hebrew texts (Talmud tractates,
+        Rashi commentaries, Maimonides, etc.) that already exist on
+        Wikidata. This method does the SPARQL lookup before creating.
+
+        Args:
+            title: The work title (typically Hebrew).
+            lang: BCP-47 language tag for the title (default "he").
+            author_qid: Optional. If provided, the candidate's P50 (author)
+                must either match this QID or be absent. If the candidate
+                has a DIFFERENT P50 author, REJECT the match — the same
+                title by a different author is a different work.
+
+        Returns:
+            QID of the matching Wikidata work, or None if no safe match.
+        """
+        clean_title = (title or "").strip()
+        if not clean_title:
+            return None
+        cache_key = f"work:{lang}:{clean_title}:{author_qid or ''}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Escape double quotes in the title for SPARQL string-literal safety.
+        safe_title = clean_title.replace("\\", "\\\\").replace('"', '\\"')
+        # Q47461344 = written work; cover subclasses via wdt:P31/wdt:P279*.
+        sparql = f"""
+        SELECT ?item ?author WHERE {{
+          ?item wdt:P31/wdt:P279* wd:Q47461344 .
+          ?item rdfs:label "{safe_title}"@{lang} .
+          OPTIONAL {{ ?item wdt:P50 ?author . }}
+        }} LIMIT 5
+        """
+        results = self._query(sparql)
+        qid: str | None = None
+        for binding in results:
+            cand_uri = binding.get("item", {}).get("value", "")
+            cand_qid = extract_wikidata_qid(cand_uri)
+            if not cand_qid:
+                continue
+            cand_author = binding.get("author", {}).get("value", "")
+            cand_author_qid = extract_wikidata_qid(cand_author) if cand_author else None
+            if author_qid and cand_author_qid and cand_author_qid != author_qid:
+                logger.warning(
+                    "RECONCILE WORK REJECT: %s matches title %r but its P50=%s "
+                    "differs from proposed author %s — treating as different work",
+                    cand_qid,
+                    clean_title,
+                    cand_author_qid,
+                    author_qid,
+                )
+                continue
+            qid = cand_qid
+            break
+
+        self._cache[cache_key] = qid
+        return qid
+
     def reconcile_place(self, wikidata_uri: str) -> str | None:
         """Validate that a KIMA-provided Wikidata QID exists.
 

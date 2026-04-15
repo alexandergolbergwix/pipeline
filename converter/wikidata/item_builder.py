@@ -226,6 +226,48 @@ def _work_key(title: str) -> str:
     return f"work:{normalized}"
 
 
+def _build_work_description(author_name: str | None, century: str | None) -> str:
+    """Build a disambiguating English description for a work item.
+
+    Wikidata requires descriptions to disambiguate same-label items.
+    Bug fix 2026-04-15 (web audit): previously all work descriptions were
+    identical ('Hebrew manuscript work'), making same-titled works
+    indistinguishable. Now includes author and century when available.
+    """
+    parts = ["Hebrew manuscript work"]
+    if author_name:
+        cleaned = author_name.strip().rstrip(",;:")
+        if cleaned:
+            parts.append(f"by {cleaned}")
+    if century:
+        parts.append(f"({century})")
+    return " ".join(parts)
+
+
+def _extract_century_for_work(source_record: dict[str, object]) -> str | None:
+    """Extract a human-readable century string for the work description.
+
+    Pulls from the manuscript's date data when present (e.g. '16th century',
+    'מאה ט"ז'). Returns None when no century info is available so the
+    description omits the parenthetical.
+    """
+    dates = source_record.get("dates")
+    if not isinstance(dates, dict):
+        return None
+    original = str(dates.get("original_string") or "").replace('""', '"').strip()
+    if not original:
+        return None
+    eng_match = re.search(r"\d{1,2}(?:th|st|nd|rd)\s*century", original, re.IGNORECASE)
+    if eng_match:
+        return eng_match.group(0).lower()
+    if "מאה" in original:
+        # Take just up to the closing date ordinal
+        snippet = re.search(r"מאה\s+[א-ת][\u05F4\"\']?[א-ת]?", original)
+        if snippet:
+            return snippet.group(0)
+    return None
+
+
 # ── Role → occupation QID ────────────────────────────────────────────
 
 _ROLE_TO_OCCUPATION: dict[str, str] = {
@@ -257,11 +299,24 @@ class WikidataItemBuilder:
         items = builder.build_all(records)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, reconciler: object | None = None) -> None:
+        """Initialize the builder.
+
+        Args:
+            reconciler: Optional WikidataReconciler instance. When provided,
+                _get_or_create_work() will SPARQL-query Wikidata for an
+                existing work item before creating a new one. This catches
+                duplicates of classical Hebrew works (Talmud tractates,
+                Rashi commentaries, Maimonides, etc.) that already exist
+                on Wikidata. Bug fix 2026-04-15 (web audit Fix #2).
+                Pass None to disable SPARQL reconciliation (faster offline
+                builds; falls back to KNOWN_WORK_QIDS hardcoded mapping).
+        """
         self._person_items: dict[str, WikidataItem] = {}
         self._person_qids: dict[str, str] = {}  # person_key -> resolved Wikidata QID
         self._work_items: dict[str, WikidataItem] = {}
         self._manuscript_items: list[WikidataItem] = []
+        self._reconciler = reconciler
 
     def build_manuscript_item(self, record: dict[str, object]) -> WikidataItem:
         """Build a Wikidata item for a single manuscript record."""
@@ -1423,16 +1478,14 @@ class WikidataItemBuilder:
             # Could be logged for offline review.
             pass
 
-        # P21 = sex or gender (male for historical Hebrew manuscript persons)
-        # Nearly all historical manuscript authors/scribes were male
-        if not is_org:
-            person.statements.append(
-                WikidataStatement(
-                    property_id="P21",
-                    value="Q6581097",
-                    value_type="item",  # male
-                )
-            )
+        # P21 (sex or gender): intentionally NOT set.
+        # Bug fix 2026-04-15 (web audit): the MARC source records carry no
+        # reliable gender information, and unsourced bot-added gender claims
+        # are flagged by the community (UW iSchool 2023 "P21 Problem" study).
+        # For medieval scribes, gender is often genuinely unknown. Future
+        # enrichment may derive P21 from MARC 375 if/when it is populated by
+        # the cataloger. Until then, omit P21 entirely rather than asserting
+        # a default that is unsourced and may be wrong.
 
         # P1343 = described by source (link to NLI/Ktiv catalog)
         person.statements.append(
@@ -1443,15 +1496,26 @@ class WikidataItemBuilder:
             )
         )
 
-        # P1412 = languages spoken, written or signed (Hebrew)
+        # P1412 = languages spoken, written or signed.
+        # Bug fix 2026-04-15 (web audit): previously hardcoded to Hebrew (Q9288)
+        # for every non-org person. Many manuscript persons wrote in Aramaic,
+        # Judeo-Arabic, Ladino, etc. — and most are unknown. Derive from the
+        # MANUSCRIPT's languages (MARC 008/35-37 + 041) when available; emit
+        # one P1412 per resolvable language code; omit entirely when no
+        # language data exists rather than asserting an unsourced default.
         if not is_org:
-            person.statements.append(
-                WikidataStatement(
-                    property_id="P1412",
-                    value="Q9288",
-                    value_type="item",  # Hebrew
-                )
-            )
+            seen_lang_qids: set[str] = set()
+            for lang_code in source_record.get("languages") or []:
+                lang_qid = LANG_TO_QID.get(str(lang_code))
+                if lang_qid and lang_qid not in seen_lang_qids:
+                    seen_lang_qids.add(lang_qid)
+                    person.statements.append(
+                        WikidataStatement(
+                            property_id="P1412",
+                            value=lang_qid,
+                            value_type="item",
+                        )
+                    )
 
         # P1559 = name in native language — use language matching the script
         # Skip names with trailing commas/incomplete entries
@@ -1533,9 +1597,49 @@ class WikidataItemBuilder:
         if key in self._work_items:
             return self._work_items[key]
 
+        # Bug fix 2026-04-15 (web audit Fix #2): consult the reconciler to
+        # find an existing Wikidata work matching this Hebrew title before
+        # creating a duplicate. The KNOWN_WORK_QIDS hardcoded mapping is a
+        # fast first pass (handled by callers); this is the SPARQL fallback
+        # for works not in that list. The reconciler's
+        # reconcile_work_by_label_and_author() also rejects matches whose
+        # P50 author conflicts with our proposed author (cross-verification
+        # pattern reused from person reconciliation).
+        existing_qid: str | None = None
+        if self._reconciler is not None:
+            try:
+                # Resolve author QID from cache when available so the
+                # reconciler can perform author-conflict rejection.
+                author_qid: str | None = None
+                if author_name and author_name.strip():
+                    author_key = _person_key(author_name, None, None)
+                    author_qid = self._person_qids.get(author_key)
+                existing_qid = self._reconciler.reconcile_work_by_label_and_author(
+                    title=title,
+                    lang="he",
+                    author_qid=author_qid,
+                )
+            except Exception as exc:  # noqa: BLE001 - reconciler failures must not block builds
+                logger.warning(
+                    "reconcile_work_by_label_and_author failed for %r: %s; "
+                    "proceeding with new-item creation",
+                    title,
+                    exc,
+                )
+
         work = WikidataItem(entity_type="work", local_id=key)
+        if existing_qid:
+            work.existing_qid = existing_qid
         work.labels["he"] = title
-        work.descriptions["en"] = "Hebrew manuscript work"
+        # Bug fix 2026-04-15 (web audit): all 3,970 work items previously
+        # received the identical description "Hebrew manuscript work", which
+        # made same-label items indistinguishable on Wikidata. Build a
+        # disambiguating description that includes the author when known
+        # (Wikidata requires descriptions to disambiguate same-label items).
+        work.descriptions["en"] = _build_work_description(
+            author_name=author_name,
+            century=_extract_century_for_work(source_record),
+        )
 
         work.statements.append(
             WikidataStatement(
