@@ -10,7 +10,7 @@ For direct inspection of the materials cited in the Semantic Web Journal submiss
 - Project repository: https://github.com/alexandergolbergwix/pipeline
 - Persistent ontology namespace: https://w3id.org/hebrew-manuscripts/
 
-Note: the `w3id` URL is the persistent machine-resolvable ontology namespace and currently resolves directly to the OWL serialization. For human-oriented inspection, Zenodo and this GitHub repository are the better entry points.
+Note: the `w3id` URL is the persistent ontology namespace. By default many clients will resolve to the OWL serialization, while clients requesting HTML are redirected to the ontology directory on GitHub. For human-oriented inspection, Zenodo and this GitHub repository are the better entry points.
 
 ## What is in this repository
 
@@ -53,3 +53,4 @@ Additional application code in the repository also supports desktop tooling and 
 If you need the stable citable archive, use the Zenodo DOI above.
 
 For project context and review materials, start with `docs/` and the Zenodo archive.
+
