@@ -901,12 +901,15 @@ class WikidataItemBuilder:
                                 value=qid,
                                 value_type="item",
                                 # P7153 constraint requires P3831 (object of statement
-                                # has role) qualifier. Use Q1616923 (place of provenance)
-                                # as a safe generic role. Fix 2026-04-15 third audit Fix #2.
+                                # has role) qualifier. Use Q1773840 (provenance) as the
+                                # role — the closest concept for "place associated with
+                                # the manuscript's custody history". Bug fix 2026-04-16:
+                                # Q1616923 was previously used but is a disambiguation
+                                # page (Heydeck), not a role concept.
                                 qualifiers=[
                                     {
                                         "property": P_OBJECT_HAS_ROLE,
-                                        "value": "Q1616923",
+                                        "value": "Q1773840",
                                         "type": "item",
                                     }
                                 ],
@@ -1523,14 +1526,32 @@ class WikidataItemBuilder:
                 # string) as a string fallback so the name is not silently lost.
                 # P2093 is appropriate for unresolved person names in bibliographic
                 # statements; it avoids creating stub items that would be deleted.
-                item.statements.append(
-                    WikidataStatement(
-                        property_id="P2093",
-                        value=name.strip().rstrip(",;:"),
-                        value_type="string",
-                        references=ref,
+                #
+                # Fix 2026-04-16: OWNER role has no string-fallback property —
+                # P127 (owned by) requires an item value. For owners without a
+                # Wikidata item, the MARC 561 provenance text already goes to
+                # P7535 (scope and content), so we suppress P2093 for this role.
+                # For all other roles, add P3831 (object has role) qualifier so
+                # curators can distinguish author/scribe/translator fallbacks.
+                role_norm_lower = role.strip().lower()
+                if role_norm_lower in ("owner", "current_owner", "בעלים"):
+                    pass  # skip — provenance text captured in P7535
+                else:
+                    role_qid = _ROLE_TO_OCCUPATION.get(role, _ROLE_TO_OCCUPATION.get(role_norm_lower))
+                    p2093_qualifiers: list[dict] = []
+                    if role_qid:
+                        p2093_qualifiers = [
+                            {"property": P_OBJECT_HAS_ROLE, "value": role_qid, "type": "item"}
+                        ]
+                    item.statements.append(
+                        WikidataStatement(
+                            property_id="P2093",
+                            value=name.strip().rstrip(",;:"),
+                            value_type="string",
+                            references=ref,
+                            qualifiers=p2093_qualifiers,
+                        )
                     )
-                )
             else:
                 item.statements.append(
                     WikidataStatement(

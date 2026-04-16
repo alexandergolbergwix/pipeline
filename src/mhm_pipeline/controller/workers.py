@@ -455,11 +455,24 @@ class AuthorityWorker(StageWorker):
         name: str,
         mazal: MazalMatcher,
         viaf: VIAFMatcher | None,
+        entity_type: str = "person",
     ) -> tuple[str | None, str | None]:
         """Match a name against Mazal and optionally VIAF authorities.
 
+        entity_type: "person" (default), "organization", or "meeting".
+        Corporate/meeting entities skip the person-specific VIAF search to
+        prevent cross-type cluster assignment (root cause of the 2026-04-15
+        library-items-with-person-VIAF-IDs incident).
+
         Returns tuple of (mazal_id, viaf_uri).
         """
+        # Organizations and meetings must not be matched via person-name VIAF
+        # search — they have separate VIAF authority name types ("Corporate",
+        # "Geographic"). Matching them via local.personalNames risks returning
+        # a personal cluster with a coincidentally similar name.
+        if entity_type in ("organization", "meeting"):
+            return None, None
+
         mazal_id = mazal.match_person(name)
         viaf_uri = None
 
@@ -516,7 +529,8 @@ class AuthorityWorker(StageWorker):
 
         name = str(person.get("name", "")).strip()
         role_value = str(person.get("role", role))
-        mazal_id, viaf_uri = self._match_against_authorities(name, mazal, viaf)
+        entity_type = str(person.get("type", "person"))
+        mazal_id, viaf_uri = self._match_against_authorities(name, mazal, viaf, entity_type=entity_type)
 
         match_info = self._create_match_info(
             name=name,

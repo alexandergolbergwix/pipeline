@@ -506,3 +506,15 @@ After the 2026-04-15 Wikidata talk report (three library items — Q138937383, Q
 | P214 is_org guard | `converter/wikidata/item_builder.py` | `if viaf_id and not is_org:` — P214 is never attached to organisation items. |
 
 Tests added (9): `TestVIAFNameTypeGuard` (9 tests — `test_match_person_rejects_corporate_cluster`, `test_match_person_accepts_personal_cluster`, `test_match_place_rejects_personal_cluster`, `test_match_place_accepts_geographic_cluster`, `test_missing_name_type_not_rejected`, `test_get_cluster_identifiers_returns_name_type`, `test_p214_guarded_by_not_is_org_in_source`, `test_match_person_passes_expected_name_type_personal`, `test_match_place_passes_expected_name_type_geographic`). Total now **139**.
+
+### 30. Fourth audit pipeline fixes (added 2026-04-16)
+
+A follow-up web audit (2026-04-16) found three more issues discovered through community feedback:
+
+| Fix | Description | File | Wikidata policy |
+|---|---|---|---|
+| #1 | P7153 P3831 qualifier: replace Q1616923 (Heydeck disambiguation page) with Q1773840 (provenance concept) | `item_builder.py` | [Property:P3831](https://www.wikidata.org/wiki/Property:P3831), [Q1773840](https://www.wikidata.org/wiki/Q1773840) |
+| #2 | Organization/meeting contributors skip VIAF person-name search in `_match_against_authorities()` | `workers.py` | VIAF nameType cross-validation |
+| #3 | P2093 fallback adds P3831 role qualifier (scribe=Q916292, translator=Q333634, commentator=Q106313281); owner role suppressed (P127 has no string fallback — covered by P7535 provenance text) | `item_builder.py` | [Property:P2093](https://www.wikidata.org/wiki/Property:P2093), [Property:P3831](https://www.wikidata.org/wiki/Property:P3831) |
+
+Tests added (8): `TestP7153RoleQIDIsProvenance` (2), `TestOrgTypeSkipsVIAFPersonSearch` (3), `TestP2093RoleQualifier` (3). Total now **147**.

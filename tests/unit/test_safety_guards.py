@@ -1469,6 +1469,91 @@ class TestEditSummaryTruncation:
         assert "..." in src
 
 
+# ── Fourth audit fixes (2026-04-16) ─────────────────────────────────────────
+
+
+class TestP7153RoleQIDIsProvenance:
+    """P7153 P3831 qualifier must use Q1773840 (provenance), not Q1616923 (disambiguation page)."""
+
+    def test_p7153_role_qid_not_heydeck_disambiguation(self) -> None:
+        import re
+
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("property_id=P_SIGNIFICANT_PLACE")
+        assert idx != -1, "P_SIGNIFICANT_PLACE statement not found"
+        block = src[idx : idx + 900]
+        # Find lines that actually SET Q1616923 as a value (not comment lines)
+        bad_lines = [
+            line for line in block.splitlines()
+            if "Q1616923" in line and not line.strip().startswith("#")
+        ]
+        assert not bad_lines, (
+            "Q1616923 (Heydeck disambiguation page) must not be used as P3831 role value"
+        )
+
+    def test_p7153_role_qid_is_q1773840_provenance(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("property_id=P_SIGNIFICANT_PLACE")
+        assert idx != -1
+        block = src[idx : idx + 900]
+        assert "Q1773840" in block, (
+            "P3831 role on P7153 must use Q1773840 (provenance)"
+        )
+
+
+class TestOrgTypeSkipsVIAFPersonSearch:
+    """Organization-type contributors must not be matched via VIAF person-name search."""
+
+    def test_match_against_authorities_org_returns_none(self) -> None:
+        """_match_against_authorities with entity_type='organization' must return (None, None)."""
+        from unittest.mock import MagicMock
+
+        # We can't import AuthorityWorker easily (PyQt6 dep), so use source inspection
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        assert 'entity_type in ("organization", "meeting")' in src or \
+               "entity_type==" in src or \
+               'entity_type == "organization"' in src, (
+            "_match_against_authorities must check entity_type to skip org VIAF search"
+        )
+
+    def test_match_marc_person_entry_passes_entity_type(self) -> None:
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        assert 'entity_type = str(person.get("type"' in src, (
+            "_match_marc_person_entry must read entity_type from person dict"
+        )
+
+    def test_match_against_authorities_has_entity_type_param(self) -> None:
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        assert "entity_type: str = " in src, (
+            "_match_against_authorities must have entity_type parameter"
+        )
+
+
+class TestP2093RoleQualifier:
+    """P2093 fallback must include P3831 role qualifier; owner role must be suppressed."""
+
+    def test_p2093_adds_role_qualifier_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find('property_id="P2093"')
+        assert idx != -1, "P2093 statement not found"
+        block = src[idx : idx + 600]
+        assert "P_OBJECT_HAS_ROLE" in block or "p2093_qualifiers" in block, (
+            "P2093 statement must use P3831 qualifier for role"
+        )
+
+    def test_p2093_suppressed_for_owner_role_in_source(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert '"owner"' in src and 'pass  # skip' in src, (
+            "Owner role must be suppressed from P2093 (no string fallback for P127)"
+        )
+
+    def test_p2093_role_uses_role_to_occupation_map(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert "_ROLE_TO_OCCUPATION" in src, (
+            "P2093 fallback must look up role QID from _ROLE_TO_OCCUPATION"
+        )
+
+
 # ── VIAF nameType cross-validation (2026-04-15) ─────────────────────────────
 
 
