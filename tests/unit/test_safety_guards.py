@@ -1886,5 +1886,88 @@ class TestQualifierExport:
         assert len(parts) == 3, f"Expected 3 parts (qid/prop/val), got {len(parts)}: {parts}"
 
 
+# ── Second-round QS output fixes (2026-04-19) ────────────────────────────────
+
+
+class TestMrcFilenameNotInNotes:
+    """Bug fix: NLI source filenames in MARC 500 must not become P7535 notes."""
+
+    def test_mrc_filename_filtered_by_regex(self) -> None:
+        """_SOURCE_FILENAME_RE must match NLI-style MRC filenames."""
+        from converter.wikidata.item_builder import _SOURCE_FILENAME_RE
+
+        assert _SOURCE_FILENAME_RE.match("990000623390205171.mrc")
+        assert _SOURCE_FILENAME_RE.match("BIBLIOGRAPHIC_50929717600005171_5.txt")
+
+    def test_real_note_not_filtered(self) -> None:
+        """Regular Hebrew notes must NOT match the filename regex."""
+        from converter.wikidata.item_builder import _SOURCE_FILENAME_RE
+
+        assert not _SOURCE_FILENAME_RE.match("כתב היד נכתב במאה ה-15")
+        assert not _SOURCE_FILENAME_RE.match("בכה\"י: גינת אגוז מאת יוסף גיקטילא")
+
+    def test_source_filename_re_in_notes_loop(self) -> None:
+        """Source code: the notes loop must use _SOURCE_FILENAME_RE to skip filenames."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert "_SOURCE_FILENAME_RE" in src, "_SOURCE_FILENAME_RE not defined in item_builder.py"
+        assert "_SOURCE_FILENAME_RE.match(note_text)" in src, (
+            "notes loop must call _SOURCE_FILENAME_RE.match(note_text)"
+        )
+
+
+class TestAsciiOnlyDescription:
+    """Bug fix: Arabic/non-ASCII dates must be stripped from English descriptions."""
+
+    def test_arabic_dates_stripped_from_description(self) -> None:
+        """dates_str with Arabic text → description contains no non-ASCII characters."""
+        from converter.wikidata.item_builder import _build_person_description
+
+        desc = _build_person_description("AUTHOR", "توفي 1013", False)
+        non_ascii = [c for c in desc if ord(c) >= 128]
+        assert not non_ascii, f"Non-ASCII chars in description: {non_ascii!r} in {desc!r}"
+
+    def test_mixed_dates_keeps_ascii_digits(self) -> None:
+        """Pure ASCII dates string is preserved unchanged in the description."""
+        from converter.wikidata.item_builder import _build_person_description
+
+        desc = _build_person_description("AUTHOR", "882-942", False)
+        assert desc == "author (882-942)", f"Unexpected: {desc!r}"
+
+    def test_empty_dates_no_regression(self) -> None:
+        """Empty dates_str still produces the role-based description."""
+        from converter.wikidata.item_builder import _build_person_description
+
+        desc = _build_person_description("AUTHOR", "", False)
+        assert desc == "Hebrew manuscript author"
+
+
+class TestP1932TrailingPunctuationStripped:
+    """Bug fix: P1932 (object named as) qualifiers must strip trailing MARC punctuation."""
+
+    def test_p1932_rstrip_logic(self) -> None:
+        """The rstrip pattern correctly removes trailing commas and colons."""
+        assert "סעדיה בן יוסף,".strip().rstrip(",;:") == "סעדיה בן יוסף"
+        assert "יהודה בן יצחק:".strip().rstrip(",;:") == "יהודה בן יצחק"
+        assert "שמואל בן חפני,".strip().rstrip(",;:") == "שמואל בן חפני"
+
+    def test_p1932_in_add_person_statement_has_rstrip(self) -> None:
+        """Source code: P1932 qualifier in _add_person_statement uses .rstrip(',;:')."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("P_OBJECT_NAMED_AS, \"value\": name")
+        assert idx != -1, "P1932 name qualifier not found in _add_person_statement"
+        line = src[idx : idx + 80]
+        assert 'rstrip(",;:")' in line, (
+            f"P1932 name qualifier must call .rstrip(',;:'), found: {line!r}"
+        )
+
+    def test_p1932_in_provenance_claims_has_rstrip(self) -> None:
+        """Source code: P1932 qualifier in _add_provenance_claims uses .rstrip(',;:')."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The owner_name is assigned with rstrip on its own line in the dict value
+        assert 'owner_name.rstrip(",;:")' in src, (
+            "P1932 owner_name in _add_provenance_claims must call .rstrip(',;:')"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

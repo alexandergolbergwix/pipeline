@@ -198,6 +198,14 @@ def _is_anonymous_name(name: str) -> bool:
     return name.strip().lower().rstrip(".,;:") in _ANONYMOUS_NAMES
 
 
+# NLI's catalog stores the source filename as the first MARC 500 general-note
+# field (e.g. "990000623390205171.mrc", "BIBLIOGRAPHIC_50929717600005171_5.txt").
+# These must never be emitted as P7535 scope/content notes on Wikidata.
+_SOURCE_FILENAME_RE = re.compile(
+    r"^[A-Za-z0-9_\-]+\.(mrc|txt|csv|xml|json)$", re.IGNORECASE
+)
+
+
 def _is_institutional_name(name: str) -> bool:
     """True if the name looks like an institution (library, museum, etc.).
 
@@ -266,6 +274,18 @@ def _cap_description(desc: str, max_len: int = 250) -> str:
     Fix 2026-04-15 third audit Fix #14.
     """
     return desc[:max_len] if len(desc) > max_len else desc
+
+
+def _ascii_dates(s: str) -> str:
+    """Return only the ASCII portion of a dates string for English descriptions.
+
+    MARC authority data for medieval scholars (Geonim etc.) sometimes stores
+    Arabic date expressions (e.g. 'توفي 1013' = 'died 1013'). Wikidata English
+    descriptions must be readable by all patrollers regardless of script.
+    Non-ASCII chars are dropped; surrounding noise is trimmed.
+    """
+    cleaned = "".join(c for c in s if ord(c) < 128).strip(" .,;:-")
+    return cleaned
 
 
 def _build_work_description(author_name: str | None, century: str | None) -> str:
@@ -343,17 +363,21 @@ def _build_person_description(role: str, dates_str: str, is_org: bool) -> str:
     manuscripts". Now incorporates the role so e.g. two different scribes
     with the same name can be told apart.
     """
+    # Strip non-ASCII from dates_str: NLI/Mazal authority data for Gaonic-era
+    # scholars stores Arabic date expressions (e.g. 'توفي 1013'). English
+    # descriptions must be ASCII-readable for all Wikidata patrollers.
+    safe_dates = _ascii_dates(dates_str) if dates_str else ""
     if is_org:
-        if dates_str:
-            return _cap_description(f"organization ({dates_str})")
+        if safe_dates:
+            return _cap_description(f"organization ({safe_dates})")
         return "organization associated with Hebrew manuscripts"
     role_label = _ROLE_TO_LABEL.get((role or "").strip(), "")
-    if role_label and dates_str:
-        return _cap_description(f"{role_label} ({dates_str})")
+    if role_label and safe_dates:
+        return _cap_description(f"{role_label} ({safe_dates})")
     if role_label:
         return _cap_description(f"Hebrew manuscript {role_label}")
-    if dates_str:
-        return _cap_description(f"person ({dates_str})")
+    if safe_dates:
+        return _cap_description(f"person ({safe_dates})")
     return "person associated with Hebrew manuscripts"
 
 
@@ -923,16 +947,19 @@ class WikidataItemBuilder:
         # ── General notes (MARC 500) → P7535 ────────────────────
         for note in record.get("notes") or []:
             note_text = str(note).strip()
-            if note_text and note_text != "None" and len(note_text) > 5:
-                item.statements.append(
-                    WikidataStatement(
-                        property_id="P7535",
-                        value=note_text[:1500],
-                        value_type="monolingualtext",
-                        language="he",
-                        references=ref,
-                    )
+            if not note_text or note_text == "None" or len(note_text) <= 5:
+                continue
+            if _SOURCE_FILENAME_RE.match(note_text):
+                continue  # skip internal NLI catalog filenames (MARC 500 artifact)
+            item.statements.append(
+                WikidataStatement(
+                    property_id="P7535",
+                    value=note_text[:1500],
+                    value_type="monolingualtext",
+                    language="he",
+                    references=ref,
                 )
+            )
 
         # ── Provenance raw text (MARC 561) → P7535 + provenance qualifier
         prov_text = record.get("provenance")
@@ -1433,7 +1460,7 @@ class WikidataItemBuilder:
                 owner_qualifiers.append(
                     {
                         "property": P_OBJECT_NAMED_AS,
-                        "value": owner_name,
+                        "value": owner_name.rstrip(",;:"),
                         "type": "string",
                     }
                 )
@@ -1562,7 +1589,7 @@ class WikidataItemBuilder:
                         value_type="item",
                         references=ref,
                         qualifiers=[
-                            {"property": P_OBJECT_NAMED_AS, "value": name, "type": "string"}
+                            {"property": P_OBJECT_NAMED_AS, "value": name.strip().rstrip(",;:"), "type": "string"}
                         ],
                     )
                 )
