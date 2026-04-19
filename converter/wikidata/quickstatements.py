@@ -62,6 +62,28 @@ def _format_value(stmt: WikidataStatement) -> str:
     return f'"{_escape_qs(str(stmt.value))}"'
 
 
+def _format_qualifier(qual: dict[str, object]) -> str:
+    """Format a single qualifier snak for QuickStatements.
+
+    Qualifiers use the P-prefix (unlike references which use S-prefix).
+
+    Args:
+        qual: Dict with 'property', 'value', 'type' keys.
+
+    Returns:
+        Tab-separated qualifier components.
+    """
+    pid = str(qual.get("property", ""))
+    value = qual.get("value", "")
+    vtype = qual.get("type", "string")
+    if vtype == "item":
+        return f"{pid}\t{value}"
+    if vtype == "time":
+        prec = qual.get("precision", 11)
+        return f"{pid}\t{value}/{prec}"
+    return f'{pid}\t"{_escape_qs(str(value))}"'
+
+
 def _format_reference(ref_snak: dict[str, str]) -> str:
     """Format a single reference snak for QuickStatements.
 
@@ -106,6 +128,11 @@ class QuickStatementsExporter:
         Returns:
             Multi-line QuickStatements text for this item.
         """
+        # Bug fix 2026-04-19: notability-filtered persons have no labels or
+        # statements. Emitting a lone CREATE line for them is invalid QS syntax.
+        if not item.existing_qid and not item.labels and not item.statements:
+            return ""
+
         lines: list[str] = []
 
         if item.existing_qid:
@@ -132,7 +159,11 @@ class QuickStatementsExporter:
             value_str = _format_value(stmt)
             line_parts = [qid, stmt.property_id, value_str]
 
-            # Add references
+            # Qualifiers must appear before references per QS v2 format
+            for qual in stmt.qualifiers or []:
+                line_parts.append(_format_qualifier(qual))
+
+            # References
             for ref_snak in stmt.references:
                 line_parts.append(_format_reference(ref_snak))
 
@@ -162,8 +193,9 @@ class QuickStatementsExporter:
         )
 
         for person in persons:
-            blocks.append(self.export_item(person))
-            blocks.append("")  # Blank line between items
+            if block := self.export_item(person):
+                blocks.append(block)
+                blocks.append("")  # Blank line between items
 
         blocks.append("\n/* Manuscripts */\n")
 

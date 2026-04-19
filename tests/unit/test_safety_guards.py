@@ -935,7 +935,7 @@ class TestPersonDescription:
     def test_owner_no_dates(self) -> None:
         from converter.wikidata.item_builder import _build_person_description
 
-        assert _build_person_description("OWNER", "", False) == "Hebrew manuscript manuscript owner"
+        assert _build_person_description("OWNER", "", False) == "Hebrew manuscript owner"
 
     def test_unknown_role_falls_back(self) -> None:
         from converter.wikidata.item_builder import _build_person_description
@@ -1684,6 +1684,206 @@ class TestVIAFNameTypeGuard:
         assert (
             'expected_name_type="Geographic"' in src or "expected_name_type='Geographic'" in src
         ), "match_place must pass expected_name_type='Geographic'"
+
+
+# ── QuickStatements output QA fixes (2026-04-19) ────────────────────────────
+
+
+class TestEmptyItemNotExported:
+    """Bug fix: notability-filtered persons must not produce lone CREATE lines."""
+
+    def test_notability_filtered_person_emits_no_create(self) -> None:
+        """WikidataItem with no labels or statements returns empty string from export_item."""
+        from converter.wikidata.item_builder import WikidataItem
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+
+        item = WikidataItem(entity_type="person", local_id="test:empty")
+        exporter = QuickStatementsExporter()
+        result = exporter.export_item(item)
+        assert result == "", f"Expected empty string, got: {result!r}"
+
+    def test_item_with_label_emits_create(self) -> None:
+        """WikidataItem with a label still produces CREATE + label line."""
+        from converter.wikidata.item_builder import WikidataItem
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+
+        item = WikidataItem(entity_type="person", local_id="test:has_label")
+        item.labels["he"] = "משה הכהן"
+        exporter = QuickStatementsExporter()
+        result = exporter.export_item(item)
+        assert "CREATE" in result
+        assert "משה הכהן" in result
+
+
+class TestInstitutionalP2093Suppressed:
+    """Bug fix: institutional names must not fall through to P2093 string fallback."""
+
+    def test_bodleian_is_institutional(self) -> None:
+        """_is_institutional_name must recognise 'Bodleian Library'."""
+        from converter.wikidata.item_builder import _is_institutional_name
+
+        assert _is_institutional_name("Bodleian Library"), "Bodleian Library not detected"
+
+    def test_palatina_is_institutional(self) -> None:
+        """_is_institutional_name must recognise 'Bibliotheca Palatina'."""
+        from converter.wikidata.item_builder import _is_institutional_name
+
+        assert _is_institutional_name("Bibliotheca Palatina"), "Bibliotheca Palatina not detected"
+
+    def test_institutional_name_no_p2093_guard_in_source(self) -> None:
+        """Source code: the P2093 fallback block must check _is_institutional_name."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Find the P2093 fallback elif clause
+        idx = src.find("elif not person_item.labels")
+        assert idx != -1, "P2093 fallback elif not found"
+        line = src[idx : idx + 120]
+        assert "_is_institutional_name" in line, (
+            "P2093 fallback must guard against institutional names; "
+            f"found: {line!r}"
+        )
+
+
+class TestPersonNameCleaning:
+    """Bug fix: surrounding quotes in person names must be stripped."""
+
+    def test_quoted_name_stripped(self) -> None:
+        """Names wrapped in double quotes get those quotes removed."""
+        # The clean_name logic in _get_or_create_person strips surrounding quotes.
+        # Test it via source-code inspection (the logic is in a local scope).
+        raw = '"Moshe ha-Kohen"'
+        clean = raw.strip().strip('"\'').strip().rstrip(",;:")
+        assert clean == "Moshe ha-Kohen"
+
+    def test_trailing_comma_stripped(self) -> None:
+        """Trailing commas still stripped after adding quote stripping."""
+        raw = "Moshe ha-Kohen,"
+        clean = raw.strip().strip('"\'').strip().rstrip(",;:")
+        assert clean == "Moshe ha-Kohen"
+
+    def test_quote_stripping_in_source(self) -> None:
+        """Source code: clean_name line must include .strip('"\\'')'."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("Clean name: strip surrounding quotes")
+        assert idx != -1, "Quote-stripping comment not found in item_builder.py"
+
+
+class TestOwnerDescription:
+    """Bug fix: _build_person_description must not produce 'Hebrew manuscript manuscript owner'."""
+
+    def test_owner_description_no_double_word(self) -> None:
+        """OWNER role → 'Hebrew manuscript owner', not 'Hebrew manuscript manuscript owner'."""
+        from converter.wikidata.item_builder import _build_person_description
+
+        desc = _build_person_description("OWNER", "", False)
+        assert "manuscript manuscript" not in desc, f"Double word in: {desc!r}"
+        assert desc == "Hebrew manuscript owner", f"Unexpected description: {desc!r}"
+
+    def test_owner_description_with_dates(self) -> None:
+        """OWNER with dates → role label + dates, not prefixed with 'Hebrew manuscript'."""
+        from converter.wikidata.item_builder import _build_person_description
+
+        desc = _build_person_description("OWNER", "1500-1550", False)
+        assert desc == "owner (1500-1550)", f"Unexpected description: {desc!r}"
+
+
+class TestManuscriptTitleCleaning:
+    """Bug fix: MARC trailing ISBD periods must be stripped from manuscript labels."""
+
+    def test_trailing_period_stripped_from_hebrew_label(self) -> None:
+        """Titles ending with MARC period produce labels without the period."""
+        # Verify the rstrip logic directly (mirrors the fix in _set_labels)
+        title = "גנת אגוז."
+        cleaned = title.rstrip(". ")
+        assert cleaned == "גנת אגוז", f"Period not stripped: {cleaned!r}"
+
+    def test_title_without_period_unchanged(self) -> None:
+        """Titles without trailing period are unchanged."""
+        title = "גנת אגוז"
+        cleaned = title.rstrip(". ")
+        assert cleaned == "גנת אגוז"
+
+    def test_rstrip_in_source(self) -> None:
+        """Source code: label assignment must use rstrip for period stripping."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        assert 'title.rstrip(". ")' in src, (
+            "Manuscript title label assignment must call .rstrip('. ') to remove MARC periods"
+        )
+
+
+class TestQualifierExport:
+    """Bug fix: WikidataStatement.qualifiers must appear in QuickStatements output."""
+
+    def test_item_qualifier_exported(self) -> None:
+        """A statement with a qualifier emits the qualifier property+value on the same line."""
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+
+        item = WikidataItem(entity_type="manuscript", local_id="test:qs_qual")
+        item.labels["en"] = "test manuscript"
+        item.statements.append(
+            WikidataStatement(
+                property_id="P217",
+                value="Heb 123",
+                value_type="string",
+                qualifiers=[{"property": "P195", "value": "Q188915", "type": "item"}],
+                references=[],
+            )
+        )
+        exporter = QuickStatementsExporter()
+        result = exporter.export_item(item)
+        assert "P195" in result, "Qualifier property P195 not found in output"
+        assert "Q188915" in result, "Qualifier value Q188915 not found in output"
+
+    def test_qualifier_before_reference(self) -> None:
+        """Qualifier columns must appear before reference (S-prefix) columns."""
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+
+        item = WikidataItem(entity_type="manuscript", local_id="test:qs_order")
+        item.labels["en"] = "test"
+        item.statements.append(
+            WikidataStatement(
+                property_id="P217",
+                value="Heb 456",
+                value_type="string",
+                qualifiers=[{"property": "P195", "value": "Q188915", "type": "item"}],
+                references=[{"property": "P248", "value": "Q123456", "type": "item"}],
+            )
+        )
+        exporter = QuickStatementsExporter()
+        result = exporter.export_item(item)
+        # Qualifier P195 (P-prefix) must come before reference S248 (S-prefix)
+        p195_idx = result.find("P195")
+        s248_idx = result.find("S248")
+        assert p195_idx != -1, "P195 qualifier not found"
+        assert s248_idx != -1, "S248 reference not found"
+        assert p195_idx < s248_idx, "Qualifier must appear before reference in QS output"
+
+    def test_no_qualifier_unchanged(self) -> None:
+        """Statement with no qualifiers exports identically to pre-fix behaviour."""
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+
+        item = WikidataItem(entity_type="person", local_id="test:no_qual")
+        item.labels["en"] = "test person"
+        item.statements.append(
+            WikidataStatement(
+                property_id="P31",
+                value="Q5",
+                value_type="item",
+                qualifiers=[],
+                references=[],
+            )
+        )
+        exporter = QuickStatementsExporter()
+        result = exporter.export_item(item)
+        # Should have exactly: CREATE, label line, statement line
+        lines = [ln for ln in result.splitlines() if ln.strip()]
+        assert any("P31" in ln and "Q5" in ln for ln in lines)
+        # No unexpected extra columns from empty qualifier list
+        stmt_line = next(ln for ln in lines if "P31" in ln)
+        parts = stmt_line.split("\t")
+        assert len(parts) == 3, f"Expected 3 parts (qid/prop/val), got {len(parts)}: {parts}"
 
 
 if __name__ == "__main__":

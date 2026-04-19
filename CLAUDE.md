@@ -518,3 +518,19 @@ A follow-up web audit (2026-04-16) found three more issues discovered through co
 | #3 | P2093 fallback adds P3831 role qualifier (scribe=Q916292, translator=Q333634, commentator=Q106313281); owner role suppressed (P127 has no string fallback — covered by P7535 provenance text) | `item_builder.py` | [Property:P2093](https://www.wikidata.org/wiki/Property:P2093), [Property:P3831](https://www.wikidata.org/wiki/Property:P3831) |
 
 Tests added (8): `TestP7153RoleQIDIsProvenance` (2), `TestOrgTypeSkipsVIAFPersonSearch` (3), `TestP2093RoleQualifier` (3). Total now **147**.
+
+### 31. QuickStatements output QA fixes (added 2026-04-19)
+
+After running 6 NER-article manuscripts through the pipeline and auditing the QuickStatements output, 6 bugs were found and fixed.
+
+| Fix | Description | File | Source |
+|---|---|---|---|
+| #1 | Empty CREATE blocks suppressed for notability-filtered persons (no labels/statements) | `quickstatements.py:export_item` | QS output audit |
+| #2a | P2093 fallback block guarded by `not _is_institutional_name(name)` — institutions never get P2093 | `item_builder.py:~1523` | QS output audit |
+| #2b | `_INSTITUTIONAL_KEYWORDS` extended with "bodleian", "palatina" | `item_builder.py:148` | QS output audit |
+| #3 | Person name cleaning strips surrounding quotes: `.strip('"\')` before `rstrip(",;:")` | `item_builder.py:1602` | QS output audit |
+| #4 | `_ROLE_TO_LABEL["OWNER"]` changed from "manuscript owner" to "owner" (was producing "Hebrew manuscript manuscript owner") | `item_builder.py:292` | QS output audit |
+| #5 | Manuscript Hebrew/English labels strip trailing MARC ISBD periods: `title.rstrip(". ")` | `item_builder.py:1022` | QS output audit |
+| #6 | QuickStatements exporter now exports `stmt.qualifiers` before references on each statement line | `quickstatements.py:export_item` | QS output audit |
+
+Tests added (16): `TestEmptyItemNotExported` (2), `TestInstitutionalP2093Suppressed` (3), `TestPersonNameCleaning` (3), `TestOwnerDescription` (2), `TestManuscriptTitleCleaning` (3), `TestQualifierExport` (3). Total now **163**.

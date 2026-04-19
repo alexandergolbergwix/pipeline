@@ -161,6 +161,8 @@ _INSTITUTIONAL_KEYWORDS: tuple[str, ...] = (
     "centre",
     "center",
     "archive",
+    "bodleian",   # Bodleian Library, Oxford
+    "palatina",   # Bibliotheca Palatina
     "ספרייה",
     "מכון",
     "אוניברסיטה",
@@ -289,8 +291,8 @@ _ROLE_TO_LABEL: dict[str, str] = {
     "author": "author",
     "SCRIBE": "scribe",
     "scribe": "scribe",
-    "OWNER": "manuscript owner",
-    "owner": "manuscript owner",
+    "OWNER": "owner",
+    "owner": "owner",
     "TRANSLATOR": "translator",
     "translator": "translator",
     "EDITOR": "editor",
@@ -1020,8 +1022,8 @@ class WikidataItemBuilder:
         is_placeholder = _is_placeholder_title(title)
         shelfmark = record.get("shelfmark")
         if title and not is_placeholder:
-            item.labels["he"] = title
-            item.labels["en"] = title
+            item.labels["he"] = title.rstrip(". ")
+            item.labels["en"] = title.rstrip(". ")
         elif title:
             # Placeholder: keep the original cataloger string as a Hebrew
             # alias for searchability, but do NOT use it as the label.
@@ -1520,7 +1522,7 @@ class WikidataItemBuilder:
                         references=ref,
                     )
                 )
-            elif not person_item.labels:
+            elif not person_item.labels and not _is_institutional_name(name):
                 # Fix 2026-04-15 third audit Fix #8: the notability gate skipped
                 # this person (no external identifiers). Use P2093 (author name
                 # string) as a string fallback so the name is not silently lost.
@@ -1598,8 +1600,8 @@ class WikidataItemBuilder:
 
         person = WikidataItem(entity_type="person", local_id=key)
 
-        # Clean name: strip trailing punctuation that comes from MARC formatting
-        clean_name = name.strip().rstrip(",;:")
+        # Clean name: strip surrounding quotes and trailing punctuation from MARC
+        clean_name = name.strip().strip('"\'').strip().rstrip(",;:")
         if not clean_name or len(clean_name) < 2:
             # Skip creating items with incomplete/empty names
             self._person_items[key] = person
