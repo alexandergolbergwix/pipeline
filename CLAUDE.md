@@ -534,3 +534,26 @@ After running 6 NER-article manuscripts through the pipeline and auditing the Qu
 | #6 | QuickStatements exporter now exports `stmt.qualifiers` before references on each statement line | `quickstatements.py:export_item` | QS output audit |
 
 Tests added (16): `TestEmptyItemNotExported` (2), `TestInstitutionalP2093Suppressed` (3), `TestPersonNameCleaning` (3), `TestOwnerDescription` (2), `TestManuscriptTitleCleaning` (3), `TestQualifierExport` (3). Total now **163**.
+
+### 32. Second-round QS output fixes (added 2026-04-19)
+
+Re-running 6 NER manuscripts after the first fix round revealed 3 more bugs, then a third round revealed 2 more.
+
+**Round 2 (163 → 172 tests):**
+
+| Fix | Description | File | Source |
+|---|---|---|---|
+| #A | MARC 500 source filenames (`*.mrc`, `*.txt`) filtered from P7535 via `_SOURCE_FILENAME_RE` | `item_builder.py` | QS output audit |
+| #B | Arabic/non-ASCII date strings stripped from English descriptions via `_ascii_dates()` | `item_builder.py` | QS output audit |
+| #C | P1932 (object named as) qualifier strips trailing MARC commas/colons in both `_add_person_statement` and `_add_provenance_claims` | `item_builder.py` | QS output audit |
+
+Tests added (9): `TestMrcFilenameNotInNotes` (3), `TestAsciiOnlyDescription` (3), `TestP1932TrailingPunctuationStripped` (3). Total now **172**.
+
+**Round 3 (172 → 175 tests):**
+
+| Fix | Description | File | Source |
+|---|---|---|---|
+| #D | P1476 title statement strips trailing ISBD period at source: `title.rstrip(". ")` in `build_manuscript_item` | `item_builder.py:490` | QS output audit |
+| #E | Variant title aliases strip trailing periods: `str(vt).strip().rstrip(". ")` in `_set_labels` | `item_builder.py:1070` | QS output audit |
+
+Tests added (3): `TestTitleTrailingPeriodStripped` (3). Total now **175**.

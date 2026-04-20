@@ -1969,5 +1969,71 @@ class TestP1932TrailingPunctuationStripped:
         )
 
 
+class TestTitleTrailingPeriodStripped:
+    """P1476 title statements and aliases must not carry trailing ISBD periods."""
+
+    def test_p1476_title_has_no_trailing_period(self) -> None:
+        """build_manuscript_item strips trailing period from P1476 monolingualtext value."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990001",
+            "title": "גנת אגוז.",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        title_stmts = [s for s in item.statements if s.property_id == "P1476"]
+        assert title_stmts, "P1476 statement must exist"
+        assert title_stmts[0].value == "גנת אגוז", (
+            f"P1476 must not have trailing period, got {title_stmts[0].value!r}"
+        )
+
+    def test_alias_has_no_trailing_period(self) -> None:
+        """Aliases added from the manuscript title must not carry trailing periods."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990002",
+            "title": "גנת אגוז.",
+            "shelfmark": "F 8566",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        he_aliases = item.aliases.get("he", [])
+        for alias in he_aliases:
+            assert not alias.endswith("."), (
+                f"Alias must not end with period, got {alias!r}"
+            )
+
+    def test_variant_title_alias_has_no_trailing_period(self) -> None:
+        """Variant titles added as aliases must have trailing periods stripped."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990003",
+            "title": "ספר אהבה.",
+            "shelfmark": "F 1234",
+            "notes": [],
+            "variant_titles": ["ספר האהבה."],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        he_aliases = item.aliases.get("he", [])
+        for alias in he_aliases:
+            assert not alias.endswith("."), (
+                f"Variant title alias must not end with period, got {alias!r}"
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

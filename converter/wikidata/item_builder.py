@@ -487,7 +487,7 @@ class WikidataItemBuilder:
     def build_manuscript_item(self, record: dict[str, object]) -> WikidataItem:
         """Build a Wikidata item for a single manuscript record."""
         control_number = str(record.get("_control_number", ""))
-        title = str(record.get("title", "")).strip()
+        title = str(record.get("title", "")).strip().rstrip(". ")
         ref = nli_reference(control_number)
 
         item = WikidataItem(entity_type="manuscript", local_id=control_number)
@@ -1067,7 +1067,7 @@ class WikidataItemBuilder:
 
         # Variant titles as aliases
         for vt in record.get("variant_titles") or []:
-            item.aliases.setdefault("he", []).append(str(vt))
+            item.aliases.setdefault("he", []).append(str(vt).strip().rstrip(". "))
 
         # Description
         langs = record.get("languages") or []
