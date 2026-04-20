@@ -48,7 +48,7 @@ from converter.wikidata.property_mapping import GENRE_TO_QID  # noqa: E402
 
 # Minimum training examples required to include a genre class.
 # Genres below this threshold go to the NOTA ("none of the above") class.
-MIN_GENRE_EXAMPLES: int = 20
+MIN_GENRE_EXAMPLES: int = 50
 
 # Sentinel label for "not one of the top genres" — allows the model to abstain.
 NOTA_LABEL: str = "__NOTA__"
@@ -291,7 +291,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Genre Classifier Training (distant supervision)")
     parser.add_argument(
         "--tsv-files", nargs="+",
-        default=["data/tsvs/17th_century_samples.tsv", "data/tsvs/top100_richest.tsv"],
+        default=[
+            "data/tsvs/17th_century_samples.tsv",
+            "data/tsvs/top100_richest.tsv",
+            "data/tsvs/filtered_manuscripts_after_906a.tsv",
+        ],
     )
     parser.add_argument("--output", default="ner/genre_classifier_model.pt")
     parser.add_argument("--model-name", default="dicta-il/dictabert")
