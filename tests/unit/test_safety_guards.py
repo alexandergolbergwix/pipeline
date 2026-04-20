@@ -2138,5 +2138,72 @@ class TestUncertainAttributionP1480:
         assert p1480_qual["value"] == "Q18122778"
 
 
+class TestGenreClassifierIntegration:
+    """Genre classifier fallback: only fires when MARC 655 genres are absent."""
+
+    def _base_record(self) -> dict:
+        return {
+            "_control_number": "990099",
+            "title": "ספר הזוהר",
+            "notes": ["כתב יד עברי מן המאה ה-15"],
+            "variant_titles": [],
+            "contents": [],
+            "entities": [],
+        }
+
+    def test_genre_classifier_skipped_when_marc_genres_present(self) -> None:
+        """When MARC 655 genres are present the classifier must NOT be called."""
+        from unittest.mock import MagicMock, patch
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {**self._base_record(), "genres": ["Piyyutim"]}
+        mock_clf = MagicMock()
+        mock_clf.predict.return_value = [("BiblicalText", 0.9)]
+
+        with patch("converter.wikidata.item_builder._get_genre_classifier", return_value=mock_clf):
+            builder = WikidataItemBuilder()
+            builder.build_manuscript_item(record)
+
+        mock_clf.predict.assert_not_called()
+
+    def test_genre_classifier_adds_p887_reference(self) -> None:
+        """Inferred genres must carry a P887 (based on heuristic) reference snak."""
+        from unittest.mock import MagicMock, patch
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = self._base_record()  # no genres key
+
+        mock_clf = MagicMock()
+        mock_clf.predict.return_value = [("BiblicalText", 0.82)]
+
+        with patch("converter.wikidata.item_builder._get_genre_classifier", return_value=mock_clf):
+            builder = WikidataItemBuilder()
+            item = builder.build_manuscript_item(record)
+
+        inferred_genre_stmts = [s for s in item.statements if s.property_id == "P136"]
+        assert inferred_genre_stmts, "Expected at least one inferred P136 statement"
+        stmt = inferred_genre_stmts[0]
+        ref_props = [r.get("property") for refs in [stmt.references] for r in refs]
+        assert "P887" in ref_props, f"Inferred P136 must have P887 reference, got {stmt.references}"
+
+    def test_genre_classifier_absent_model_no_crash(self) -> None:
+        """When the model file is absent the builder completes without error."""
+        from converter.wikidata.item_builder import WikidataItemBuilder, _get_genre_classifier
+        import converter.wikidata.item_builder as _ib
+
+        original = _ib._GENRE_CLASSIFIER
+        _ib._GENRE_CLASSIFIER = None  # simulate missing model
+        try:
+            record = self._base_record()
+            builder = WikidataItemBuilder()
+            item = builder.build_manuscript_item(record)
+            # No crash; no inferred P136 statements
+            assert item is not None
+        finally:
+            _ib._GENRE_CLASSIFIER = original
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

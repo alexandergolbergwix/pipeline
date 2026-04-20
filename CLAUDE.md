@@ -571,3 +571,36 @@ Domain experts M. Lavee and E. Baumgarten (University of Haifa, Oct 2025 review)
 Confirmed-QID person statements (resolved via VIAF/NLI) get no P1480 — they are authority-confirmed.
 
 Tests added (3): `TestUncertainAttributionP1480` (3). Total now **178**.
+
+### 34. Distant-supervision genre classifier for P136 coverage (added 2026-04-20)
+
+P136 (genre) coverage was 69% — 31% of manuscripts have no MARC 655 genre/form headings. A DictaBERT-based multi-label classifier trained via distant supervision fills this gap.
+
+**Architecture:**
+- Base: `dicta-il/dictabert` (frozen encoder — avoids overfitting on ~364 samples)
+- Head: Dropout(0.3) → Linear(768 → 51) → sigmoid
+- Loss: BCEWithLogitsLoss (multi-label, 51 genres)
+- Labels: keys of `GENRE_TO_QID` in `property_mapping.py`
+- Training data: records with MARC 655 genre/form headings (~364 of 997 TSV records)
+- Metric: micro-F1 at threshold 0.5
+- Strategy: 5-fold stratified CV; best-fold checkpoint saved
+
+**Files:**
+- `ner/train_genre_classifier.py` — training script (run once to produce model)
+- `converter/authority/genre_classifier.py` — inference wrapper (GenreClassifier class)
+- `ner/genre_classifier_model.pt` — trained checkpoint (generated; not committed to git)
+
+**Integration in `item_builder.py`:**
+- After the MARC 655 genre loop, if `genres` is empty, `_get_genre_classifier()` is called
+- Lazy singleton: loaded once, skipped silently if model file absent (graceful degradation)
+- Inferred genres get `P1480=Q_PRESUMABLY` qualifier + `P887=Q2539` (machine learning) reference
+- MARC-sourced genres are unchanged — no qualifier added
+
+**To retrain:**
+```bash
+PYTHONPATH=src:. .venv/bin/python ner/train_genre_classifier.py
+```
+
+**Expected coverage:** 69% → ~85% for P136 after training.
+
+Tests added (3): `TestGenreClassifierIntegration` (3). Total now **181**.

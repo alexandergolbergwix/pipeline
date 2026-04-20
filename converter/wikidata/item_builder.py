@@ -20,6 +20,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from converter.wikidata.property_mapping import (
     CONDITION_TO_QID,
@@ -207,6 +208,26 @@ def _is_anonymous_name(name: str) -> bool:
 _SOURCE_FILENAME_RE = re.compile(
     r"^[A-Za-z0-9_\-]+\.(mrc|txt|csv|xml|json)$", re.IGNORECASE
 )
+
+# ── Genre classifier lazy singleton ─────────────────────────────────
+# Loaded on first use; None when model file is absent (graceful degradation).
+_GENRE_CLASSIFIER: object | None = "unloaded"
+
+
+def _get_genre_classifier() -> object | None:
+    global _GENRE_CLASSIFIER
+    if _GENRE_CLASSIFIER == "unloaded":
+        model_path = Path(__file__).resolve().parent.parent.parent / "ner" / "genre_classifier_model.pt"
+        if model_path.exists():
+            try:
+                from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+                _GENRE_CLASSIFIER = GenreClassifier(str(model_path))
+            except Exception as exc:
+                logger.warning("Could not load genre classifier: %s", exc)
+                _GENRE_CLASSIFIER = None
+        else:
+            _GENRE_CLASSIFIER = None
+    return _GENRE_CLASSIFIER
 
 
 def _is_institutional_name(name: str) -> bool:
@@ -688,8 +709,9 @@ class WikidataItemBuilder:
                 )
             )
 
-        # ── Genres ───────────────────────────────────────────────
-        for genre in record.get("genres") or []:
+        # ── Genres (MARC 655) ────────────────────────────────────
+        marc_genres = record.get("genres") or []
+        for genre in marc_genres:
             qid = GENRE_TO_QID.get(str(genre))
             if qid:
                 item.statements.append(
@@ -700,6 +722,36 @@ class WikidataItemBuilder:
                         references=ref,
                     )
                 )
+
+        # ── Genre fallback: classifier when MARC 655 absent ──────
+        if not marc_genres:
+            _clf = _get_genre_classifier()
+            if _clf is not None:
+                heuristic_ref = list(ref) + [
+                    {"property": P_BASED_ON_HEURISTIC, "value": "Q2539", "type": "item"},
+                ]
+                inferred = _clf.predict(
+                    title,
+                    record.get("notes") or [],
+                )
+                for genre_str, _conf in inferred:
+                    qid = GENRE_TO_QID.get(genre_str)
+                    if qid:
+                        item.statements.append(
+                            WikidataStatement(
+                                property_id=P_GENRE,
+                                value=qid,
+                                value_type="item",
+                                qualifiers=[
+                                    {
+                                        "property": P_SOURCING_CIRCUMSTANCES,
+                                        "value": Q_PRESUMABLY,
+                                        "type": "item",
+                                    }
+                                ],
+                                references=heuristic_ref,
+                            )
+                        )
 
         # ── Subjects from canonical_references → P921 ────────────
         self._add_canonical_subjects(item, record, ref)
