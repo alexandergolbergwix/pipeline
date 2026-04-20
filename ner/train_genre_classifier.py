@@ -46,11 +46,14 @@ from converter.parser.unified_reader import UnifiedReader  # noqa: E402
 from converter.transformer.field_handlers import extract_all_data  # noqa: E402
 from converter.wikidata.property_mapping import GENRE_TO_QID  # noqa: E402
 
-# Minimum training examples required to include a genre in the classifier.
-# Genres below this threshold are too sparse for reliable learning with ~360 samples.
-MIN_GENRE_EXAMPLES: int = 5
+# Minimum training examples required to include a genre class.
+# Genres below this threshold go to the NOTA ("none of the above") class.
+MIN_GENRE_EXAMPLES: int = 20
 
-# Will be populated after data loading based on MIN_GENRE_EXAMPLES filtering.
+# Sentinel label for "not one of the top genres" — allows the model to abstain.
+NOTA_LABEL: str = "__NOTA__"
+
+# Will be populated after data loading: frequent genres + NOTA at the last index.
 GENRE_LABELS: list[str] = []
 NUM_GENRES: int = 0
 GENRE_TO_IDX: dict[str, int] = {}
@@ -119,15 +122,18 @@ class GenreDataset(Dataset):
 
 
 def load_samples(tsv_files: list[str], min_examples: int = MIN_GENRE_EXAMPLES) -> list[dict]:
-    """Load labeled samples and filter to genres with enough training examples.
+    """Load labeled samples with frequent genres + explicit NOTA class.
 
-    Two-pass approach:
-    1. Collect all raw samples from TSV files.
+    Three-pass approach:
+    1. Collect all records that have any MARC 655 genre in GENRE_TO_QID.
     2. Count genre frequencies; keep only genres with >= min_examples occurrences.
-    3. Re-filter samples (drop any that have no surviving genres).
-    4. Populate module-level GENRE_LABELS / GENRE_TO_IDX based on the filtered set.
+       Records whose genres are ALL below the threshold become NOTA training examples.
+    3. Populate module-level GENRE_LABELS (frequent genres + NOTA at last index).
+       Label vectors are (NUM_GENRES+1)-dimensional; NOTA is the last element.
     """
     global GENRE_LABELS, NUM_GENRES, GENRE_TO_IDX
+
+    from collections import Counter  # noqa: PLC0415
 
     raw: list[dict] = []
     for tsv_path in tsv_files:
@@ -147,31 +153,37 @@ def load_samples(tsv_files: list[str], min_examples: int = MIN_GENRE_EXAMPLES) -
                 continue
             raw.append({"text": text, "genres": genres_in_map})
 
-    # Count frequencies and keep genres with enough examples
-    from collections import Counter
     freq: Counter = Counter(g for s in raw for g in s["genres"])
     frequent_genres = sorted(g for g, cnt in freq.items() if cnt >= min_examples)
-    print(f"Genres with >= {min_examples} examples: {len(frequent_genres)} / {len(GENRE_TO_QID)}")
-    print(f"  {frequent_genres}")
+    nota_idx = len(frequent_genres)  # NOTA is always the last class
+    total_classes = nota_idx + 1
+
+    print(f"Frequent genres (>={min_examples} examples): {len(frequent_genres)} classes")
+    for g in frequent_genres:
+        print(f"  {freq[g]:4d}  {g}")
+    nota_count = sum(1 for s in raw if not any(g in frequent_genres for g in s["genres"]))
+    print(f"NOTA training examples (rare-genre records): {nota_count}")
 
     if not frequent_genres:
         return []
 
-    # Update module-level label set
-    GENRE_LABELS = frequent_genres
-    NUM_GENRES = len(GENRE_LABELS)
+    GENRE_LABELS = frequent_genres + [NOTA_LABEL]
+    NUM_GENRES = total_classes
     GENRE_TO_IDX = {g: i for i, g in enumerate(GENRE_LABELS)}
 
-    # Build final samples with filtered label vectors
     samples: list[dict] = []
     for s in raw:
-        filtered = [g for g in s["genres"] if g in GENRE_TO_IDX]
-        if not filtered:
-            continue
-        label_vector = [0.0] * NUM_GENRES
-        for g in filtered:
-            label_vector[GENRE_TO_IDX[g]] = 1.0
-        samples.append({"text": s["text"], "label_vector": label_vector, "genres": filtered})
+        frequent_here = [g for g in s["genres"] if g in set(frequent_genres)]
+        label_vector = [0.0] * total_classes
+        if frequent_here:
+            for g in frequent_here:
+                label_vector[frequent_genres.index(g)] = 1.0
+            # label_vector[nota_idx] stays 0
+        else:
+            # All genres are rare → NOTA
+            label_vector[nota_idx] = 1.0
+        active_genres = frequent_here if frequent_here else [NOTA_LABEL]
+        samples.append({"text": s["text"], "label_vector": label_vector, "genres": active_genres})
 
     return samples
 

@@ -70,13 +70,17 @@ class GenreClassifier:
     def predict(self, title: str, notes: list[str]) -> list[tuple[str, float]]:
         """Return list of (genre_str, confidence) for genres above threshold.
 
+        Returns an empty list when:
+        - The NOTA class is predicted (manuscript genre is outside the trained vocabulary), or
+        - No genre exceeds the confidence threshold.
+
         Args:
             title: Manuscript title (MARC 245).
             notes: List of general note texts (MARC 500).
 
         Returns:
             List of (genre_key, confidence) tuples matching GENRE_TO_QID keys,
-            sorted by confidence descending.
+            sorted by confidence descending. Empty list means "abstain".
         """
         import torch  # noqa: PLC0415
 
@@ -98,9 +102,17 @@ class GenreClassifier:
             logits = self.model(input_ids, attention_mask)
             probs = torch.sigmoid(logits[0]).cpu().tolist()
 
+        # Check if NOTA class is predicted (last index by convention)
+        nota_label = "__NOTA__"
+        nota_idx = next(
+            (i for i, lbl in self.genre_id2label.items() if lbl == nota_label), None
+        )
+        if nota_idx is not None and probs[nota_idx] >= self.threshold:
+            return []  # abstain — manuscript genre is outside training vocabulary
+
         results = [
             (self.genre_id2label[i], round(p, 4))
             for i, p in enumerate(probs)
-            if p >= self.threshold
+            if p >= self.threshold and self.genre_id2label[i] != nota_label
         ]
         return sorted(results, key=lambda x: x[1], reverse=True)
