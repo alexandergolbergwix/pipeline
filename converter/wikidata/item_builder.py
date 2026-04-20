@@ -83,6 +83,8 @@ from converter.wikidata.property_mapping import (
     Q_MARGINALIA,
     Q_NLI,
     Q_ORGANIZATION,
+    Q_POSSIBLY,
+    Q_PRESUMABLY,
     Q_SCRIBE,
     Q_TRANSLATOR_OCCUPATION,
     Q_WIKIPROJECT_MANUSCRIPTS,
@@ -1227,13 +1229,19 @@ class WikidataItemBuilder:
                     )
                 )
             else:
+                # Work identified by title matching only (not in KNOWN_WORK_QIDS
+                # and not reconciled to an existing Wikidata item). Add P1480
+                # (presumably) to express `possibly_realises` — the manuscript
+                # may exemplify this work, but the identification is uncertain.
                 work_item = self._get_or_create_work(work_title, None, record)
                 item.statements.append(
                     WikidataStatement(
                         property_id=P_EXEMPLAR_OF,
                         value=f"__LOCAL:{work_item.local_id}",
                         value_type="item",
-                        qualifiers=qualifiers,
+                        qualifiers=qualifiers + [
+                            {"property": P_SOURCING_CIRCUMSTANCES, "value": Q_PRESUMABLY, "type": "item"}
+                        ],
                         references=ref,
                     )
                 )
@@ -1284,12 +1292,15 @@ class WikidataItemBuilder:
                         author_name = str(wa.get("text", "")).strip()
                         break
                 work_item = self._get_or_create_work(work_title, author_name, record)
+                # NER-identified works are inherently uncertain → add P1480 (presumably)
                 item.statements.append(
                     WikidataStatement(
                         property_id=P_EXEMPLAR_OF,
                         value=f"__LOCAL:{work_item.local_id}",
                         value_type="item",
-                        qualifiers=qualifiers_ner,
+                        qualifiers=qualifiers_ner + [
+                            {"property": P_SOURCING_CIRCUMSTANCES, "value": Q_PRESUMABLY, "type": "item"}
+                        ],
                         references=ref,
                     )
                 )
@@ -1582,6 +1593,10 @@ class WikidataItemBuilder:
                         )
                     )
             else:
+                # Person identified via MARC/NER but not confirmed by authority
+                # matching → add P1480 (presumably) to signal uncertain attribution.
+                # This directly addresses the certainty/confidence mechanism
+                # requested by domain experts (Lavee, Baumgarten, Univ. Haifa).
                 item.statements.append(
                     WikidataStatement(
                         property_id=pid,
@@ -1589,7 +1604,8 @@ class WikidataItemBuilder:
                         value_type="item",
                         references=ref,
                         qualifiers=[
-                            {"property": P_OBJECT_NAMED_AS, "value": name.strip().rstrip(",;:"), "type": "string"}
+                            {"property": P_OBJECT_NAMED_AS, "value": name.strip().rstrip(",;:"), "type": "string"},
+                            {"property": P_SOURCING_CIRCUMSTANCES, "value": Q_PRESUMABLY, "type": "item"},
                         ],
                     )
                 )

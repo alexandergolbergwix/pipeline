@@ -2035,5 +2035,108 @@ class TestTitleTrailingPeriodStripped:
             )
 
 
+class TestUncertainAttributionP1480:
+    """Uncertain person/work attributions must carry P1480 (presumably) qualifier."""
+
+    def test_local_person_statement_has_p1480_presumably(self) -> None:
+        """P50/P11603 for unconfirmed (local) persons gets P1480=Q18122778 qualifier."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990001",
+            "title": "ספר הכוזרי",
+            "notes": [],
+            "variant_titles": [],
+            "marc_authority_matches": [
+                # mazal_id triggers local-item creation but no Wikidata QID → uncertain
+                {"name": "הלוי, יהודה", "role": "AUTHOR", "viaf_uri": None, "mazal_id": "987001234567805171"}
+            ],
+            "entities": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        # Find P50 (author) statements using __LOCAL: reference
+        local_person_stmts = [
+            s for s in item.statements
+            if s.property_id == "P50" and str(s.value).startswith("__LOCAL:")
+        ]
+        assert local_person_stmts, "Expected at least one local P50 statement"
+        stmt = local_person_stmts[0]
+        qualifier_props = [q.get("property") for q in (stmt.qualifiers or [])]
+        assert "P1480" in qualifier_props, (
+            f"Local person P50 must have P1480 qualifier, got qualifiers: {stmt.qualifiers}"
+        )
+        p1480_qual = next(q for q in stmt.qualifiers if q.get("property") == "P1480")
+        assert p1480_qual["value"] == "Q18122778", (
+            f"P1480 must be Q18122778 (presumably), got {p1480_qual['value']}"
+        )
+
+    def test_confirmed_person_statement_has_no_p1480(self) -> None:
+        """P50 with a resolved Wikidata QID must NOT have P1480 qualifier."""
+        from unittest.mock import MagicMock, patch
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        with patch.object(builder, "_get_or_create_person") as mock_person:
+            mock_item = MagicMock()
+            mock_item.local_id = "test_person"
+            mock_item.labels = {"he": "יהודה הלוי"}
+            mock_item.existing_qid = "Q12345"
+            mock_person.return_value = mock_item
+            # Simulate resolved_qid path by patching _person_qids
+            builder._person_qids["author:הלוי, יהודה"] = "Q12345"
+
+            record = {
+                "_control_number": "990002",
+                "title": "ספר",
+                "notes": [],
+                "variant_titles": [],
+                "marc_authority_matches": [
+                    {"name": "הלוי, יהודה", "role": "AUTHOR", "viaf_uri": "http://viaf.org/viaf/100902149", "mazal_id": None}
+                ],
+                "entities": [],
+            }
+            item = builder.build_manuscript_item(record)
+            # Resolved QID statements should not have P1480
+            resolved_stmts = [s for s in item.statements if s.property_id == "P50" and s.value == "Q12345"]
+            for stmt in resolved_stmts:
+                qualifier_props = [q.get("property") for q in (stmt.qualifiers or [])]
+                assert "P1480" not in qualifier_props, (
+                    f"Confirmed P50 (resolved QID) must not have P1480, got {stmt.qualifiers}"
+                )
+
+    def test_local_work_p1574_has_p1480_presumably(self) -> None:
+        """P1574 (exemplar of) for unreconciled local works gets P1480=Q18122778."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990003",
+            "title": "כתב יד",
+            "notes": [],
+            "variant_titles": [],
+            "contents": [{"title": "ספר אהבת ה'", "folio_range": None}],
+            "entities": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        local_work_stmts = [
+            s for s in item.statements
+            if s.property_id == "P1574" and str(s.value).startswith("__LOCAL:")
+        ]
+        assert local_work_stmts, "Expected at least one local P1574 statement"
+        stmt = local_work_stmts[0]
+        qualifier_props = [q.get("property") for q in (stmt.qualifiers or [])]
+        assert "P1480" in qualifier_props, (
+            f"Local work P1574 must have P1480 qualifier, got {stmt.qualifiers}"
+        )
+        p1480_qual = next(q for q in stmt.qualifiers if q.get("property") == "P1480")
+        assert p1480_qual["value"] == "Q18122778"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -557,3 +557,17 @@ Tests added (9): `TestMrcFilenameNotInNotes` (3), `TestAsciiOnlyDescription` (3)
 | #E | Variant title aliases strip trailing periods: `str(vt).strip().rstrip(". ")` in `_set_labels` | `item_builder.py:1070` | QS output audit |
 
 Tests added (3): `TestTitleTrailingPeriodStripped` (3). Total now **175**.
+
+### 33. Expert-requested certainty qualifiers (added 2026-04-20)
+
+Domain experts M. Lavee and E. Baumgarten (University of Haifa, Oct 2025 review) requested a formal certainty/confidence mechanism on Wikidata claims and `possibly_realises` semantics for uncertain work identification.
+
+| Fix | Description | File |
+|---|---|---|
+| #A | `Q_PRESUMABLY = "Q18122778"` and `Q_POSSIBLY = "Q21857942"` added | `property_mapping.py` |
+| #B | P50/P11603/P127 statements for local (unconfirmed) persons add `P1480: Q18122778` qualifier | `item_builder.py` |
+| #C | P1574 statements for unreconciled local work items add `P1480: Q18122778` qualifier (implements `possibly_realises`) | `item_builder.py` |
+
+Confirmed-QID person statements (resolved via VIAF/NLI) get no P1480 — they are authority-confirmed.
+
+Tests added (3): `TestUncertainAttributionP1480` (3). Total now **178**.

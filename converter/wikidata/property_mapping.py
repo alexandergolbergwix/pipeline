@@ -166,8 +166,10 @@ Q_KTIV = "Q118384267"
 # Writing system
 Q_HEBREW_ALPHABET = "Q33513"
 
-# Sourcing
+# Sourcing / certainty
 Q_CIRCA = "Q5727902"
+Q_PRESUMABLY = "Q18122778"  # presumably — uncertain attribution (e.g. NER-identified scribe)
+Q_POSSIBLY = "Q21857942"    # possibly — very uncertain attribution
 
 # WikiProject
 Q_WIKIPROJECT_MANUSCRIPTS = "Q123078816"

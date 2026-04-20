@@ -6,6 +6,7 @@
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{multirow}
+\usepackage{fontspec}
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{xcolor}
@@ -13,6 +14,9 @@
 \usepackage{enumitem}
 \usepackage{tabularx}
 \usepackage{adjustbox}
+\newfontfamily\hebrewfont{Arial}
+\newcommand{\texthebrew}[1]{{\hebrewfont #1}}
+\setcitestyle{numbers,square}
 
 \lstset{
   basicstyle=\ttfamily\small,
@@ -28,17 +32,14 @@
 
 \title{Distant Supervision from Cataloging Workflows: Multi-Strategy MARC-to-Wikidata Conversion for Hebrew Manuscript Collections}
 
-\author{
-Alexander Goldberg\afmark{1},
-Gila Prebor\afmark{1},
-Avshalom Elmalech\afmark{1}
-}
+\author{Alexander Goldberg\affilnum{1}, Gila Prebor\affilnum{2}, Avshalom Elmalech\affilnum{3}}
 
-\affiliation{
-\afmark{1}Department of Information Science and Applied Artificial Intelligence,\\
-Bar-Ilan University, Ramat Gan, Israel\\
-\{alexander.goldberg, gila.prebor, avshalom.elmalech\}@biu.ac.il
-}
+\affiliation{\affilnum{1}Department of Information Science and Applied Artificial Intelligence, Bar-Ilan University, Ramat Gan, Israel\\
+\affilnum{2}Department of Information Science and Applied Artificial Intelligence, Bar-Ilan University, Ramat Gan, Israel\\
+\affilnum{3}Department of Information Science and Applied Artificial Intelligence, Bar-Ilan University, Ramat Gan, Israel}
+
+\corrauth{Alexander Goldberg, Department of Information Science and Applied Artificial Intelligence, Bar-Ilan University, Ramat Gan, Israel.}
+\email{golbera3@biu.ac.il}
 
 \begin{abstract}
 Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 100\% genre coverage, an average of 73.6 Wikidata statements per manuscript (including 4,162 exemplar-of links to automatically created work items), and 7.5 statements per person entity---reducing data loss from 26.4\% to approximately 0\%.
@@ -496,6 +497,25 @@ The cluster harvesting technique demonstrates that LOD enrichment is multiplicat
 
 This technique is generalizable to any domain where VIAF covers the entities of interest. The rate-limiting constraint (2~requests/second for search + 1 additional for cluster fetch) means processing 123K~records requires approximately 17~hours for the authority resolution stage, which is acceptable for batch processing.
 
+\subsection{Domain Expert Validation}
+
+The pipeline's Wikidata output was reviewed by two domain experts in Hebrew manuscript studies from the University of Haifa (M.~Lavee and E.~Baumgarten, October 2025). Their feedback, grounded in hands-on cataloging of seven test manuscripts (Vatican~44, Huntington~115, Oppenheimer~129, Parma~3122, two London manuscripts, and Jerusalem~8210), identified four gaps in the Wikidata representation:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Certainty/confidence mechanism}: No formal way to express that a scribe attribution is ``probable'' vs.\ ``certain''. The experts requested a vocabulary equivalent to \emph{certain / probable / possible} on individual claims.
+\item \textbf{Partial work identification}: Manuscripts frequently contain compositions that partially overlap or derive from known works without being identical to them. The experts requested relations analogous to \texttt{is\_variant\_of} or \texttt{possibly\_realises} (IFLA LRM terminology) to express this grey area.
+\item \textbf{Multi-volume and anthology structure}: The BU--CU--PU hierarchy is insufficiently expressive for manuscripts where one codicological unit contains nested sub-units, or where multiple volumes collectively form a single work.
+\item \textbf{Textual overlap between scribal hands}: No formal relation for cases like Huntington~115, where two scribes copied overlapping sections of the same text.
+\end{enumerate}
+
+We addressed items (1) and (2) directly: unconfirmed person attributions (those without an authority-matched Wikidata QID) now receive a \texttt{P1480~=~Q18122778} (\emph{presumably}) qualifier; unreconciled work links (P1574) receive the same qualifier, implementing the \texttt{possibly\_realises} semantics within Wikidata's property model. Items (3) and (4) remain structural limitations of Wikidata (see below) and are noted as directions for a companion HMO-based RDF publication.
+
+\subsection{Community Validation and Safety Guards}
+
+A pilot upload of 670~items to Wikidata in April~2026 generated substantive community feedback through user talk pages. The Wikidata community identified: (a)~duplicate person items caused by the reconciler checking only VIAF and NLI identifiers, missing existing items findable via LCCN/GND/ISNI; (b)~institutional holders (MARC~710 entries) incorrectly attached as P50~(author) instead of P195~(collection) or P127~(owned~by); (c)~P8189 authority-record identifiers attached to non-human entities; and (d)~generic catalog placeholders (Hebrew \textit{kovetz}, `collection') emitted verbatim as Wikidata labels.
+
+Each issue was fixed and protected by a regression test. The full reconciler now checks all five identifier types before creating any new person entity; the institutional name detector routes MARC~710 entries to the appropriate collection/ownership property; P8189 is gated on both authority-record prefix and \texttt{P31=Q5} (human); and placeholder titles are detected and replaced with shelfmark-based labels. The 175~unit tests in \texttt{test\_safety\_guards.py} serve as a regression barrier ensuring these classes of error cannot recur.
+
 \subsection{Limitations}
 
 \begin{enumerate}[leftmargin=*]
@@ -503,6 +523,7 @@ This technique is generalizable to any domain where VIAF covers the entities of 
 \item \textbf{Person NER role classification}: The model's role classification head degenerates to always predicting AUTHOR. We use keyword heuristics as a workaround, but a dedicated role classification model would be more robust.
 \item \textbf{VIAF rate limiting}: At 2~requests/second, full authority resolution of 123K~records requires significant processing time. Caching and batch scheduling mitigate but do not eliminate this constraint.
 \item \textbf{Language specificity}: The Hebrew date parser, NER models, and keyword heuristics are Hebrew-specific. Adapting to other languages requires retraining NER models and creating new parsing rules, though the distant supervision methodology transfers directly.
+\item \textbf{Wikidata codicological expressivity}: Manuscript-specific relational structures (nested scribal layers, textual overlap, variant-work relationships at sub-folio granularity) exceed what Wikidata's property model can represent. A dual-publication strategy pairing Wikidata summary items with a full HMO-based RDF graph is the planned long-term solution.
 \end{enumerate}
 
 
@@ -521,7 +542,7 @@ A verified pilot upload of 670~items to Wikidata achieved zero failures and zero
 
 \subsection{Future Work}
 
-Three directions are planned: (1)~creating Wikidata items for the 3,968 unique Hebrew works identified in our contents analysis, enabling P1574 claims; (2)~evaluating the pipeline on the full 123,621-record NLI catalog; and (3)~adapting the distant supervision methodology to Arabic and Latin manuscript collections to test cross-lingual transferability.
+Five directions are planned: (1)~creating Wikidata items for the 3,968 unique Hebrew works identified in our contents analysis, enabling confirmed P1574 claims; (2)~evaluating the pipeline on the full 123,621-record NLI catalog; (3)~adapting the distant supervision methodology to Arabic and Latin manuscript collections to test cross-lingual transferability; (4)~replacing the \emph{presumably} qualifier on NER-identified works with confirmed Wikidata reconciliation once the work-item corpus is established; and (5)~publishing a companion HMO-based RDF graph to address the codicological expressivity gaps identified by domain experts---in particular, nested CU structure, textual overlap between scribal hands, and the \texttt{is\_variant\_of} relationship for grey-area work identification.
 
 
 %% ====================================================================
