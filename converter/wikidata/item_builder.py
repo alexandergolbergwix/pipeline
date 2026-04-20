@@ -28,6 +28,7 @@ from converter.wikidata.property_mapping import (
     LANG_TO_QID,
     MATERIAL_TO_QID,
     P_AUTHOR,
+    P_BASED_ON_HEURISTIC,
     P_CATALOG_CODE,
     P_COLLECTION,
     P_CONDITION,
@@ -905,17 +906,29 @@ class WikidataItemBuilder:
                 )
             )
 
-        # ── Volume info → P478 ──────────────────────────────────
+        # ── Multi-volume: emit P2635 if volume count > CU count ────
+        # P478 (volume in series) is for "Vol. 3 of set X" labels — NOT for
+        # "total number of volumes = 4". When volume_info contains a total
+        # count ("4 כרכים ;"), parse the number and emit P2635 only if it
+        # differs from the CU-based P2635 already emitted above.
         vol_info = record.get("volume_info")
         if vol_info and str(vol_info).strip() and str(vol_info) != "None":
-            item.statements.append(
-                WikidataStatement(
-                    property_id=P_VOLUME,
-                    value=str(vol_info).strip(),
-                    value_type="string",
-                    references=ref,
-                )
-            )
+            vol_text = str(vol_info).strip().rstrip(";., ")
+            _vol_count_match = re.search(r"\d+", vol_text)
+            if _vol_count_match:
+                vol_count = int(_vol_count_match.group())
+                cu_count = len(record.get("codicological_units") or [])
+                # Emit P2635 only when volume count is informative and
+                # different from the already-emitted CU-based count.
+                if vol_count > 1 and vol_count != cu_count:
+                    item.statements.append(
+                        WikidataStatement(
+                            property_id=P_NUMBER_OF_PARTS,
+                            value=vol_count,
+                            value_type="quantity",
+                            references=ref,
+                        )
+                    )
 
         # ── Related places → P7153 (significant place) ──────────
         for place_name in record.get("related_places") or []:
