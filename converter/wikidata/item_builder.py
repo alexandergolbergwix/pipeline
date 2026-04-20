@@ -735,6 +735,8 @@ class WikidataItemBuilder:
                     record.get("notes") or [],
                 )
                 for genre_str, _conf in inferred:
+                    if genre_str == "other":
+                        continue  # NOTA predicted — no genre claim
                     qid = GENRE_TO_QID.get(genre_str)
                     if qid:
                         item.statements.append(

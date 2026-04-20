@@ -102,17 +102,20 @@ class GenreClassifier:
             logits = self.model(input_ids, attention_mask)
             probs = torch.sigmoid(logits[0]).cpu().tolist()
 
-        # Check if NOTA class is predicted (last index by convention)
         nota_label = "__NOTA__"
         nota_idx = next(
             (i for i, lbl in self.genre_id2label.items() if lbl == nota_label), None
         )
-        if nota_idx is not None and probs[nota_idx] >= self.threshold:
-            return []  # abstain — manuscript genre is outside training vocabulary
+        nota_prob = probs[nota_idx] if nota_idx is not None else 0.0
 
         results = [
             (self.genre_id2label[i], round(p, 4))
             for i, p in enumerate(probs)
             if p >= self.threshold and self.genre_id2label[i] != nota_label
         ]
-        return sorted(results, key=lambda x: x[1], reverse=True)
+        results = sorted(results, key=lambda x: x[1], reverse=True)
+
+        if not results:
+            # NOTA predicted or no genre above threshold — return "other"
+            return [("other", round(nota_prob, 4))]
+        return results
