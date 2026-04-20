@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -34,6 +35,73 @@ from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 from mhm_pipeline.gui.widgets.upload_progress_view import UploadProgressView
+
+
+def _check_existing_items(input_path: Path, token: str) -> dict:
+    """Check which items in input_path already exist on Wikidata and who created them.
+
+    Returns a dict with keys:
+      "ours"      — list of {qid, label, creator} for items we created
+      "others"    — list of {qid, label, creator} for items created by others
+      "new"       — list of {label} for items not found on Wikidata
+      "auth_user" — the authenticated Wikidata username
+    """
+    import sys  # noqa: PLC0415
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    repo_root = _Path(__file__).resolve().parents[4]
+    for p in (str(repo_root), str(repo_root / "src")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
+    from converter.wikidata.reconciler import WikidataReconciler  # noqa: PLC0415
+
+    uploader = WikidataUploader(token=token, dry_run=True)
+    reconciler = WikidataReconciler()
+    auth_user = uploader._get_authenticated_user() or ""
+
+    with open(input_path, encoding="utf-8") as f:
+        records = json.load(f)
+
+    ours: list[dict] = []
+    others: list[dict] = []
+    new_items: list[dict] = []
+
+    for record in records:
+        # Only check person and manuscript items that have external identifiers
+        viaf_uri = record.get("viaf_uri") or record.get("viaf_id")
+        nli_id = record.get("mazal_id") or record.get("nli_id")
+        lc_id = record.get("lc_id")
+        gnd_id = record.get("gnd_id")
+        isni = record.get("isni")
+        label = record.get("label") or record.get("title") or record.get("name") or "(unlabeled)"
+
+        qid = None
+        if viaf_uri or nli_id or lc_id or gnd_id or isni:
+            try:
+                qid = reconciler.reconcile_person(
+                    name=label,
+                    viaf_uri=viaf_uri,
+                    nli_id=nli_id,
+                    lc_id=lc_id,
+                    gnd_id=gnd_id,
+                    isni=isni,
+                )
+            except Exception:  # noqa: BLE001
+                qid = None
+
+        if qid:
+            creator = uploader._get_first_revision_author(qid) or ""
+            entry = {"qid": qid, "label": label, "creator": creator}
+            if not auth_user or creator == auth_user:
+                ours.append(entry)
+            else:
+                others.append(entry)
+        else:
+            new_items.append({"label": label})
+
+    return {"ours": ours, "others": others, "new": new_items, "auth_user": auth_user}
 
 
 class WikidataPanel(QWidget):
@@ -114,6 +182,14 @@ class WikidataPanel(QWidget):
         self._run_btn = QPushButton("Upload to Wikidata")
         self._run_btn.clicked.connect(self._on_run)
         btn_layout.addWidget(self._run_btn)
+
+        self._check_btn = QPushButton("Check existing items")
+        self._check_btn.setToolTip(
+            "Search Wikidata for items that already exist.\n"
+            "Items you created can be updated; others are skipped."
+        )
+        self._check_btn.clicked.connect(self._on_check_existing)
+        btn_layout.addWidget(self._check_btn)
 
         self._load_btn = QPushButton("Load Results")
         self._load_btn.clicked.connect(self._on_load_results)
@@ -255,6 +331,119 @@ class WikidataPanel(QWidget):
             self._dry_run_cb.setChecked(dry_run.isChecked())
             self._batch_cb.setChecked(batch.isChecked())
             self._token_edit.setText(token.text())
+
+    def _on_check_existing(self) -> None:
+        """Search Wikidata for items that already exist, grouped by ownership."""
+        input_path = self._input_selector.path
+        if input_path is None:
+            QMessageBox.warning(self, "No Input", "Select authority_enriched.json first.")
+            return
+
+        token = self._token_edit.text().strip()
+        if not token:
+            QMessageBox.warning(
+                self,
+                "Token Required",
+                "A bot password or OAuth token is required to check item authorship\n"
+                "(we need to know who is the authenticated user to determine which\n"
+                "items you created).",
+            )
+            return
+
+        self._check_btn.setEnabled(False)
+        self._check_btn.setText("Checking…")
+        self._log_viewer.append_line("Checking Wikidata for existing items…")
+
+        from threading import Thread  # noqa: PLC0415
+
+        def _run() -> None:
+            try:
+                result = _check_existing_items(input_path, token)
+                from PyQt6.QtCore import QMetaObject, Qt  # noqa: PLC0415
+                QMetaObject.invokeMethod(
+                    self,
+                    "_on_check_done",
+                    Qt.ConnectionType.QueuedConnection,
+                    result,  # type: ignore[arg-type]
+                )
+            except Exception as exc:  # noqa: BLE001
+                from PyQt6.QtCore import QMetaObject, Qt  # noqa: PLC0415
+                QMetaObject.invokeMethod(
+                    self,
+                    "_on_check_error",
+                    Qt.ConnectionType.QueuedConnection,
+                    str(exc),  # type: ignore[arg-type]
+                )
+
+        # Run in background thread so the GUI stays responsive
+        t = Thread(target=_run, daemon=True)
+        t.start()
+        self._check_thread = t  # keep reference
+
+    def _on_check_done(self, result: object) -> None:
+        """Display check results in a dialog."""
+        self._check_btn.setEnabled(True)
+        self._check_btn.setText("Check existing items")
+
+        if not isinstance(result, dict):
+            self._log_viewer.append_line("Check complete (no result).")
+            return
+
+        ours = result.get("ours", [])
+        others = result.get("others", [])
+        new_items = result.get("new", [])
+        auth_user = result.get("auth_user", "")
+
+        self._log_viewer.append_line(
+            f"Check complete: {len(ours)} updatable (yours), "
+            f"{len(others)} skip (others'), {len(new_items)} new."
+        )
+
+        # Show results dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Existing Wikidata Items")
+        dlg.resize(700, 500)
+        layout = QVBoxLayout(dlg)
+
+        summary = QLabel(
+            f"<b>Authenticated as:</b> {auth_user or '(unknown)'}<br>"
+            f"<b style='color:#16a34a'>{len(ours)} items you created</b> — can be updated<br>"
+            f"<b style='color:#dc2626'>{len(others)} items created by others</b> — will be skipped<br>"
+            f"<b style='color:#2563eb'>{len(new_items)} new items</b> — will be created"
+        )
+        summary.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(summary)
+
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        lines: list[str] = []
+        if ours:
+            lines.append("=== YOUR ITEMS (updatable) ===")
+            for item in ours:
+                lines.append(f"  ✓ {item['qid']}  {item['label']}")
+        if others:
+            lines.append("\n=== OTHERS' ITEMS (skip) ===")
+            for item in others:
+                lines.append(f"  ✗ {item['qid']}  {item['label']}  (creator: {item.get('creator','')})")
+        if new_items:
+            lines.append("\n=== NEW ITEMS (will be created) ===")
+            for item in new_items[:50]:
+                lines.append(f"  + {item['label']}")
+            if len(new_items) > 50:
+                lines.append(f"  … and {len(new_items) - 50} more")
+        txt.setPlainText("\n".join(lines))
+        layout.addWidget(txt)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+        dlg.exec()
+
+    def _on_check_error(self, message: str) -> None:
+        self._check_btn.setEnabled(True)
+        self._check_btn.setText("Check existing items")
+        self._log_viewer.append_line(f"Check failed: {message}")
+        QMessageBox.critical(self, "Check Failed", message)
 
     def _on_run(self) -> None:
         input_path = self._input_selector.path
