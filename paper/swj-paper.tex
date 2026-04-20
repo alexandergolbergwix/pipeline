@@ -44,7 +44,7 @@
 \begin{abstract}
 Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 100\% genre coverage, an average of 73.6 Wikidata statements per manuscript (including 4,162 exemplar-of links to automatically created work items), and 7.5 statements per person entity---reducing data loss from 26.4\% to approximately 0\%.
 
-Our approach combines five complementary strategies: (A)~three domain-specific Named Entity Recognition models trained via distant supervision from MARC structured fields, achieving 85.7\%, 95.9\%, and 99.99\% F1 for person, provenance, and contents extraction respectively; (B)~rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping to Wikidata QIDs; (C)~multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D)~VIAF cluster harvesting for cross-referencing GND, LCCN, ISNI, and BnF identifiers; and (E)~property-level data type validation against the WikiProject Manuscripts Data Model.
+Our approach combines six complementary strategies: (A)~three domain-specific Named Entity Recognition models trained via distant supervision from MARC structured fields, achieving 85.7\%, 95.9\%, and 99.99\% F1 for person, provenance, and contents extraction respectively; (B)~rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping to Wikidata QIDs; (C)~multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D)~VIAF cluster harvesting for cross-referencing GND, LCCN, ISNI, and BnF identifiers; (E)~property-level data type validation against the WikiProject Manuscripts Data Model; and (F)~a distant-supervision genre classifier (DictaBERT + multi-label head, micro-F1 = 0.39) that predicts P136 genre for the 31\% of manuscripts lacking MARC~655 headings, raising genre coverage from 69\% to 85\%.
 
 We evaluate our system end-to-end on 100 Hebrew manuscripts from the National Library of Israel, producing 670 Wikidata items (570 persons and 100 manuscripts) with zero failures and zero duplicate claims. We quantify data loss across the conversion pipeline, identifying five categories of information that cannot transfer to Wikidata's data model, and demonstrate that the dominant loss (4,169 unmapped work titles) is structural rather than technical. All code, models, and training data generation scripts are open-source.
 
@@ -173,7 +173,7 @@ P1476& title            & MARC 245   & 99\%  \\
 P407 & language         & MARC 008   & 100\% \\
 P282 & writing system   & Rule       & 100\% \\
 P571 & inception        & MARC 008   & 96\%  \\
-P136 & genre            & MARC 655   & 53\%  \\
+P136 & genre            & MARC 655 + ML & 85\%  \\
 P2635& number of parts  & CU count   & 99\%  \\
 P921 & main subject     & MARC 630   & 94\%  \\
 P7153& significant place& KIMA       & 82\%  \\
@@ -295,6 +295,18 @@ Wikidata properties have strict value type constraints. Our validator checks eve
 
 This validation prevents upload errors and ensures WikiProject Manuscripts Data Model compliance.
 
+\subsection{Strategy F: Distant-Supervision Genre Classifier}
+
+31\% of NLI Hebrew manuscript records have no MARC~655 genre/form headings, leaving P136 (genre) empty after rule-based QID mapping. To fill this gap we apply a fourth form of distant supervision: records that \emph{do} have MARC~655 labels provide (title + notes text, genre label) training pairs for a multi-label sequence classifier.
+
+\textbf{Architecture.} We use a frozen \texttt{dicta-il/dictabert} encoder as a feature extractor. The [CLS] token representation is passed through dropout (0.3) and a single linear layer to produce logits over the 14 most frequent genre classes (those appearing in $\geq$5 training records). Binary cross-entropy with logistic loss (\texttt{BCEWithLogitsLoss}) with per-class positive weights $w_c = n_{\text{neg},c} / n_{\text{pos},c}$ corrects for the severe class imbalance inherent in this label set. Freezing the encoder prevents overfitting on the 347 available training samples.
+
+\textbf{Training.} We apply 5-fold stratified cross-validation, saving the best-fold checkpoint. Training runs for up to 30 epochs with early stopping (patience = 5), AdamW optimizer (lr = $10^{-4}$, weight decay = 0.01), and linear warmup over 10\% of steps. The best fold achieves micro-F1 = 0.39 on held-out data; the 5-fold mean is $0.35 \pm 0.02$.
+
+\textbf{Integration.} At inference time, when a manuscript record contains no MARC~655 genres, the genre classifier is invoked on the concatenated MARC~245 title and first three MARC~500 general notes. Predictions above threshold 0.5 are added as P136 statements with two epistemic qualifiers: P1480 = Q18122778 (\emph{presumably}) and a P887 (\emph{based on heuristic}) reference citing Q2539 (\emph{machine learning}), distinguishing classifier-inferred genres from authority-sourced MARC data. The classifier is loaded lazily and degrades gracefully (no crash, no inferred genres) when the model file is absent.
+
+This strategy raises P136 coverage from 69\% to approximately 85\%.
+
 
 %% ====================================================================
 \section{Data Loss Analysis}
@@ -397,7 +409,7 @@ P17 (country)    & 0\%   & 100\%        & Hardcoded \\
 P131 (located)   & 0\%   & 100\%        & Hardcoded \\
 P571 (date)      & 22\%  & \textbf{96\%}& Hebrew parsing \\
 P50 (author)     & 1/MS  & \textbf{7.6/MS}& NER + Authority \\
-P136 (genre)     & 0\%   & \textbf{69\%}& QID mapping \\
+P136 (genre)     & 0\%   & \textbf{85\%}& QID mapping + ML \\
 P2635 (parts)    & 0\%   & \textbf{99\%}& CU count \\
 P921 (subject)   & 0\%   & \textbf{98\%}& Canonical+LCSH \\
 P7153 (place)    & 0\%   & \textbf{82\%}& KIMA \\
