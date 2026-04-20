@@ -1668,7 +1668,7 @@ class TestVIAFNameTypeGuard:
         src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
         idx = src.find("# P214 = VIAF ID")
         assert idx != -1, "P214 comment block not found in item_builder.py"
-        block = src[idx : idx + 700]
+        block = src[idx : idx + 1200]
         assert "not is_org" in block, "P214 assignment must be guarded by 'not is_org'"
 
     def test_match_person_passes_expected_name_type_personal(self) -> None:
@@ -2203,6 +2203,181 @@ class TestGenreClassifierIntegration:
             assert item is not None
         finally:
             _ib._GENRE_CLASSIFIER = original
+
+
+class TestRoleDescriptorFilter:
+    """Items with role-word or bare place-name labels must never be created.
+
+    Root cause of 2026-04-20 batch deletion (18 items):
+      - 7 items labeled "משומד" (apostate role-word)
+      - 11 items labeled "שאלוניקי" (Salonika city name)
+    """
+
+    def _builder(self) -> "WikidataItemBuilder":
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        return WikidataItemBuilder()
+
+    def _record(self, name: str) -> dict:
+        return {
+            "_control_number": "990001",
+            "title": "ספר",
+            "notes": [],
+            "variant_titles": [],
+            "contents": [],
+            "genres": [],
+            "entities": [{"name": name, "role": "SCRIBE", "viaf_uri": None, "mazal_id": None}],
+            "marc_authority_matches": [],
+        }
+
+    def test_role_word_meshummad_not_created(self) -> None:
+        """'משומד' (apostate) must be skipped — role-word, not a real name."""
+        from converter.wikidata.item_builder import _is_role_descriptor
+        assert _is_role_descriptor("משומד") is True
+
+    def test_city_name_salonika_not_created(self) -> None:
+        """'שאלוניקי' (Salonika) must be skipped — bare city name, not a person."""
+        from converter.wikidata.item_builder import _is_role_descriptor
+        assert _is_role_descriptor("שאלוניקי") is True
+
+    def test_real_name_not_filtered(self) -> None:
+        """A genuine personal name must not be filtered by _is_role_descriptor."""
+        from converter.wikidata.item_builder import _is_role_descriptor
+        assert _is_role_descriptor("יהודה בן שמואל") is False
+
+    def test_meshummad_produces_no_person_item(self) -> None:
+        """build_manuscript_item must not create a person item for 'משומד'."""
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        builder = self._builder()
+        record = self._record("משומד")
+        item = builder.build_manuscript_item(record)
+        person_ids = [s.value for s in item.statements if "Q139" in str(s.value)]
+        # No sub-item with a role-word label should be referenced
+        assert all(s.value != "משומד" for s in item.statements)
+        # No person was added to builder's internal cache with a label
+        person_items_with_labels = [
+            p for p in builder._person_items.values() if p.labels
+        ]
+        assert person_items_with_labels == []
+
+    def test_salonika_produces_no_person_item(self) -> None:
+        """build_manuscript_item must not create a person item for 'שאלוניקי'."""
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        builder = self._builder()
+        record = self._record("שאלוניקי")
+        builder.build_manuscript_item(record)
+        person_items_with_labels = [
+            p for p in builder._person_items.values() if p.labels
+        ]
+        assert person_items_with_labels == []
+
+
+class TestVIAFNameTypeGuardPerson:
+    """VIAF IDs from non-Personal clusters must not be attached to person items.
+
+    Root cause of "שאלוניקי" incident: VIAF 76186581 (Geographic cluster for
+    Salonika) was attached to person items because nameType was never checked.
+    Root cause of "משומד" incident: VIAF 11810679 (Domenico Gerosolimitano,
+    the manuscript censor) was attached to unnamed apostates.
+    """
+
+    def _record_with_viaf_nametype(self, name: str, name_type: str) -> dict:
+        return {
+            "_control_number": "990002",
+            "title": "כתב יד",
+            "notes": [],
+            "variant_titles": [],
+            "contents": [],
+            "genres": [],
+            "entities": [{"name": name, "role": "SCRIBE", "viaf_uri": "http://viaf.org/viaf/12345", "mazal_id": None}],
+            "marc_authority_matches": [
+                {
+                    "name": name,
+                    "viaf_uri": "http://viaf.org/viaf/12345",
+                    "mazal_id": None,
+                    "name_type": name_type,
+                    "gnd_id": None,
+                    "lc_id": None,
+                    "isni": None,
+                    "bnf_id": None,
+                }
+            ],
+        }
+
+    def test_geographic_viaf_not_assigned_to_person(self) -> None:
+        """nameType=Geographic cluster must not produce P214 on a person item."""
+        from converter.wikidata.item_builder import WikidataItemBuilder, P_VIAF_ID
+        builder = WikidataItemBuilder()
+        record = self._record_with_viaf_nametype("שלמה הלוי", "Geographic")
+        builder.build_manuscript_item(record)
+        for person in builder._person_items.values():
+            viaf_props = [s for s in person.statements if s.property_id == P_VIAF_ID]
+            assert viaf_props == [], f"Geographic VIAF must not be assigned; got {viaf_props}"
+
+    def test_corporate_viaf_not_assigned_to_person(self) -> None:
+        """nameType=Corporate cluster must not produce P214 on a person item."""
+        from converter.wikidata.item_builder import WikidataItemBuilder, P_VIAF_ID
+        builder = WikidataItemBuilder()
+        record = self._record_with_viaf_nametype("שלמה הלוי", "Corporate")
+        builder.build_manuscript_item(record)
+        for person in builder._person_items.values():
+            viaf_props = [s for s in person.statements if s.property_id == P_VIAF_ID]
+            assert viaf_props == [], f"Corporate VIAF must not be assigned; got {viaf_props}"
+
+    def test_personal_viaf_assigned_normally(self) -> None:
+        """nameType=Personal cluster must still produce P214 on a person item."""
+        from converter.wikidata.item_builder import WikidataItemBuilder, P_VIAF_ID
+        builder = WikidataItemBuilder()
+        record = self._record_with_viaf_nametype("שלמה הלוי", "Personal")
+        builder.build_manuscript_item(record)
+        person_viaf_values = [
+            s.value
+            for p in builder._person_items.values()
+            for s in p.statements
+            if s.property_id == P_VIAF_ID
+        ]
+        assert "12345" in person_viaf_values
+
+
+class TestPersonLabelDedup:
+    """reconcile_person_by_label finds existing Wikidata humans by label."""
+
+    def test_unique_label_match_returns_qid(self) -> None:
+        """When exactly one human matches the label, return its QID."""
+        from unittest.mock import MagicMock
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        rec = WikidataReconciler.__new__(WikidataReconciler)
+        rec._cache = {}
+        rec._query = MagicMock(return_value=[
+            {"item": {"value": "http://www.wikidata.org/entity/Q12345"}}
+        ])
+        result = rec.reconcile_person_by_label("יהודה הלוי")
+        assert result == "Q12345"
+
+    def test_ambiguous_label_returns_none(self) -> None:
+        """When multiple humans match the label, return None (ambiguous)."""
+        from unittest.mock import MagicMock
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        rec = WikidataReconciler.__new__(WikidataReconciler)
+        rec._cache = {}
+        rec._query = MagicMock(return_value=[
+            {"item": {"value": "http://www.wikidata.org/entity/Q1"}},
+            {"item": {"value": "http://www.wikidata.org/entity/Q2"}},
+        ])
+        result = rec.reconcile_person_by_label("יהודה")
+        assert result is None
+
+    def test_no_match_returns_none(self) -> None:
+        """When no human matches, return None."""
+        from unittest.mock import MagicMock
+        from converter.wikidata.reconciler import WikidataReconciler
+
+        rec = WikidataReconciler.__new__(WikidataReconciler)
+        rec._cache = {}
+        rec._query = MagicMock(return_value=[])
+        result = rec.reconcile_person_by_label("שם לא קיים")
+        assert result is None
 
 
 if __name__ == "__main__":

@@ -202,6 +202,59 @@ def _is_anonymous_name(name: str) -> bool:
     return name.strip().lower().rstrip(".,;:") in _ANONYMOUS_NAMES
 
 
+# Role-descriptors and bare place-names that MARC catalogers use as person
+# identifiers when no real name is known.  Wikidata items must not be created
+# for these — they are descriptions of a person's role or origin, not names.
+# Found in the wild: "משומד" (apostate), "שאלוניקי" (from Salonika).
+_ROLE_DESCRIPTOR_NAMES: frozenset[str] = frozenset({
+    # Hebrew role/status descriptors
+    "משומד",    # apostate (male)
+    "משומדת",   # apostate (female)
+    "מומר",     # apostate/convert (male)
+    "מומרת",    # apostate/convert (female)
+    "הגר",      # female convert to Judaism
+    "כוהן",     # priest (without a name)
+    "הכוהן",    # the priest
+    "לוי",      # Levite (without a name — "לוי" as a surname is fine)
+    "הלוי",     # the Levite
+    "הסופר",    # the scribe
+    "הנביא",    # the prophet
+    "הרב",      # the rabbi (without a name)
+    "הרופא",    # the physician
+    "הדיין",    # the judge
+    "הנגיד",    # the leader
+    "הפרנס",    # the community leader
+    # Bare city/country names used as sole personal identifiers
+    "שאלוניקי",   # Salonika/Thessaloniki
+    "סלוניקי",    # Salonika variant
+    "קושטא",      # Constantinople/Istanbul
+    "קושטנדינא",  # Constantinople variant
+    "אשכנז",      # Germany
+    "ספרד",       # Spain
+    "ונציה",      # Venice
+    "פאס",        # Fez
+    "תוניס",      # Tunis
+    "מצרים",      # Egypt
+    "בגדאד",      # Baghdad
+    "פראג",       # Prague
+    "קרקא",       # Kraków
+    "ויניציאה",   # Venice (variant)
+    "ליוורנו",    # Livorno
+    "אמשטרדם",    # Amsterdam
+})
+
+
+def _is_role_descriptor(name: str) -> bool:
+    """True when the entire name is a role-word or bare place-name.
+
+    These appear in MARC records when a cataloger identified someone only by
+    their social role ('apostate') or city of origin ('from Salonika') without
+    knowing their actual name.  Creating Wikidata items for these produces
+    garbage entries with generic labels that violate Wikidata notability.
+    """
+    return name.strip() in _ROLE_DESCRIPTOR_NAMES
+
+
 # NLI's catalog stores the source filename as the first MARC 500 general-note
 # field (e.g. "990000623390205171.mrc", "BIBLIOGRAPHIC_50929717600005171_5.txt").
 # These must never be emitted as P7535 scope/content notes on Wikidata.
@@ -1723,6 +1776,18 @@ class WikidataItemBuilder:
             self._person_items[key] = person
             return person
 
+        # Skip names that are role-descriptors or bare place-names — these are
+        # MARC catalog conventions for unnamed persons ("apostate", "from Salonika")
+        # and must never become Wikidata item labels.  Root cause of the
+        # "משומד"/"שאלוניקי" deletion batch (2026-04-20).
+        if _is_role_descriptor(clean_name):
+            logger.warning(
+                "Skipping role-descriptor/place-name used as person identifier: %r",
+                clean_name,
+            )
+            self._person_items[key] = person
+            return person
+
         # Fix 2026-04-15 third audit Fix #4: Wikidata:Notability requires person
         # items to have at least one external identifier (VIAF, NLI J9U, LCCN,
         # GND, ISNI, BnF). Creating items with only a name and no identifiers
@@ -1753,6 +1818,20 @@ class WikidataItemBuilder:
             )
             self._person_items[key] = person
             return person
+
+        # Label-based deduplication: search Wikidata for an existing human with
+        # the same Hebrew/Latin label before creating a new item.  This catches
+        # persons who exist in Wikidata without any of our identifier properties
+        # (VIAF/NLI/LCCN not yet recorded there), preventing duplicate items.
+        # Only fires when the reconciler has not already found a QID via identifiers.
+        if self._reconciler is not None and not person.existing_qid:
+            existing_qid = self._reconciler.reconcile_person_by_label(clean_name)
+            if isinstance(existing_qid, str) and existing_qid:
+                person.existing_qid = existing_qid
+                logger.info(
+                    "Label-based dedup: %r matched existing Wikidata item %s",
+                    clean_name, existing_qid,
+                )
 
         # Bug fix 2026-04-16 (deeper audit Fix #1): every person statement
         # must carry a P248 reference. Use VIAF cluster URL when the person
@@ -1873,11 +1952,22 @@ class WikidataItemBuilder:
             )
 
         # P214 = VIAF ID (critical for LOD linking)
-        # Guard: never assign a person-type VIAF ID to an organisation item.
-        # Root cause of 2026-04-15 library-items incident: corporate clusters
-        # surfaced by local.personalNames search were silently attached to
-        # items whose is_org=True flag should have prevented it.
+        # Guard 1: never assign VIAF to an organisation item.
+        # Guard 2: reject non-Personal VIAF clusters (nameType cross-validation).
+        #   Root cause of "שאלוניקי" incident (2026-04-20): VIAF cluster 76186581
+        #   is a Geographic cluster for Salonika; it was attached to person items
+        #   because match_info["name_type"] was never checked here.
+        #   Root cause of "משומד" incident: VIAF 11810679 (Domenico Gerosolimitano,
+        #   the manuscript censor) was attached to unnamed apostates because the
+        #   authority matcher found the censor's VIAF in the same manuscript.
         viaf_id = extract_viaf_id(str(viaf_uri)) if viaf_uri else None
+        viaf_name_type = str(match_info.get("name_type") or "")
+        if viaf_name_type and viaf_name_type != "Personal":
+            logger.warning(
+                "Skipping VIAF %s for %r — cluster nameType=%r is not Personal",
+                viaf_id, clean_name, viaf_name_type,
+            )
+            viaf_id = None
         if viaf_id and not is_org:
             person.statements.append(
                 WikidataStatement(

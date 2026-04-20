@@ -523,6 +523,52 @@ class WikidataReconciler:
 
         return None
 
+    def reconcile_person_by_label(self, name: str, lang: str = "he") -> str | None:
+        """Find an existing Wikidata human item with exactly this label.
+
+        Used as a last-resort deduplication check when no identifier-based
+        match was found.  Only returns a QID when exactly one human (P31=Q5)
+        item has this label — ambiguous matches (multiple candidates) return
+        None to avoid wrong merges.
+
+        Args:
+            name: Person label to search (Hebrew by default).
+            lang: BCP-47 language tag (default "he").
+
+        Returns:
+            QID of the unique matching human, or None if zero or multiple found.
+        """
+        clean = (name or "").strip()
+        if not clean or len(clean) < 3:
+            return None
+        # Detect language: if name contains no Hebrew characters, use English.
+        has_hebrew = any("\u0590" <= c <= "\u05ff" for c in clean)
+        lang = "he" if has_hebrew else "en"
+        cache_key = f"person_label:{lang}:{clean}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        safe_name = clean.replace("\\", "\\\\").replace('"', '\\"')
+        sparql = f"""
+        SELECT ?item WHERE {{
+          ?item wdt:P31/wdt:P279* wd:Q5 .
+          ?item rdfs:label "{safe_name}"@{lang} .
+        }} LIMIT 3
+        """
+        results = self._query(sparql)
+        qid: str | None = None
+        if len(results) == 1:
+            uri = results[0].get("item", {}).get("value", "")
+            qid = extract_wikidata_qid(uri) or None
+        elif len(results) > 1:
+            logger.debug(
+                "reconcile_person_by_label: %r is ambiguous (%d candidates) — skipping",
+                clean, len(results),
+            )
+
+        self._cache[cache_key] = qid
+        return qid
+
     # ── Batch reconciliation (efficient for large uploads) ────────
 
     def reconcile_batch_by_nli_id(
