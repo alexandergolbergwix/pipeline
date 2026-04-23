@@ -44,7 +44,7 @@
 \begin{abstract}
 Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 100\% genre coverage, an average of 73.6 Wikidata statements per manuscript (including 4,162 exemplar-of links to automatically created work items), and 7.5 statements per person entity---reducing data loss from 26.4\% to approximately 0\%.
 
-Our approach combines six complementary strategies: (A)~three domain-specific Named Entity Recognition models trained via distant supervision from MARC structured fields, achieving 85.7\%, 95.9\%, and 99.99\% F1 for person, provenance, and contents extraction respectively; (B)~rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping to Wikidata QIDs; (C)~multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D)~VIAF cluster harvesting for cross-referencing GND, LCCN, ISNI, and BnF identifiers; (E)~property-level data type validation against the WikiProject Manuscripts Data Model; and (F)~a distant-supervision genre classifier trained on 27,735 records where a genre keyword appears explicitly in MARC~500 notes — using a 3-sentence context window as input and a DictaBERT encoder warm-started from the NER checkpoint — that predicts P136 genre for the 31\% of manuscripts lacking MARC~655 headings, raising coverage from 69\% to 85\%.
+Our approach combines six complementary strategies: (A)~three domain-specific Named Entity Recognition models trained via distant supervision from MARC structured fields, achieving 85.7\%, 95.9\%, and 99.99\% F1 for person, provenance, and contents extraction respectively; (B)~rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping to Wikidata QIDs; (C)~multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D)~VIAF cluster harvesting for cross-referencing GND, LCCN, ISNI, and BnF identifiers; (E)~property-level data type validation against the WikiProject Manuscripts Data Model; and (F)~a distant-supervision genre classifier trained on 25,421 quality-filtered records using whole-token Hebrew keyword matching and a 3-sentence context window as input — with DictaBERT warm-started from the NER checkpoint, top-2 layers fine-tuned, focal loss ($\gamma=2$), and a NOTA abstention class — achieving micro-F1 of 0.918 ($\pm$0.003, 5-fold CV; best fold 0.921) on 8 genre classes and raising P136 coverage from 69\% to approximately 85\%.
 
 We evaluate our system end-to-end on 100 Hebrew manuscripts from the National Library of Israel, producing 670 Wikidata items (570 persons and 100 manuscripts) with zero failures and zero duplicate claims. We quantify data loss across the conversion pipeline, identifying five categories of information that cannot transfer to Wikidata's data model, and demonstrate that the dominant loss (4,169 unmapped work titles) is structural rather than technical. All code, models, and training data generation scripts are open-source.
 
@@ -84,15 +84,16 @@ No published work combines NER with rule-based extraction, multi-authority linki
 
 \subsection{Contributions}
 
-This paper makes six contributions:
+This paper makes seven contributions:
 
 \begin{enumerate}[leftmargin=*]
 \item A novel \textbf{distant supervision methodology} that exploits the dual structure of MARC records---using structured fields as automatic labels for training NER models on free-text note fields---eliminating the need for manual annotation.
 \item Three \textbf{domain-specific NER models} for Hebrew manuscript descriptions, achieving state-of-the-art performance on person (85.7\% F1), provenance (95.9\% F1), and contents (99.99\% F1) extraction.
+\item A \textbf{MARC~500 sentence-level classifier} (Colophon~ML) with two independent sigmoid heads that jointly detect colophon and provenance sentences inside general notes, re-routing them into P1684 (inscription) and the Provenance NER pipeline respectively --- extending owner/date/collection coverage beyond MARC~561.
 \item A \textbf{VIAF cluster harvesting} technique that leverages a single VIAF match to automatically cross-reference four additional international authority identifiers (GND, LCCN, ISNI, BnF), increasing person entity LOD connectivity.
 \item The first \textbf{end-to-end quantitative evaluation} of MARC-to-Wikidata conversion measuring both coverage (statements per entity) and data loss (what cannot transfer and why).
 \item A \textbf{five-category taxonomy of data loss} in MARC-to-Wikidata conversion, demonstrating that the dominant loss (4,169 unmapped work titles) is structural rather than technical.
-\item A \textbf{complete open-source system}\footnote{\url{https://github.com/alexandergolbergwix/pipeline}} processing 123,621 records without manual annotation, with all training data generated automatically.
+\item A \textbf{complete open-source system}\footnote{\url{https://github.com/alexandergolbergwix/pipeline}} processing 123,621 records without manual annotation, with all training data generated automatically, packaged as a cross-platform PyQt6 desktop application with a three-axis Source~$\times$~Type~$\times$~Role filter UI for reviewing and correcting extractions before Wikidata upload.
 \end{enumerate}
 
 
@@ -299,44 +300,43 @@ This validation prevents upload errors and ensures WikiProject Manuscripts Data 
 
 31\% of NLI Hebrew manuscript records have no MARC~655 genre/form headings, leaving P136 (genre) empty after rule-based QID mapping. To fill this gap we train a multi-label sequence classifier via distant supervision: records that \emph{do} carry MARC~655 labels provide (title + context window, genre) training pairs, and the trained model is applied to the 31\% without labels.
 
-\textbf{Data and filtering.} The full Ktiv catalog export (123,621 records) is used as the training corpus, augmented with 897 intensively annotated records. A record is included only if three conditions hold: (1)~MARC~245 (title), MARC~500 (general notes), and MARC~655 (genre) are all present; (2)~at least one genre keyword appears in MARC~500 notes; and (3)~the genre maps to a key in \texttt{GENRE\_TO\_QID}. Condition~(2) is a quality gate: it confirms the cataloger explicitly described the genre in free text, ensuring a genuine textual signal exists for learning. After filtering, 27,735 records qualify (2,852 discarded for absent keyword signal).
+\textbf{Data and filtering.} The full Ktiv catalog export (123,621 records) is used as the training corpus, augmented with 897 intensively annotated records. A record is included only if three conditions hold: (1)~MARC~245 (title), MARC~500 (general notes), and MARC~655 (genre) are all present; (2)~at least one genre keyword appears in MARC~500 notes as a \emph{whole token}; and (3)~the genre maps to a key in \texttt{GENRE\_TO\_QID}. Condition~(2) is a quality gate: it confirms the cataloger explicitly described the genre in free text, ensuring a genuine textual signal exists for learning. Whole-token matching (space-boundary for Hebrew, \texttt{\textbackslash b} for ASCII) prevents spurious substring matches (e.g., \texthebrew{שיר} matching \texthebrew{שירות}). A pre-extraction step saves the 26,758 qualifying records to a compact TSV (\texttt{genre\_samples.tsv}), making all subsequent training runs fast without re-scanning the full catalog.
 
-\textbf{Keyword synonym dictionary.} Since MARC~655 headings are in English while MARC~500 notes are in Hebrew, direct string overlap yields near-zero matches. We therefore compiled \texttt{GENRE\_KEYWORDS}: a dictionary mapping each of the 20 genre classes to all known Hebrew morphological forms and English variants. For example, \emph{Legislation (Jewish law)} maps to \{תקנה, תקנות, תקנן, תוקן, חוק, חוקים, פסק, פסקי דין, גזרה, גזרות, חרם, חרמות, צו, צווים, takkanot, decree, ordinance, statute\}. Matching is case-insensitive substring search over the notes text.
+Two additional quality filters are applied: (i)~\emph{Literature (Miscellaneous, in manuscript)} is excluded because its keywords (\texthebrew{קובץ}, \texthebrew{אסופה}, ``collection'') are generic enough to appear across all genres, making its 2,170 samples predominantly false positives; (ii)~genre classes with fewer than 100 keyword-matched training examples are discarded (Business records: 75, Family records: 63, Biographies: 34, Negotiable instruments: 20), as they contribute more label noise than learning signal. After both filters, the training set contains 25,421 records across 8 high-confidence classes plus 1,629 NOTA examples.
 
-\textbf{Input (X).} Rather than using the entire notes field, the model input is the MARC~245 title concatenated with a \emph{3-sentence context window} from MARC~500: the sentence immediately before the keyword match, the matching sentence itself, and the sentence immediately after. This localises the input to the exact textual evidence the cataloger wrote about that genre. Sequences are truncated to 128 tokens — sufficient for the short context windows used.
+\textbf{Keyword synonym dictionary.} Since MARC~655 headings are in English while MARC~500 notes are in Hebrew, direct string overlap yields near-zero matches. We therefore compiled \texttt{GENRE\_KEYWORDS}: a dictionary mapping each of the 20 genre classes to all known Hebrew morphological forms and English variants. For example, \emph{Legislation (Jewish law)} maps to \{תקנה, תקנות, תקנן, תוקן, חוק, חוקים, פסק, פסקי דין, גזרה, גזרות, חרם, חרמות, צו, צווים, takkanot, decree, ordinance, statute\}.
 
-\textbf{Architecture.} The encoder is \texttt{dicta-il/dictabert}~\cite{shmidman2023dictabert} warm-started from the provenance NER checkpoint (already domain-adapted on 12,100 Hebrew manuscript samples via our earlier distant supervision pipeline). To balance quality and training speed, the bottom 8 of 12 transformer layers are frozen — they encode generic Hebrew morphology and syntax already learned during NER fine-tuning — while the top 4 layers and the classification head are fully trained. The [CLS] representation is passed through Dropout(0.3) and a linear layer to logits over 21 classes: the top-20 genres by frequency plus an explicit \emph{None-of-the-Above} (NOTA) class. \texttt{BCEWithLogitsLoss} with per-class positive weights $w_c = n_{\text{neg},c}/n_{\text{pos},c}$ handles class imbalance.
+\textbf{Input (X).} Rather than using the entire notes field, the model input is the MARC~245 title concatenated with a \emph{3-sentence context window} from MARC~500: the sentence immediately before the keyword match, the matching sentence itself, and the sentence immediately after. This localises the input to the exact textual evidence the cataloger wrote about that genre. Sequences are truncated to 128 tokens.
 
-\textbf{Training.} AdamW with differential learning rates: top 4 encoder layers at $2 \times 10^{-6}$ (10$\times$ lower than the head at $2 \times 10^{-5}$) to prevent catastrophic forgetting of Hebrew pretraining. Batch size 32, max sequence length 128. 5-fold stratified cross-validation, up to 30 epochs per fold, early stopping (patience~=~5), linear warmup over 10\% of steps. The best-fold checkpoint is saved. The classification threshold is tuned on each fold's validation set by scanning $[0.2, 0.8]$ in steps of 0.05 to maximise micro-F1; the optimal threshold is stored in the checkpoint and used at inference.
+\textbf{Architecture.} The encoder is \texttt{dicta-il/dictabert}~\cite{shmidman2023dictabert} warm-started from the provenance NER checkpoint (already domain-adapted on 12,100 Hebrew manuscript samples via our earlier distant supervision pipeline). The bottom 10 of 12 transformer layers are frozen — they encode generic Hebrew morphology and syntax already learned during NER fine-tuning — while the top 2 layers and the classification head are fine-tuned. This partial fine-tuning allows the encoder to adapt its higher-level representations to the genre domain without catastrophic forgetting of Hebrew pretraining. The [CLS] representation is passed through Dropout(0.3) and a linear layer to logits over 9 classes: the 8 retained genres plus an explicit \emph{None-of-the-Above} (NOTA) class, allowing the model to abstain when no genre applies. Focal loss~\cite{lin2017focal} with $\gamma=2$ and per-class positive weights $w_c = n_{\text{neg},c}/n_{\text{pos},c}$ is used instead of standard BCE, downweighting easy majority-class examples and focusing training on the harder, rarer classes.
 
-\textbf{Output and integration.} At inference, the classifier is applied to any record lacking MARC~655 genres. Genres predicted above the tuned threshold are added as P136 statements with epistemic qualifiers: P1480 = Q18122778 (\emph{presumably}) and a P887 reference citing Q2539 (\emph{machine learning}), distinguishing classifier-inferred claims from authority-sourced data. When the model predicts NOTA — or no genre exceeds the threshold — the classifier returns \emph{``other''} and no P136 claim is written. The model is loaded lazily and degrades gracefully when absent.
+\textbf{Training.} AdamW with differential learning rates: top 2 encoder layers at $2 \times 10^{-6}$ (10$\times$ lower than the head at $2 \times 10^{-5}$) to prevent catastrophic forgetting. Batch size 64, max sequence length 64 tokens. 5-fold stratified cross-validation, up to 30 epochs per fold, early stopping (patience~=~5), linear warmup over 10\% of steps. The best-fold checkpoint is saved. The classification threshold is tuned on each fold's validation set by scanning $[0.2, 0.8]$ in steps of 0.05 to maximise micro-F1; the optimal threshold is stored in the checkpoint and used at inference. Total training time on Apple M4 Pro (MPS): approximately 1.5 hours.
 
-Table~\ref{tab:genre-classifier} summarises the 20 genre classes with their training set sizes.
+\textbf{Output and integration.} At inference, the classifier is applied to any record lacking MARC~655 genres. Because the model was trained on short 3-sentence context windows (typically under 64 tokens) but the inference input combines the title with up to three full MARC~500 notes (which can be substantially longer), a \emph{sliding window} strategy is used: the full token sequence is divided into overlapping 64-token windows with 50\% stride, each window is scored independently, and the sigmoid probabilities are averaged across all windows before thresholding. This prevents information loss from naive truncation. Genres predicted above the tuned threshold are added as P136 statements with epistemic qualifiers: P1480 = Q18122778 (\emph{presumably}) and a P887 reference citing Q2539 (\emph{machine learning}), distinguishing classifier-inferred claims from authority-sourced data. When the model predicts NOTA — or no genre exceeds the threshold — the classifier returns \emph{``other''} and no P136 claim is written. The model is loaded lazily and degrades gracefully when absent.
+
+Table~\ref{tab:genre-classifier} summarises the 8 retained genre classes and their training set sizes.
 
 \begin{table}[t]
-\caption{Genre classifier training set: top-20 classes by keyword-matched frequency.}
+\caption{Genre classifier training set: 8 retained classes (min.\ 100 examples) after quality filtering.}
 \label{tab:genre-classifier}
 \centering
 \small
-\begin{tabular}{lrlr}
+\begin{tabular}{lr}
 \toprule
-\textbf{Genre} & \textbf{N} & \textbf{Genre} & \textbf{N} \\
+\textbf{Genre} & \textbf{N} \\
 \midrule
-Piyyutim & 5,973 & Records (Documents) & 1,063 \\
-Poetry & 5,494 & Bibliographies & 804 \\
-Illustrated works & 5,091 & Tales & 504 \\
-Personal correspondence & 3,519 & Community records & 454 \\
-Censored manuscripts & 2,365 & Riddles & 426 \\
-Literature (misc.) & 2,170 & Legislation & 408 \\
-Autograph manuscripts & 2,136 & Registers of births & 396 \\
- & & Gittin & 331 \\
- & & Business records & 275 \\
- & & Forms (Jewish law) & 156 \\
- & & Family records & 63 \\
- & & Biographies & 34 \\
- & & Negotiable instruments & 20 \\
+Piyyutim & 5,852 \\
+Poetry & 5,464 \\
+Illustrated works (Manuscript) & 5,062 \\
+Personal correspondence & 3,419 \\
+Censored manuscripts & 2,364 \\
+Autograph manuscripts & 2,122 \\
+Records (Documents) & 1,052 \\
+Bibliographies & 775 \\
 \midrule
-\multicolumn{4}{r}{Total labeled: 27,735 \quad NOTA: 0} \\
+NOTA (abstention class) & 1,629 \\
+\midrule
+\textbf{Total} & \textbf{25,421} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -409,7 +409,7 @@ We evaluate on 123,621~MARC records from the NLI Hebrew manuscript catalog. The 
 Table~\ref{tab:ner-results} reports NER performance measured with 5-fold stratified cross-validation. All models use DictaBERT~\cite{shmidman2023dictabert} (110M parameters) as the base encoder.
 
 \begin{table}[t]
-\caption{NER model performance (5-fold CV).}
+\caption{Model performance (5-fold CV micro-F1).}
 \label{tab:ner-results}
 \centering
 \small
@@ -417,14 +417,40 @@ Table~\ref{tab:ner-results} reports NER performance measured with 5-fold stratif
 \toprule
 \textbf{Model} & \textbf{P} & \textbf{R} & \textbf{F1} & \textbf{Training} \\
 \midrule
-Person     & 86.0 & 85.4 & 85.7 & 2.5h (M1 Max)  \\
-Provenance & 94.0 & 96.0 & 95.9 & 40min (M4 Pro)  \\
-Contents   & 100  & 100  & 99.99& 15min (M4 Pro)  \\
+Person NER       & 86.0 & 85.4 & 85.7  & 2.5h (M1 Max)  \\
+Provenance NER   & 94.0 & 96.0 & 95.9  & 40min (M4 Pro)  \\
+Contents NER     & 100  & 100  & 99.99 & 15min (M4 Pro)  \\
+Genre classifier & —    & —    & \textbf{0.918} $\pm$ 0.003  & $\sim$2h (M4 Pro) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The provenance model's high F1 validates the distant supervision approach: 12,100~training samples generated automatically from MARC field alignment, with 28.4\% augmented with multi-entity examples, yielding a 1.95 percentage point improvement over single-entity training. The contents model's near-perfect F1 reflects the highly regular structure of MARC~505 fields.
+The provenance model's high F1 validates the distant supervision approach: 12,100~training samples generated automatically from MARC field alignment, with 28.4\% augmented with multi-entity examples, yielding a 1.95 percentage point improvement over single-entity training. The contents model's near-perfect F1 reflects the highly regular structure of MARC~505 fields. The genre classifier achieves micro-F1 of 0.918 $\pm$ 0.003 (best fold: 0.921) on 8 classes via a combination of quality-filtered distant supervision (whole-token Hebrew keyword matching, min.\ 100 examples per class), focal loss with per-class positive weighting, and partial fine-tuning of the top 2 DictaBERT layers warm-started from the provenance NER checkpoint. Table~\ref{tab:genre-perclass} reports per-class precision, recall, and F1 averaged across the 5 folds; the weakest class is \emph{Records (Documents)} (F1 0.796), reflecting its smaller training set (1,052 examples) and greater lexical diversity.
+
+\begin{table}[t]
+\caption{Genre classifier per-class results (mean across 5 folds, threshold = 0.65).}
+\label{tab:genre-perclass}
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Genre} & \textbf{P} & \textbf{R} & \textbf{F1} \\
+\midrule
+Autograph manuscripts      & 0.994 & 0.942 & 0.967 \\
+Personal correspondence    & 0.972 & 0.950 & 0.961 \\
+Piyyutim                   & 0.972 & 0.900 & 0.934 \\
+Censored manuscripts       & 0.952 & 0.918 & 0.935 \\
+Poetry                     & 0.971 & 0.875 & 0.920 \\
+Illustrated works          & 0.982 & 0.847 & 0.910 \\
+Bibliographies             & 0.908 & 0.854 & 0.880 \\
+Records (Documents)        & 0.776 & 0.821 & 0.796 \\
+\midrule
+NOTA (abstention)          & 0.753 & 0.879 & 0.811 \\
+\midrule
+\textbf{Micro-F1}          &       &       & \textbf{0.918} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{End-to-End Coverage}
 

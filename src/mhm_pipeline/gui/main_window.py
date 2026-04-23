@@ -27,6 +27,7 @@ from mhm_pipeline.gui.panels.ner_panel import NerPanel
 from mhm_pipeline.gui.panels.rdf_panel import RdfPanel
 from mhm_pipeline.gui.panels.validate_panel import ValidatePanel
 from mhm_pipeline.gui.panels.wikidata_panel import WikidataPanel
+from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
 from mhm_pipeline.gui.widgets.entity_highlighter import Entity
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.pipeline_flow_widget import PipelineFlowWidget
@@ -37,6 +38,7 @@ _STAGE_LABELS: list[str] = [
     "MARC Parsing",
     "NER Extraction",
     "Authority Matching",
+    "Wikidata Preview",
     "RDF Graph",
     "SHACL Validation",
     "Wikidata Upload",
@@ -143,6 +145,7 @@ class MainWindow(QMainWindow):
             default_kima_db=self._settings.kima_db_path,
             default_kima_tsv=self._settings.kima_tsv_dir,
         )
+        self._wikidata_preview_panel = WikidataPreviewPanel()
         self._rdf_panel = RdfPanel()
         self._validate_panel = ValidatePanel()
         self._wikidata_panel = WikidataPanel()
@@ -151,9 +154,10 @@ class MainWindow(QMainWindow):
             self._convert_panel,
             self._ner_panel,
             self._authority_panel,
-            self._rdf_panel,
-            self._validate_panel,
-            self._wikidata_panel,
+            self._wikidata_preview_panel,   # stage 3
+            self._rdf_panel,                # stage 4
+            self._validate_panel,           # stage 5
+            self._wikidata_panel,           # stage 6
         ]
         for panel in self._panels:
             self._stack.addWidget(panel)
@@ -200,6 +204,7 @@ class MainWindow(QMainWindow):
         self._convert_panel.run_requested.connect(self._on_run_convert)
         self._ner_panel.run_requested.connect(self._on_run_ner)
         self._authority_panel.run_requested.connect(self._on_run_authority)
+        self._wikidata_preview_panel.continue_clicked.connect(self._on_preview_continue)
         self._rdf_panel.run_requested.connect(self._on_run_rdf)
         self._validate_panel.run_requested.connect(self._on_run_validate)
         self._wikidata_panel.run_requested.connect(self._on_run_wikidata)
@@ -219,12 +224,19 @@ class MainWindow(QMainWindow):
         self._shared_log.append_line(f"Stage {index + 1} finished. Output: {output}")
         self._load_stage_results(index, output)
         self._autofill_next_stage(index, output)
+        if index == 1:
+            self._ner_panel.show_review_banner()
+        elif index == 2:
+            self._authority_panel.show_review_banner()
+            # Auto-load the preview panel and switch to it
+            self._wikidata_preview_panel.load_authority_output(output)
+            self._sidebar.setCurrentRow(3)
 
     def _load_stage_results(self, index: int, output: Path) -> None:
         """Load stage output into the appropriate panel visualization."""
-        if index == 1:  # NER stage
+        if index == 1:
             self._load_ner_results(output)
-        elif index == 2:  # Authority stage
+        elif index == 2:
             self._load_authority_results(output)
 
     def _load_ner_results(self, output: Path) -> None:
@@ -350,12 +362,14 @@ class MainWindow(QMainWindow):
         elif completed == 1:
             # Stage 1 output (NER results) feeds Authority as optional enrichment
             self._authority_panel._ner_selector.path = output
-        elif completed == 2:
+        elif completed == 3:
+            # Stage 3 (Preview) output feeds RDF and Upload panels
             self._rdf_panel._input_selector.path = output
             self._rdf_panel._output_selector.path = out_dir
-        elif completed == 3:
-            self._validate_panel._ttl_selector.path = output
             self._wikidata_panel._input_selector.path = output
+        elif completed == 4:
+            # Stage 4 (RDF) output feeds SHACL
+            self._validate_panel._ttl_selector.path = output
 
     def _on_stage_error(self, index: int, message: str) -> None:
         self._update_stage_state(index, "error")
@@ -446,10 +460,17 @@ class MainWindow(QMainWindow):
             mazal_db_path=mazal_db_path,
         )
 
+    def _on_preview_continue(self, reviewed_path: Path) -> None:
+        """Called when user clicks 'Save & Continue' in the Wikidata Preview panel."""
+        self._shared_log.append_line(
+            f"Wikidata Preview confirmed — reviewed JSON: {reviewed_path.name}"
+        )
+        self._controller.mark_stage_complete(3, reviewed_path)
+
     def _on_run_rdf(self, input_path: Path, output_path: Path, fmt: str) -> None:
         self._shared_log.append_line(f"Building RDF from {input_path.name}…")
         self._controller.start_stage(
-            3,
+            4,
             input_path=input_path,
             output_dir=output_path,
             rdf_format=fmt,
@@ -457,7 +478,7 @@ class MainWindow(QMainWindow):
 
     def _on_run_validate(self, ttl_path: Path, shapes_path: Path) -> None:
         self._shared_log.append_line(f"Validating {ttl_path.name}…")
-        self._controller.start_stage(4, input_path=ttl_path, shapes_path=shapes_path)
+        self._controller.start_stage(5, input_path=ttl_path, shapes_path=shapes_path)
 
     def _on_run_wikidata(
         self,
@@ -470,7 +491,7 @@ class MainWindow(QMainWindow):
         mode = "dry run" if dry_run else "live upload"
         self._shared_log.append_line(f"Wikidata {mode} from {input_path.name}…")
         self._controller.start_stage(
-            5,
+            6,
             input_path=input_path,
             output_dir=output_dir,
             token=token,

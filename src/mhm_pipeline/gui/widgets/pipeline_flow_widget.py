@@ -1,4 +1,4 @@
-"""Pipeline flow widget showing six stage boxes with animated active state."""
+"""Pipeline flow widget showing seven stage boxes with animated active state."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ class PipelineFlowWidget(QWidget):
         {"name": "Parse", "icon": "📄", "color": "#f59e0b"},
         {"name": "NER", "icon": "🔍", "color": "#eab308"},
         {"name": "Authority", "icon": "🔗", "color": "#8b5cf6"},
+        {"name": "Preview", "icon": "👁", "color": "#0ea5e9"},
         {"name": "RDF", "icon": "🕸️", "color": "#3b82f6"},
         {"name": "Validate", "icon": "✓", "color": "#22c55e"},
         {"name": "Upload", "icon": "☁️", "color": "#ef4444"},
@@ -157,14 +158,14 @@ class PipelineFlowWidget(QWidget):
             stats: Statistics string (e.g., "47 fields", "12 entities").
 
         Raises:
-            IndexError: If stage_index is out of range (0-5).
+            IndexError: If stage_index is out of range (0-6).
 
         Example:
             >>> widget.update_stage_stats(0, "47 fields")
             >>> widget.update_stage_stats(1, "12 entities")
         """
         if not 0 <= stage_index < len(self._stage_labels):
-            raise IndexError(f"Stage index {stage_index} out of range (0-5)")
+            raise IndexError(f"Stage index {stage_index} out of range (0-6)")
         self._stage_labels[stage_index].setText(stats)
 
     def _animate_active_stage(self) -> None:

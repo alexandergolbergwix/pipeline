@@ -29,11 +29,10 @@ class GenreClassifier:
         import torch  # noqa: PLC0415
         from transformers import AutoTokenizer  # noqa: PLC0415
 
-        # Make train_genre_classifier importable for GenreClassificationModel
         ner_dir = str(Path(__file__).resolve().parent.parent.parent / "ner")
         if ner_dir not in sys.path:
             sys.path.insert(0, ner_dir)
-        from train_genre_classifier import GenreClassificationModel  # noqa: PLC0415
+        from genre_classifier_model import GenreClassificationModel  # noqa: PLC0415
 
         if device == "auto":
             _dev = (
@@ -52,6 +51,7 @@ class GenreClassifier:
         self.genre_label2id: dict[str, int] = checkpoint["genre_label2id"]
         self.genre_id2label: dict[int, str] = {v: k for k, v in self.genre_label2id.items()}
         self.threshold: float = checkpoint.get("threshold", 0.5)
+        self.max_length: int = checkpoint.get("max_length", 64)
         num_genres: int = checkpoint.get("num_genres", len(self.genre_label2id))
 
         base_model = os.environ.get("MHM_BUNDLED_DICTABERT", _BASE_MODEL)
@@ -69,6 +69,11 @@ class GenreClassifier:
 
     def predict(self, title: str, notes: list[str]) -> list[tuple[str, float]]:
         """Return list of (genre_str, confidence) for genres above threshold.
+
+        For texts longer than the training max_length (64 tokens), a sliding
+        window over the token sequence is used: each window is scored
+        independently and the probabilities are averaged across windows.
+        This prevents information loss from simple truncation.
 
         Returns an empty list when:
         - The NOTA class is predicted (manuscript genre is outside the trained vocabulary), or
@@ -88,19 +93,60 @@ class GenreClassifier:
         if not text:
             return []
 
+        max_length: int = self.max_length
+        stride: int = max_length // 2  # 50% overlap between windows
+
+        # Tokenize without truncation to get full token sequence
         enc = self.tokenizer(
             text,
-            max_length=256,
-            truncation=True,
-            padding="max_length",
+            truncation=False,
             return_tensors="pt",
         )
-        input_ids = enc["input_ids"].to(self.device)
-        attention_mask = enc["attention_mask"].to(self.device)
+        input_ids_full = enc["input_ids"][0]  # (total_tokens,)
+        attn_full = enc["attention_mask"][0]
+        total_tokens = input_ids_full.size(0)
+
+        if total_tokens <= max_length:
+            # Short text: single padded inference (common case for 3-sentence windows)
+            enc_padded = self.tokenizer(
+                text,
+                max_length=max_length,
+                truncation=True,
+                padding="max_length",
+                return_tensors="pt",
+            )
+            windows_ids = enc_padded["input_ids"]
+            windows_mask = enc_padded["attention_mask"]
+        else:
+            # Long text: sliding window with stride, pad last window
+            ids_list: list[torch.Tensor] = []
+            mask_list: list[torch.Tensor] = []
+            start = 0
+            while start < total_tokens:
+                end = min(start + max_length, total_tokens)
+                chunk_ids = input_ids_full[start:end]
+                chunk_mask = attn_full[start:end]
+                # Pad to max_length if shorter
+                pad_len = max_length - chunk_ids.size(0)
+                if pad_len > 0:
+                    pad_id = self.tokenizer.pad_token_id or 0
+                    chunk_ids = torch.cat([chunk_ids, torch.full((pad_len,), pad_id)])
+                    chunk_mask = torch.cat([chunk_mask, torch.zeros(pad_len, dtype=torch.long)])
+                ids_list.append(chunk_ids)
+                mask_list.append(chunk_mask)
+                if end >= total_tokens:
+                    break
+                start += stride
+            windows_ids = torch.stack(ids_list)    # (n_windows, max_length)
+            windows_mask = torch.stack(mask_list)
+
+        windows_ids = windows_ids.to(self.device)
+        windows_mask = windows_mask.to(self.device)
 
         with torch.no_grad():
-            logits = self.model(input_ids, attention_mask)
-            probs = torch.sigmoid(logits[0]).cpu().tolist()
+            logits = self.model(windows_ids, windows_mask)          # (n_windows, n_classes)
+            probs_per_window = torch.sigmoid(logits).cpu()          # (n_windows, n_classes)
+            probs = probs_per_window.mean(dim=0).tolist()           # average across windows
 
         nota_label = "__NOTA__"
         nota_idx = next(
@@ -116,6 +162,5 @@ class GenreClassifier:
         results = sorted(results, key=lambda x: x[1], reverse=True)
 
         if not results:
-            # NOTA predicted or no genre above threshold — return "other"
             return [("other", round(nota_prob, 4))]
         return results

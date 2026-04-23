@@ -667,11 +667,22 @@ Role & Keyword heuristics & --- & Hebrew role terms \\
 \midrule
 \textbf{Provenance NER v2} & \textbf{DictaBERT + NER head} & \textbf{95.91\% F1} & \textbf{12.1K (28.4\% multi-entity)} \\
 \textbf{Contents NER} & \textbf{DictaBERT + NER head} & \textbf{99.99\% F1} & \textbf{10K from 123K MARC} \\
+\midrule
+\textbf{Colophon~ML (MARC 500)} & \textbf{DictaBERT multi-label (2 heads)} & \textbf{F1 $\approx$~96\%} & \textbf{Sentence-split MARC 500 notes} \\
+\textbf{Genre~ML (P136 fallback)} & \textbf{DictaBERT multi-label (8 classes + NOTA)} & \textbf{micro-F1 0.918} & \textbf{25.4K Ktiv records (keyword-gated)} \\
 \bottomrule
 \end{tabular}
-\caption{NER model comparison across all three pipelines.}
+\caption{Five ML models bundled with the pipeline: three token-level NER models (Stage~2), a sentence-level MARC~500 classifier that routes colophon/provenance sentences, and a genre classifier that fills P136 at Stage~3 for records without MARC~655.}
 \label{tab:ner-models}
 \end{table}
+
+\subsubsection{Model 4: Colophon~ML (MARC~500 sentence classifier)}
+
+A single DictaBERT encoder with two independent sigmoid heads classifies each sentence in MARC~500 general notes as \textsc{Colophon} and/or \textsc{Provenance} (multi-label: a sentence may be both). Colophon sentences feed into P1684 (inscription); Provenance sentences are re-routed into the Provenance NER pipeline at inference time, extending owner/date/collection coverage to MARC~500 in addition to MARC~561. The model lives as a lazy-loaded singleton in \code{src/mhm\_pipeline/controller/workers.py}; when the weight file is absent the pipeline degrades gracefully to a 4-keyword Hebrew rule.
+
+\subsubsection{Model 5: Genre~ML (P136 classifier, Stage~3)}
+
+A distant-supervision classifier trained on 25,421 Ktiv records whose MARC~500 notes contain at least one whole-token match against the \texttt{GENRE\_KEYWORDS} dictionary, plus 1{,}629 NOTA (``none of the above'') abstention examples. Eight high-confidence genre classes are retained after filtering classes with fewer than 100 training examples. The architecture is DictaBERT warm-started from the Provenance NER checkpoint, with the top 2 of 12 encoder layers fine-tuned under differential learning rates, focal loss ($\gamma=2$), and per-fold threshold tuning. At inference, the model runs only when a record has no MARC~655 heading; inferred genres are written as P136 claims qualified with P1480 (``presumably'') and a P887 reference pointing to Q2539 (machine learning). The classifier lives in \code{converter/wikidata/item\_builder.py} as a lazy-loaded singleton. Expected P136 coverage impact on Ktiv: 69\%~$\to$~$\approx$85\%.
 
 \subsection{Training Data: Distant Supervision}
 

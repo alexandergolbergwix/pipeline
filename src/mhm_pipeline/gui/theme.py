@@ -1,7 +1,15 @@
-"""Centralised colour theme for the MHM Pipeline GUI.
+"""Centralised design system for the MHM Pipeline GUI.
 
-Every widget imports colours from this module instead of defining its own.
+Every widget imports tokens from this module instead of defining its own.
 Supports Dark / Light / System (auto-detect) modes via ``SettingsManager``.
+
+Design tokens
+-------------
+- Spacing:      SPACE_XS … SPACE_2XL  (px integers)
+- Border radii: RADIUS_SM … RADIUS_LG  (px integers)
+- Font sizes:   FONT_XS … FONT_XL      (px integers)
+- Colors:       ui(), node_color(), entity_color(), role_color(), …
+- Stylesheets:  button_style(), frame_style(), warning_banner_style(), …
 
 Usage::
 
@@ -10,6 +18,7 @@ Usage::
     bg, text = theme.node_color("person")
     style    = theme.button_style()
     dark     = theme.is_dark()
+    lbl.setStyleSheet(f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;")
 """
 
 from __future__ import annotations
@@ -18,6 +27,27 @@ from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from PyQt6.QtGui import QColor
+
+# ── Spacing tokens (px) ──────────────────────────────────────────────────────
+SPACE_XS: int = 4
+SPACE_SM: int = 8
+SPACE_MD: int = 12
+SPACE_LG: int = 16
+SPACE_XL: int = 24
+SPACE_2XL: int = 32
+
+# ── Border radius tokens (px) ────────────────────────────────────────────────
+RADIUS_SM: int = 4
+RADIUS_MD: int = 6
+RADIUS_LG: int = 8
+
+# ── Font size tokens (px) ────────────────────────────────────────────────────
+FONT_XS: int = 10
+FONT_SM: int = 11
+FONT_MD: int = 12
+FONT_BASE: int = 13
+FONT_LG: int = 14
+FONT_XL: int = 16
 
 # ── Data types ───────────────────────────────────────────────────────────────
 
@@ -367,3 +397,185 @@ def node_colors_for_js() -> dict[str, dict[str, str]]:
     """Return node colours as a dict suitable for JSON injection into the HTML template."""
     table = _NODE_DARK if is_dark() else _NODE_LIGHT
     return {k: {"bg": v.bg, "border": v.text} for k, v in table.items()}
+
+
+# ── Wikidata Preview source badge colours ────────────────────────────────────
+
+_SOURCE_LIGHT: dict[str, tuple[str, str]] = {
+    "MARC":           ("#f1f5f9", "MARC"),
+    "Person NER":     ("#dbeafe", "Person NER 🤖"),
+    "Provenance NER": ("#ede9fe", "Provenance NER 🤖"),
+    "Contents NER":   ("#ccfbf1", "Contents NER 🤖"),
+    "Colophon ML":    ("#ffedd5", "Colophon ML ⚡"),
+    "VIAF":           ("#d1fae5", "VIAF"),
+    "NLI/Mazal":      ("#bbf7d0", "NLI/Mazal"),
+    "KIMA":           ("#dcfce7", "KIMA"),
+}
+_SOURCE_DARK: dict[str, tuple[str, str]] = {
+    "MARC":           ("#1e293b", "MARC"),
+    "Person NER":     ("#1e3a5f", "Person NER 🤖"),
+    "Provenance NER": ("#2d1b69", "Provenance NER 🤖"),
+    "Contents NER":   ("#042f2e", "Contents NER 🤖"),
+    "Colophon ML":    ("#431407", "Colophon ML ⚡"),
+    "VIAF":           ("#052e16", "VIAF"),
+    "NLI/Mazal":      ("#052e16", "NLI/Mazal"),
+    "KIMA":           ("#052e16", "KIMA"),
+}
+
+
+def source_bg(source: str) -> str:
+    """Return background hex for a Wikidata Preview source badge."""
+    dark = is_dark()
+    table = _SOURCE_DARK if dark else _SOURCE_LIGHT
+    fallback = "#1e293b" if dark else "#f8fafc"
+    return table.get(source, (fallback, source))[0]
+
+
+def source_label(source: str) -> str:
+    """Return display label for a Wikidata Preview source."""
+    return _SOURCE_LIGHT.get(source, ("#f8fafc", source))[1]
+
+
+# ── Banner stylesheet helpers ────────────────────────────────────────────────
+
+
+def info_banner_style() -> str:
+    """QFrame stylesheet for an info banner — amber border, transparent background."""
+    return (
+        f"QFrame {{ border: 1px solid {ui('highlight')};"
+        f" border-radius: {RADIUS_MD}px; padding: 4px; }}"
+    )
+
+
+def warning_banner_style() -> str:
+    """QFrame stylesheet for a warning banner — amber tinted."""
+    dark = is_dark()
+    bg = "#422006" if dark else "#fffbeb"
+    border = "#d97706" if dark else "#f59e0b"
+    return (
+        f"QFrame {{ background: {bg}; border: 1px solid {border};"
+        f" border-radius: {RADIUS_MD}px; }}"
+    )
+
+
+def warning_text_color() -> str:
+    """Foreground color for text inside a warning banner."""
+    return "#fcd34d" if is_dark() else "#92400e"
+
+
+def warning_btn_style() -> str:
+    """Amber action button style for use inside a warning banner."""
+    return (
+        f"QPushButton {{ background: #f59e0b; color: white; border: none;"
+        f" border-radius: {RADIUS_SM}px; padding: 4px 10px; font-size: {FONT_MD}px; }}"
+        f"QPushButton:hover {{ background: #d97706; }}"
+    )
+
+
+def success_btn_style() -> str:
+    """Green 'continue / save' button style."""
+    return (
+        f"QPushButton {{ background: #16a34a; color: white; border-radius: {RADIUS_SM}px;"
+        f" padding: 6px 18px; font-weight: bold; }}"
+        f"QPushButton:hover {{ background: #15803d; }}"
+        f"QPushButton:disabled {{ background: {ui('button_disabled')}; }}"
+    )
+
+
+# ── App-level stylesheet ─────────────────────────────────────────────────────
+
+
+def generate_app_stylesheet() -> str:
+    """Generate a global QSS string from current theme tokens.
+
+    Applied once at app startup via ``apply_stylesheet()``.  Covers scrollbars,
+    splitter handles, and a glass-aesthetic for the sidebar and log viewer.
+    Individual widgets keep their own per-widget stylesheets.
+    """
+    dark = is_dark()
+    border = ui("border")
+
+    if dark:
+        window_bg     = "rgba(20, 20, 32, 230)"
+        sidebar_bg    = "rgba(24, 24, 37, 218)"
+        sidebar_sel   = "rgba(99, 102, 241, 200)"
+        sidebar_hover = "rgba(255, 255, 255, 18)"
+        glass_border  = "rgba(255, 255, 255, 25)"
+        log_bg        = "rgba(17, 17, 28, 220)"
+    else:
+        window_bg     = "rgba(248, 250, 252, 230)"
+        sidebar_bg    = "rgba(243, 244, 246, 220)"
+        sidebar_sel   = "rgba(59, 130, 246, 200)"
+        sidebar_hover = "rgba(0, 0, 0, 15)"
+        glass_border  = "rgba(0, 0, 0, 30)"
+        log_bg        = "rgba(241, 245, 249, 220)"
+
+    return f"""
+QScrollBar:vertical {{
+    width: 8px;
+    background: transparent;
+    margin: 0px;
+}}
+QScrollBar::handle:vertical {{
+    background: {border};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+QScrollBar:horizontal {{
+    height: 8px;
+    background: transparent;
+    margin: 0px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {border};
+    border-radius: 4px;
+    min-width: 20px;
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
+QSplitter::handle {{ background: {border}; }}
+QSplitter::handle:horizontal {{ width: 1px; }}
+QSplitter::handle:vertical {{ height: 1px; }}
+
+QMainWindow {{
+    background: {window_bg};
+}}
+
+QListWidget {{
+    background: {sidebar_bg};
+    border: 1px solid {glass_border};
+    border-radius: {RADIUS_LG}px;
+    outline: none;
+}}
+QListWidget::item {{
+    padding: {SPACE_SM}px {SPACE_MD}px;
+    border-radius: {RADIUS_SM}px;
+    margin: 1px 3px;
+}}
+QListWidget::item:selected {{
+    background: {sidebar_sel};
+    color: white;
+    border-radius: {RADIUS_SM}px;
+}}
+QListWidget::item:hover:!selected {{
+    background: {sidebar_hover};
+    border-radius: {RADIUS_SM}px;
+}}
+
+QPlainTextEdit {{
+    background: {log_bg};
+    border: 1px solid {glass_border};
+    border-radius: {RADIUS_MD}px;
+}}
+"""
+
+
+def apply_stylesheet(app: object) -> None:
+    """Apply the current theme stylesheet to a QApplication instance."""
+    app.setStyleSheet(generate_app_stylesheet())  # type: ignore[union-attr]
+
+
+def invalidate_cache() -> None:
+    """Clear the cached dark-mode flag (call after a palette/theme change)."""
+    global _dark  # noqa: PLW0603
+    _dark = None

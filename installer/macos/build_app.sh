@@ -99,6 +99,8 @@ find "$PIPELINE/ner" -name "*.py" ! -name "inference_pipeline.py" \
     ! -name "postprocessing_rules.py" \
     ! -name "train_joint_entity_role_model_kfold.py" \
     ! -name "train_ner_model_kfold.py" \
+    ! -name "genre_classifier_model.py" \
+    ! -name "marc500_sentence_model.py" \
     ! -name "__init__.py" \
     -delete 2>/dev/null || true
 
@@ -183,6 +185,24 @@ if [ -f "$CONT_MODEL" ]; then
     echo "  Contents NER: $(du -sh "$MODELS_DIR/contents_ner_model.pt" | cut -f1)"
 else
     echo "  WARNING: Contents NER model not found at $CONT_MODEL"
+fi
+
+# Bundle genre classifier model
+GENRE_MODEL="$REPO_ROOT/ner/genre_classifier_model.pt"
+if [ -f "$GENRE_MODEL" ]; then
+    cp "$GENRE_MODEL" "$PIPELINE/ner/genre_classifier_model.pt"
+    echo "  Genre classifier: $(du -sh "$PIPELINE/ner/genre_classifier_model.pt" | cut -f1)"
+else
+    echo "  Genre classifier model not found — P136 fallback will be skipped."
+fi
+
+# Bundle MARC 500 sentence classifier model
+MARC500_MODEL="$REPO_ROOT/ner/marc500_classifier_model.pt"
+if [ -f "$MARC500_MODEL" ]; then
+    cp "$MARC500_MODEL" "$PIPELINE/ner/marc500_classifier_model.pt"
+    echo "  MARC 500 classifier: $(du -sh "$PIPELINE/ner/marc500_classifier_model.pt" | cut -f1)"
+else
+    echo "  MARC 500 classifier model not found — colophon/provenance routing will be skipped."
 fi
 
 # ── Step 5: Bundle Python venv (if available) ────────────────────────

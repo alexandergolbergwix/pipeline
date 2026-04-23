@@ -18,6 +18,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── MARC 500 sentence classifier — lazy singleton ─────────────────────────────
+_MARC500_CLASSIFIER: object | None = "unloaded"
+
+
+def _get_marc500_classifier() -> object | None:
+    global _MARC500_CLASSIFIER
+    if _MARC500_CLASSIFIER == "unloaded":
+        model_path = Path(__file__).resolve().parents[3] / "ner" / "marc500_classifier_model.pt"
+        if model_path.exists():
+            try:
+                from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
+                _MARC500_CLASSIFIER = Marc500Classifier(str(model_path))
+            except Exception as _exc:
+                logger.warning("Could not load MARC 500 classifier: %s", _exc)
+                _MARC500_CLASSIFIER = None
+        else:
+            _MARC500_CLASSIFIER = None
+    return _MARC500_CLASSIFIER
+
+
+def _split_marc500_sentences(text: str) -> list[str]:
+    import re as _re  # noqa: PLC0415
+    parts = _re.split(r"(?<=[.!?])\s+|\n", text)
+    return [s.strip() for s in parts if len(s.strip()) >= 10]
+
 
 class StageWorker(QThread):
     """Base worker thread for a single pipeline stage.
@@ -106,34 +131,12 @@ class MarcParseWorker(StageWorker):
 
 
 def _split_provenance_text(text: str) -> list[str]:
-    """Split MARC 561 provenance text into single-entity segments.
+    """Split MARC 561 provenance text on pipe separators only.
 
-    The provenance NER model was trained on single-entity samples, so we
-    split aggressively at: pipes, commas before quotes, colons before
-    quotes, and parenthetical boundaries.
+    Preserves the full "ציון בעלים: ..." prefix in each segment so the
+    model retains the entity-type context it was trained on.
     """
-    import re  # noqa: PLC0415
-
-    segments: list[str] = []
-    for pipe_seg in text.split("|"):
-        pipe_seg = pipe_seg.strip()
-        if not pipe_seg:
-            continue
-        colon_parts = re.split(r':\s*(?=")', pipe_seg, maxsplit=1)
-        if len(colon_parts) == 2:
-            prefix = colon_parts[0].strip()
-            rest = colon_parts[1].strip()
-            name_segments = re.split(r',\s*(?=")', rest)
-            for ns in name_segments:
-                ns = ns.strip()
-                if ns:
-                    segments.append(ns)
-            if prefix and not any(prefix in s for s in segments):
-                segments.append(prefix)
-        else:
-            sub_segments = re.split(r',\s*(?=")', pipe_seg)
-            segments.extend(s.strip() for s in sub_segments if s.strip())
-    return segments
+    return [seg.strip() for seg in text.split("|") if seg.strip()]
 
 
 def _extract_texts_from_record(record: dict) -> list[str]:
@@ -257,10 +260,14 @@ class NerWorker(StageWorker):
                 from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
 
                 self.log_line.emit("Loading provenance NER model...")
-                provenance_pipeline = NERInferencePipeline(
-                    model_path=prov_path,
-                    device=self._device,
-                )
+                try:
+                    provenance_pipeline = NERInferencePipeline(
+                        model_path=prov_path,
+                        device=self._device,
+                    )
+                except Exception as _prov_load_err:
+                    logger.error("Provenance NER load failed: %s", _prov_load_err, exc_info=True)
+                    provenance_pipeline = None
 
             # 3. Contents NER (optional)
             contents_pipeline = None
@@ -273,10 +280,14 @@ class NerWorker(StageWorker):
                 from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
 
                 self.log_line.emit("Loading contents NER model...")
-                contents_pipeline = NERInferencePipeline(
-                    model_path=cont_path,
-                    device=self._device,
-                )
+                try:
+                    contents_pipeline = NERInferencePipeline(
+                        model_path=cont_path,
+                        device=self._device,
+                    )
+                except Exception as _cont_load_err:
+                    logger.error("Contents NER load failed: %s", _cont_load_err, exc_info=True)
+                    contents_pipeline = None
 
             models_loaded = 1 + (1 if provenance_pipeline else 0) + (1 if contents_pipeline else 0)
             self.log_line.emit(f"Processing {total} records with {models_loaded} NER model(s)")
@@ -335,11 +346,25 @@ class NerWorker(StageWorker):
                             except Exception as cont_exc:
                                 logger.warning("Contents NER error: %s", cont_exc)
 
+                # MARC 500 colophon sentence detection
+                ml_colophon_sentences: list[str] = []
+                _marc500_clf = _get_marc500_classifier()
+                if _marc500_clf is not None:
+                    for note in record.get("notes") or []:
+                        for sent in _split_marc500_sentences(str(note)):
+                            try:
+                                above_thr, _conf = _marc500_clf.is_colophon(sent)
+                                if above_thr:
+                                    ml_colophon_sentences.append(sent)
+                            except Exception as _clf_exc:
+                                logger.debug("MARC 500 clf error: %s", _clf_exc)
+
                 results.append(
                     {
                         "_control_number": record.get("_control_number"),
                         "text": "\n".join(texts),
                         "entities": all_entities,
+                        "ml_colophon_sentences": ml_colophon_sentences,
                     }
                 )
                 self.progress.emit(int((idx + 1) / total * 100))
@@ -688,6 +713,14 @@ class AuthorityWorker(StageWorker):
             if ner_rec and ner_rec.get("entities"):
                 record["entities"] = ner_rec["entities"]
                 enriched += 1
+            ml_col = ner_rec.get("ml_colophon_sentences") if ner_rec else None
+            if ml_col:
+                existing = str(record.get("colophon_text") or "").strip()
+                new_sents = [s for s in ml_col if s not in existing]
+                if new_sents:
+                    record["colophon_text"] = (
+                        (existing + " " if existing else "") + " ".join(new_sents)
+                    ).strip()
         return enriched
 
     def _init_viaf(self, viaf_matcher_class: type) -> VIAFMatcher | None:

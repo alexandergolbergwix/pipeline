@@ -8,6 +8,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.controller.workers import (
     AuthorityWorker,
     MarcParseWorker,
@@ -25,9 +26,10 @@ _STAGE_NAMES: dict[int, str] = {
     0: "MARC Parse",
     1: "NER",
     2: "Authority",
-    3: "RDF Build",
-    4: "SHACL Validate",
-    5: "Wikidata Upload",
+    3: "Wikidata Preview",   # interactive — no worker
+    4: "RDF Build",
+    5: "SHACL Validate",
+    6: "Wikidata Upload",
 }
 
 
@@ -78,6 +80,11 @@ class PipelineController(QObject):
     def _on_worker_progress(self, stage_index: int, pct: int) -> None:
         self.stage_progress.emit(stage_index, pct)
 
+    def mark_stage_complete(self, stage_index: int, output_path: Path) -> None:
+        """Mark an interactive (no-worker) stage as complete and emit finished."""
+        self._stage_outputs[stage_index] = output_path
+        self.stage_finished.emit(stage_index, output_path)
+
     def cancel(self) -> None:
         """Request the current worker to stop and wait for it to finish."""
         if self._current_worker is None:
@@ -123,7 +130,7 @@ class PipelineController(QObject):
                 output_dir=output_dir,
                 start=int(str(kwargs.get("start", 0))),
                 end=int(str(kwargs.get("end", 0))),
-                device=self._settings.gpu_device,
+                device=get_device(self._settings.gpu_device),
             )
 
         if stage_index == 1:
@@ -135,7 +142,7 @@ class PipelineController(QObject):
                 model_path=str(
                     kwargs.get("model_path", "alexgoldberg/hebrew-manuscript-joint-ner-v2")
                 ),
-                device=self._settings.gpu_device,
+                device=get_device(self._settings.gpu_device),
                 batch_size=int(str(kwargs.get("batch_size", self._settings.batch_size))),
                 provenance_model_path=str(kwargs.get("provenance_model_path", "")),
                 contents_model_path=str(kwargs.get("contents_model_path", "")),
@@ -160,20 +167,21 @@ class PipelineController(QObject):
                 mazal_db_path=str(kwargs.get("mazal_db_path", self._settings.mazal_db_path)),
             )
 
-        if stage_index == 3:
+        if stage_index == 4:
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
             return RdfBuildWorker(
-                input_path=self._resolve_input(2, kwargs),  # Stage 2 = authority_enriched.json
+                # Stage 3 = authority_enriched_reviewed.json (post-review)
+                input_path=self._resolve_input(3, kwargs),
                 output_dir=output_dir,
                 rdf_format=str(kwargs.get("rdf_format", "Turtle")),
             )
 
-        if stage_index == 4:
+        if stage_index == 5:
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
             return ShaclValidateWorker(
-                ttl_path=self._resolve_input(3, kwargs),
+                ttl_path=self._resolve_input(4, kwargs),
                 shapes_path=Path(
                     str(
                         kwargs.get("shapes_path", Path("ontology/shacl-shapes.ttl")),
@@ -182,11 +190,12 @@ class PipelineController(QObject):
                 output_dir=output_dir,
             )
 
-        if stage_index == 5:
+        if stage_index == 6:
             token = str(kwargs.get("token", ""))
             output_dir = Path(str(kwargs.get("output_dir", self._settings.output_dir)))
             return WikidataUploadWorker(
-                input_path=self._resolve_input(2, kwargs),
+                # Stage 3 = reviewed authority JSON (same format as stage 2 output)
+                input_path=self._resolve_input(3, kwargs),
                 output_dir=output_dir,
                 token=token,
                 dry_run=bool(kwargs.get("dry_run", True)),

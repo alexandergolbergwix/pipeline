@@ -263,7 +263,7 @@ class TestGuiWidgetContracts:
         window = MainWindow(settings, controller)
 
         # Call _on_stage_progress for every stage index — none should crash
-        for stage_idx in range(6):
+        for stage_idx in range(7):
             window._on_stage_progress(stage_idx, 0)
             window._on_stage_progress(stage_idx, 50)
             window._on_stage_progress(stage_idx, 100)
@@ -1136,3 +1136,791 @@ class TestFullGuiProgressChain:
         assert output.exists()
         records = json.loads(output.read_text(encoding="utf-8"))
         assert len(records) == 10
+
+
+# ── Real Model Inference Tests ────────────────────────────────────────────────
+# These tests load the actual trained model files and verify real predictions.
+# Skipped in CI (no GPU, no model files) and when model files are absent.
+# They are intentionally slow (model load + inference) — run locally only.
+
+_PROV_MODEL = _ROOT / "ner" / "provenance_ner_model.pt"
+_CONT_MODEL = _ROOT / "ner" / "contents_ner_model.pt"
+_GENRE_MODEL = _ROOT / "ner" / "genre_classifier_model.pt"
+_MARC500_MODEL = _ROOT / "ner" / "marc500_classifier_model.pt"
+
+_require_prov_model = pytest.mark.skipif(
+    IN_CI or not _PROV_MODEL.exists(),
+    reason="Provenance NER model not present or CI",
+)
+
+_require_marc500_model = pytest.mark.skipif(
+    IN_CI or not _MARC500_MODEL.exists(),
+    reason="MARC 500 classifier model not present or CI",
+)
+_require_cont_model = pytest.mark.skipif(
+    IN_CI or not _CONT_MODEL.exists(),
+    reason="Contents NER model not present or CI",
+)
+_require_genre_model = pytest.mark.skipif(
+    IN_CI or not _GENRE_MODEL.exists(),
+    reason="Genre classifier model not present or CI",
+)
+
+
+class TestNerModelsRealInference:
+    """Verify all three NER models + genre classifier produce real predictions.
+
+    These tests load actual .pt checkpoints and run forward passes on short
+    Hebrew texts.  They guard against:
+    - Broken checkpoint format (wrong keys, mismatched architecture)
+    - Tokenisation regressions (wrong tokenizer, wrong max_length)
+    - Silent all-zero output (threshold too high, wrong sigmoid polarity)
+    - Wrong label mapping (id2label reversed or off-by-one)
+    """
+
+    # ── Provenance NER ────────────────────────────────────────────────
+
+    @_require_prov_model
+    def test_provenance_ner_loads_without_error(self) -> None:
+        """Provenance NER checkpoint must load cleanly."""
+        import sys  # noqa: PLC0415
+        ner_dir = str(_ROOT / "ner")
+        if ner_dir not in sys.path:
+            sys.path.insert(0, ner_dir)
+        from ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
+        pipe = NERInferencePipeline(str(_PROV_MODEL), device="cpu")
+        assert pipe is not None
+
+    @_require_prov_model
+    def test_provenance_ner_extracts_owner_from_marc_561(self) -> None:
+        """Should extract OWNER entity from a typical MARC 561 provenance note."""
+        import sys  # noqa: PLC0415
+        ner_dir = str(_ROOT / "ner")
+        if ner_dir not in sys.path:
+            sys.path.insert(0, ner_dir)
+        from ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
+        pipe = NERInferencePipeline(str(_PROV_MODEL), device="cpu")
+        # Classic MARC 561 provenance note: owned by a named person
+        text = "נכתב עבור ר' משה בן אברהם הלוי בשנת ת\"פ"
+        entities = pipe.process_text(text)
+        assert isinstance(entities, list), "predict() must return a list"
+        assert len(entities) > 0, (
+            f"Provenance NER returned no entities for known provenance text: {text!r}"
+        )
+        labels = {e.get("label") or e.get("type") for e in entities}
+        assert labels & {"OWNER", "DATE"}, (
+            f"Expected OWNER or DATE entity; got labels: {labels}"
+        )
+
+    @_require_prov_model
+    def test_provenance_ner_returns_empty_for_non_provenance_text(self) -> None:
+        """Should not hallucinate OWNER/DATE entities from clearly irrelevant text."""
+        import sys  # noqa: PLC0415
+        ner_dir = str(_ROOT / "ner")
+        if ner_dir not in sys.path:
+            sys.path.insert(0, ner_dir)
+        from ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
+        pipe = NERInferencePipeline(str(_PROV_MODEL), device="cpu")
+        # Pure layout description — no provenance signal
+        text = "כתוב על קלף, שתי עמודות, עשרים ואחת שורות בעמוד"
+        entities = pipe.process_text(text)
+        owner_date = [e for e in entities if (e.get("label") or e.get("type")) in ("OWNER", "DATE")]
+        assert len(owner_date) == 0, (
+            f"False-positive OWNER/DATE entities in non-provenance text: {owner_date}"
+        )
+
+    # ── Contents NER ─────────────────────────────────────────────────
+
+    @_require_cont_model
+    def test_contents_ner_loads_without_error(self) -> None:
+        """Contents NER checkpoint must load cleanly."""
+        import sys  # noqa: PLC0415
+        ner_dir = str(_ROOT / "ner")
+        if ner_dir not in sys.path:
+            sys.path.insert(0, ner_dir)
+        from ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
+        pipe = NERInferencePipeline(str(_CONT_MODEL), device="cpu")
+        assert pipe is not None
+
+    @_require_cont_model
+    def test_contents_ner_extracts_work_from_marc_505(self) -> None:
+        """Should extract WORK entity from a typical MARC 505 contents note."""
+        import sys  # noqa: PLC0415
+        ner_dir = str(_ROOT / "ner")
+        if ner_dir not in sys.path:
+            sys.path.insert(0, ner_dir)
+        from ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
+        pipe = NERInferencePipeline(str(_CONT_MODEL), device="cpu")
+        # Typical MARC 505 contents entry
+        text = "א. שולחן ערוך, אורח חיים, דף א ע\"א -- ב. תוספות יום טוב, דף כ ע\"ב"
+        entities = pipe.process_text(text)
+        assert isinstance(entities, list)
+        assert len(entities) > 0, (
+            f"Contents NER returned no entities for known contents text: {text!r}"
+        )
+        labels = {e.get("label") or e.get("type") for e in entities}
+        assert labels & {"WORK", "WORK_AUTHOR", "FOLIO"}, (
+            f"Expected WORK/WORK_AUTHOR/FOLIO entity; got labels: {labels}"
+        )
+
+    @_require_cont_model
+    def test_contents_ner_extracts_folio_reference(self) -> None:
+        """Should extract FOLIO entity from a contents note with folio markers."""
+        import sys  # noqa: PLC0415
+        ner_dir = str(_ROOT / "ner")
+        if ner_dir not in sys.path:
+            sys.path.insert(0, ner_dir)
+        from ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
+
+        pipe = NERInferencePipeline(str(_CONT_MODEL), device="cpu")
+        text = "משנה תורה, דף א ע\"א -- דף קכ ע\"ב"
+        entities = pipe.process_text(text)
+        labels = {e.get("label") or e.get("type") for e in entities}
+        assert labels & {"WORK", "FOLIO"}, (
+            f"Expected WORK or FOLIO entity; got labels: {labels}"
+        )
+
+    # ── Genre Classifier ──────────────────────────────────────────────
+
+    @_require_genre_model
+    def test_genre_classifier_loads_without_error(self) -> None:
+        """Genre classifier checkpoint must load cleanly."""
+        from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+
+        clf = GenreClassifier(str(_GENRE_MODEL), device="cpu")
+        assert clf is not None
+        assert len(clf.genre_label2id) == 9  # 8 genres + NOTA
+
+    @_require_genre_model
+    def test_genre_classifier_predicts_piyyutim_for_siddur(self) -> None:
+        """A siddur with piyyut notes should be classified as Piyyutim."""
+        from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+
+        clf = GenreClassifier(str(_GENRE_MODEL), device="cpu")
+        results = clf.predict(
+            title="סידור תפילה",
+            notes=["מכיל פיוטים לשבת ולחגים", "כתב יד עברי מן המאה הי\"ז"],
+        )
+        assert results, "Classifier returned no predictions for clear piyyutim text"
+        top_genre = results[0][0]
+        assert top_genre == "Piyyutim", (
+            f"Expected 'Piyyutim' as top genre; got {top_genre!r} (full: {results})"
+        )
+
+    @_require_genre_model
+    def test_genre_classifier_abstains_on_nota_text(self) -> None:
+        """A purely codicological note should trigger abstention (NOTA / 'other')."""
+        from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+
+        clf = GenreClassifier(str(_GENRE_MODEL), device="cpu")
+        results = clf.predict(
+            title="כתב יד עברי",
+            notes=["כתוב על קלף בכתב אשכנזי, שתי עמודות, שלושים שורות"],
+        )
+        # Either no genre predicted, or only "other" (NOTA)
+        non_nota = [r for r in results if r[0] != "other"]
+        assert len(non_nota) == 0, (
+            f"Classifier should abstain on codicological-only text; got: {results}"
+        )
+
+    @_require_genre_model
+    def test_genre_classifier_predicts_personal_correspondence(self) -> None:
+        """A letter text should be classified as Personal correspondence."""
+        from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+
+        clf = GenreClassifier(str(_GENRE_MODEL), device="cpu")
+        results = clf.predict(
+            title="אגרת",
+            notes=["מכתב ששלח הרב לתלמידו, בו הוא עונה על שאלותיו"],
+        )
+        assert results, "Classifier returned no predictions for letter text"
+        genres = [r[0] for r in results if r[0] != "other"]
+        assert "Personal correspondence" in genres, (
+            f"Expected 'Personal correspondence'; got {genres}"
+        )
+
+    @_require_genre_model
+    def test_genre_classifier_confidence_in_range(self) -> None:
+        """All confidence scores must be in [0, 1]."""
+        from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+
+        clf = GenreClassifier(str(_GENRE_MODEL), device="cpu")
+        results = clf.predict("פיוטים לשבת", ["מכיל פיוטים ופזמונות"])
+        for genre, conf in results:
+            assert 0.0 <= conf <= 1.0, (
+                f"Confidence out of range for {genre!r}: {conf}"
+            )
+
+
+# ── MARC 500 Sentence Classifier — real-inference tests ──────────────────────
+# Require ner/marc500_classifier_model.pt.  Skipped in CI and when model absent.
+
+
+class TestMarc500ModelRealInference:
+    """Verify the MARC 500 sentence classifier produces correct predictions.
+
+    Guards against:
+    - Broken checkpoint format or architecture mismatch
+    - Per-class threshold stored as wrong type (float vs dict)
+    - COLOPHON head silent failure (classic colophon sentence → False)
+    - PROVENANCE head silent failure (ownership sentence → False)
+    - False positives on clearly codicological sentences
+    """
+
+    @_require_marc500_model
+    def test_marc500_classifier_loads_without_error(self) -> None:
+        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
+
+        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
+        assert clf is not None
+        assert "COLOPHON" in clf.label2id
+        # colophon-only model: threshold is a plain float (not a dict)
+        assert isinstance(clf.threshold, float)
+
+    @_require_marc500_model
+    def test_colophon_detected_in_classic_colophon_sentence(self) -> None:
+        """נשלם הספר ביד משה הסופר should be classified as COLOPHON."""
+        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
+
+        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
+        above_thr, conf = clf.is_colophon("נשלם הספר הזה ביד משה הסופר בשנת תפ")
+        assert above_thr, (
+            f"Expected COLOPHON=True for classic colophon sentence; conf={conf:.3f}"
+        )
+
+    @_require_marc500_model
+    def test_physical_description_not_colophon(self) -> None:
+        """Pure codicological note should NOT be classified as COLOPHON."""
+        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
+
+        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
+        above_thr, conf = clf.is_colophon("כתוב על קלף בכתב אשכנזי שתי עמודות")
+        assert not above_thr, (
+            f"Expected COLOPHON=False for codicological note; conf={conf:.3f}"
+        )
+
+    @_require_marc500_model
+    def test_sentence_splitter_returns_nonempty_list(self) -> None:
+        from mhm_pipeline.controller.workers import _split_marc500_sentences  # noqa: PLC0415
+
+        note = "נשלם הספר הזה. כתוב על קלף בכתב אשכנזי."
+        sents = _split_marc500_sentences(note)
+        assert isinstance(sents, list)
+        assert len(sents) >= 1
+
+    @_require_marc500_model
+    def test_classify_sentence_confidence_in_range(self) -> None:
+        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
+
+        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
+        result = clf.classify_sentence("נשלם הספר הזה ביד משה הסופר")
+        # colophon-only model: only COLOPHON key
+        assert "COLOPHON" in result
+        above_thr, conf = result["COLOPHON"]
+        assert isinstance(above_thr, bool)
+        assert 0.0 <= conf <= 1.0, f"COLOPHON confidence out of range: {conf}"
+
+    @_require_marc500_model
+    def test_ner_worker_output_contains_ml_colophon_sentences_key(
+        self, tmp_path: Path,
+    ) -> None:
+        """NerWorker must emit ml_colophon_sentences in its JSON output."""
+        import json  # noqa: PLC0415
+
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        # Minimal MARC extract with a colophon note
+        record = {
+            "_control_number": "TEST001",
+            "title": "ספר בדיקה",
+            "notes": ["נשלם הספר הזה ביד משה הסופר בשנת תפ"],
+            "provenance": "",
+            "contents": [],
+        }
+        marc_extract = tmp_path / "marc.json"
+        marc_extract.write_text(json.dumps([record], ensure_ascii=False), encoding="utf-8")
+
+        model_path = str(_ROOT / "ner" / "alexgoldberg" / "hebrew-manuscript-joint-ner-v2")
+        hf_id = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
+        person_model = model_path if Path(model_path).exists() else hf_id
+
+        worker = NerWorker(
+            input_path=marc_extract,
+            output_dir=tmp_path,
+            model_path=person_model,
+            device="cpu",
+            batch_size=1,
+        )
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+
+        finished_paths: list[Path] = []
+        worker.finished.connect(
+            lambda p: finished_paths.append(p),
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.start()
+        worker.wait(120_000)
+
+        assert finished_paths, "NerWorker did not emit finished signal"
+        results = json.loads(finished_paths[0].read_text(encoding="utf-8"))
+        assert results, "NerWorker output is empty"
+        assert "ml_colophon_sentences" in results[0], (
+            "NerWorker output missing ml_colophon_sentences key"
+        )
+
+    @_require_marc500_model
+    def test_merge_propagates_ml_colophon_into_record(self) -> None:
+        """_merge_ner_into_records must copy ml_colophon_sentences into colophon_text."""
+        from mhm_pipeline.controller.workers import AuthorityWorker  # noqa: PLC0415
+
+        colophon_sent = "נשלם הספר הזה ביד משה הסופר"
+        marc_records = [{"_control_number": "X1", "colophon_text": ""}]
+        ner_by_cn = {"X1": {"entities": [], "ml_colophon_sentences": [colophon_sent]}}
+
+        AuthorityWorker._merge_ner_into_records(marc_records, ner_by_cn)
+        assert marc_records[0].get("colophon_text") == colophon_sent
+
+
+# ── Wikidata Preview Panel Tests ──────────────────────────────────────────────
+
+
+class TestWikidataPreviewPanel:
+    """Verify the WikidataPreviewPanel interactive review screen.
+
+    Guards against:
+    - Panel fails to initialize (import error, missing Qt deps)
+    - load_authority_output() fails to populate the record list
+    - _extract_fields() misidentifies source types (ML/NER/MARC/authority)
+    - In-cell edits not tracked in _edits dict
+    - _apply_edits_to_records() not propagating title/date/language changes
+    - continue_clicked signal not emitted with correct output path
+    - Stage count mismatch (must be 7, not 6)
+    """
+
+    def test_panel_initializes_without_error(self, qtbot: object) -> None:
+        """WikidataPreviewPanel must construct without raising."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+
+        panel = WikidataPreviewPanel()
+        assert panel is not None
+
+    def test_load_authority_output_populates_record_list(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """load_authority_output() must populate the left QListWidget."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+
+        records = [
+            {"_control_number": "A001", "title": "ספר ראשון"},
+            {"_control_number": "A002", "title": "ספר שני"},
+        ]
+        json_path = tmp_path / "authority_enriched.json"
+        json_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+
+        panel = WikidataPreviewPanel()
+        panel.load_authority_output(json_path)
+
+        assert panel._record_list.count() == 2
+        assert panel._continue_btn.isEnabled()
+
+    def test_load_authority_output_selects_first_record(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """After loading, the first record should be selected and table populated."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+
+        records = [{"_control_number": "B001", "title": "ספר בדיקה", "date": "מאה י\"ז"}]
+        json_path = tmp_path / "authority_enriched.json"
+        json_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+
+        panel = WikidataPreviewPanel()
+        panel.load_authority_output(json_path)
+
+        assert panel._table.rowCount() > 0, "Table must be populated after loading first record"
+
+    def test_extract_fields_colophon_ml_source(self, qtbot: object) -> None:
+        """_extract_fields must return 'Colophon ML' source when ml_colophon_sentences present."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import _extract_fields
+
+        record = {
+            "_control_number": "C001",
+            "colophon_text": "נשלם הספר הזה ביד משה הסופר",
+            "ml_colophon_sentences": ["נשלם הספר הזה ביד משה הסופר"],
+        }
+        fields = _extract_fields(record)
+        inscription = [(p, l, v, s) for p, l, v, s in fields if p == "P1684"]
+        assert inscription, "P1684 (inscription) must appear when colophon_text is non-empty"
+        assert inscription[0][3] == "Colophon ML", (
+            f"Expected source='Colophon ML' when ml_colophon_sentences present; "
+            f"got {inscription[0][3]!r}"
+        )
+
+    def test_extract_fields_colophon_marc_source_without_ml(self, qtbot: object) -> None:
+        """Without ml_colophon_sentences, colophon_text source must be 'MARC'."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import _extract_fields
+
+        record = {
+            "_control_number": "C002",
+            "colophon_text": "נשלם בשנת תפ",
+        }
+        fields = _extract_fields(record)
+        inscription = [(p, l, v, s) for p, l, v, s in fields if p == "P1684"]
+        assert inscription, "P1684 must appear when colophon_text is non-empty"
+        assert inscription[0][3] == "MARC", (
+            f"Expected source='MARC' without ml_colophon_sentences; got {inscription[0][3]!r}"
+        )
+
+    def test_extract_fields_ner_entity_source(self, qtbot: object) -> None:
+        """Person NER entities must surface as source='Person NER' on P50."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import _extract_fields
+
+        record = {
+            "_control_number": "D001",
+            "entities": [
+                {
+                    "text": "משה בן יצחק",
+                    "source": "person_ner",
+                    "label": "PERSON",
+                    "role": "AUTHOR",
+                }
+            ],
+        }
+        fields = _extract_fields(record)
+        ner_fields = [(p, l, v, s) for p, l, v, s in fields if s == "Person NER"]
+        assert ner_fields, "Expected at least one field with source='Person NER'"
+
+    def test_extract_fields_viaf_authority_source(self, qtbot: object) -> None:
+        """MARC authority match with viaf_uri must surface as source='VIAF'."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import _extract_fields
+
+        record = {
+            "_control_number": "E001",
+            "marc_authority_matches": [
+                {
+                    "display_name": "שלמה בן אברהם",
+                    "role": "AUTHOR",
+                    "viaf_uri": "http://viaf.org/viaf/12345",
+                }
+            ],
+        }
+        fields = _extract_fields(record)
+        viaf_fields = [(p, l, v, s) for p, l, v, s in fields if s == "VIAF"]
+        assert viaf_fields, "Expected field with source='VIAF' for authority match with viaf_uri"
+
+    def test_apply_edits_propagates_title_change(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """_apply_edits_to_records must write title edit back into the records copy."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+
+        records = [{"_control_number": "F001", "title": "כותרת ישנה"}]
+        json_path = tmp_path / "authority_enriched.json"
+        json_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+
+        panel = WikidataPreviewPanel()
+        panel.load_authority_output(json_path)
+
+        # Simulate an edit: inject directly into _edits for the title row
+        # Row 0 is P1476 (title) — key format is "0|P1476|title"
+        panel._edits["F001"] = {"0|P1476|title": "כותרת חדשה"}
+
+        edited = panel._apply_edits_to_records()
+        assert edited[0]["title"] == "כותרת חדשה", (
+            f"Expected edited title='כותרת חדשה'; got {edited[0]['title']!r}"
+        )
+
+    def test_continue_clicked_emits_with_reviewed_path(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """Clicking 'Save & Continue' must emit continue_clicked with the reviewed JSON path."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+
+        records = [{"_control_number": "G001", "title": "ספר גדול"}]
+        json_path = tmp_path / "authority_enriched.json"
+        json_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+
+        panel = WikidataPreviewPanel()
+        panel.load_authority_output(json_path)
+
+        emitted_paths: list[Path] = []
+        panel.continue_clicked.connect(emitted_paths.append)
+
+        panel._on_continue()
+
+        assert emitted_paths, "continue_clicked was not emitted"
+        assert emitted_paths[0].name == "authority_enriched_reviewed.json"
+        assert emitted_paths[0].exists(), "Reviewed JSON file must be written to disk"
+
+    def test_continue_writes_valid_json(self, qtbot: object, tmp_path: Path) -> None:
+        """The reviewed JSON written by _on_continue must be valid and preserve records."""
+        from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+
+        records = [
+            {"_control_number": "H001", "title": "ספר א"},
+            {"_control_number": "H002", "title": "ספר ב"},
+        ]
+        json_path = tmp_path / "authority_enriched.json"
+        json_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
+
+        panel = WikidataPreviewPanel()
+        panel.load_authority_output(json_path)
+        panel._on_continue()
+
+        reviewed_path = tmp_path / "authority_enriched_reviewed.json"
+        assert reviewed_path.exists()
+        reviewed = json.loads(reviewed_path.read_text(encoding="utf-8"))
+        assert len(reviewed) == 2
+        assert reviewed[0]["_control_number"] == "H001"
+
+    def test_stage_count_is_seven(self, qtbot: object) -> None:
+        """Pipeline has 7 stages (0-6) after inserting Wikidata Preview as stage 3."""
+        from mhm_pipeline.gui.main_window import MainWindow, _STAGE_LABELS
+        from mhm_pipeline.controller.pipeline_controller import PipelineController
+        from mhm_pipeline.settings.settings_manager import SettingsManager
+
+        settings = SettingsManager()
+        controller = PipelineController(settings)
+        window = MainWindow(settings, controller)
+
+        assert len(window._panels) == 7, (
+            f"Expected 7 stage panels; got {len(window._panels)}"
+        )
+        assert len(_STAGE_LABELS) == 7, (
+            f"Expected 7 stage labels; got {len(_STAGE_LABELS)}"
+        )
+        assert _STAGE_LABELS[3] == "Wikidata Preview", (
+            f"Stage 3 must be 'Wikidata Preview'; got {_STAGE_LABELS[3]!r}"
+        )
+
+
+# ── NER Worker — all 4 models end-to-end ──────────────────────────────────────
+# Require all model checkpoints.  Skipped in CI and when any model is absent.
+# Uses MPS if available (speeds up loading from ~5 min to ~45 s on M-series Mac).
+
+_PERSON_MODEL_ID = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
+
+_require_all_ner_models = pytest.mark.skipif(
+    IN_CI
+    or not _PROV_MODEL.exists()
+    or not _CONT_MODEL.exists()
+    or not _MARC500_MODEL.exists(),
+    reason="One or more NER model checkpoints missing, or running in CI",
+)
+
+# A synthetic MARC record designed to trigger all 4 model heads.
+_ALL_MODELS_RECORD = {
+    "_control_number": "TEST_ALL_MODELS_001",
+    "title": "ספר בדיקה כולל",
+    # notes: colophon sentence triggers MARC 500 classifier + person names for Person NER
+    "notes": [
+        "נשלם הספר הזה ביד משה הסופר בשנת ת\"פ בפאדובה",
+        "כתוב על קלף, שתי עמודות",
+    ],
+    # provenance: classic owner mark for Provenance NER
+    "provenance": "ציון בעלים: \"שלמה בכ\"ר יצחק הלוי\" (דף 1א)",
+    # contents: work + folio for Contents NER
+    "contents": [
+        {"folio_range": "1א", "title": "שולחן ערוך אורח חיים", "sequence": 1},
+        {"folio_range": "50ב", "title": "תוספות יום טוב", "sequence": 2},
+    ],
+    "colophon_text": "",
+}
+
+
+def _detect_device() -> str:
+    """Return 'mps' if available, else 'cpu'."""
+    try:
+        import torch  # noqa: PLC0415
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+class TestNerWorkerAllModels:
+    """End-to-end NerWorker QThread tests with all 4 real NER models loaded.
+
+    Guards against:
+    - Provenance / contents models silently skipped (prov_path resolved to "")
+    - Model loading exception swallowed by outer try/except
+    - Output JSON missing expected entity sources
+    - MARC 500 classifier not being invoked on notes
+    """
+
+    @_require_all_ner_models
+    def test_all_4_models_load_and_worker_finishes(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """NerWorker must finish (not error) when all 4 models are present."""
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(
+            json.dumps([_ALL_MODELS_RECORD], ensure_ascii=False), encoding="utf-8"
+        )
+
+        device = _detect_device()
+        worker = NerWorker(
+            input_path,
+            tmp_path,
+            _PERSON_MODEL_ID,
+            device,
+            batch_size=4,
+        )
+
+        errors: list[str] = []
+        worker.error.connect(errors.append)  # type: ignore[attr-defined]
+
+        # 5-minute timeout: loading 3 × 704 MB models on CPU can take 4 min
+        with qtbot.waitSignal(worker.finished, timeout=300_000) as blocker:  # type: ignore[attr-defined]
+            worker.start()
+
+        assert not errors, f"NerWorker emitted error: {errors}"
+        output = blocker.args[0]
+        assert output.exists(), "NerWorker finished but output file not found"
+
+    @_require_all_ner_models
+    def test_person_ner_entities_present_in_output(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """Output must contain at least one entity with source='person_ner'."""
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(
+            json.dumps([_ALL_MODELS_RECORD], ensure_ascii=False), encoding="utf-8"
+        )
+
+        device = _detect_device()
+        worker = NerWorker(input_path, tmp_path, _PERSON_MODEL_ID, device, batch_size=4)
+        with qtbot.waitSignal(worker.finished, timeout=300_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        results = json.loads((tmp_path / "ner_results.json").read_text(encoding="utf-8"))
+        entities = results[0].get("entities", [])
+        person_ents = [e for e in entities if e.get("source") == "person_ner"]
+        assert person_ents, (
+            "Expected at least one person_ner entity in output; "
+            f"got sources: {[e.get('source') for e in entities]}"
+        )
+
+    @_require_all_ner_models
+    def test_provenance_ner_entities_present_in_output(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """Output must contain at least one entity with source='provenance_ner'."""
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(
+            json.dumps([_ALL_MODELS_RECORD], ensure_ascii=False), encoding="utf-8"
+        )
+
+        device = _detect_device()
+        worker = NerWorker(input_path, tmp_path, _PERSON_MODEL_ID, device, batch_size=4)
+        with qtbot.waitSignal(worker.finished, timeout=300_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        results = json.loads((tmp_path / "ner_results.json").read_text(encoding="utf-8"))
+        entities = results[0].get("entities", [])
+        prov_ents = [e for e in entities if e.get("source") == "provenance_ner"]
+        assert prov_ents, (
+            "Expected at least one provenance_ner entity in output — "
+            "provenance NER model may not have been loaded. "
+            f"Got sources: {list({e.get('source') for e in entities})}"
+        )
+
+    @_require_all_ner_models
+    def test_contents_ner_entities_present_in_output(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """Output must contain at least one entity with source='contents_ner'."""
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(
+            json.dumps([_ALL_MODELS_RECORD], ensure_ascii=False), encoding="utf-8"
+        )
+
+        device = _detect_device()
+        worker = NerWorker(input_path, tmp_path, _PERSON_MODEL_ID, device, batch_size=4)
+        with qtbot.waitSignal(worker.finished, timeout=300_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        results = json.loads((tmp_path / "ner_results.json").read_text(encoding="utf-8"))
+        entities = results[0].get("entities", [])
+        cont_ents = [e for e in entities if e.get("source") == "contents_ner"]
+        assert cont_ents, (
+            "Expected at least one contents_ner entity in output — "
+            "contents NER model may not have been loaded. "
+            f"Got sources: {list({e.get('source') for e in entities})}"
+        )
+
+    @_require_all_ner_models
+    def test_marc500_colophon_sentences_in_output(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """Output must contain non-empty ml_colophon_sentences for a colophon note."""
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(
+            json.dumps([_ALL_MODELS_RECORD], ensure_ascii=False), encoding="utf-8"
+        )
+
+        device = _detect_device()
+        worker = NerWorker(input_path, tmp_path, _PERSON_MODEL_ID, device, batch_size=4)
+        with qtbot.waitSignal(worker.finished, timeout=300_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        results = json.loads((tmp_path / "ner_results.json").read_text(encoding="utf-8"))
+        ml_sents = results[0].get("ml_colophon_sentences", [])
+        assert ml_sents, (
+            "Expected ml_colophon_sentences to be non-empty for record with colophon note; "
+            "MARC 500 classifier may not have been loaded or threshold too high."
+        )
+
+    @_require_all_ner_models
+    def test_all_4_sources_present_in_combined_record(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        """The combined test record should yield entities from all 4 sources."""
+        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
+
+        input_path = tmp_path / "marc_extracted.json"
+        input_path.write_text(
+            json.dumps([_ALL_MODELS_RECORD], ensure_ascii=False), encoding="utf-8"
+        )
+
+        device = _detect_device()
+        worker = NerWorker(input_path, tmp_path, _PERSON_MODEL_ID, device, batch_size=4)
+        with qtbot.waitSignal(worker.finished, timeout=300_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        results = json.loads((tmp_path / "ner_results.json").read_text(encoding="utf-8"))
+        rec = results[0]
+        entities = rec.get("entities", [])
+        sources_found = {e.get("source") for e in entities}
+        ml_sents = rec.get("ml_colophon_sentences", [])
+
+        missing: list[str] = []
+        if "person_ner" not in sources_found:
+            missing.append("person_ner")
+        if "provenance_ner" not in sources_found:
+            missing.append("provenance_ner")
+        if "contents_ner" not in sources_found:
+            missing.append("contents_ner")
+        if not ml_sents:
+            missing.append("ml_colophon_sentences (MARC 500 classifier)")
+
+        assert not missing, (
+            f"Missing outputs from {len(missing)} model(s): {missing}. "
+            f"Sources present: {sources_found}. "
+            f"ml_colophon_sentences: {ml_sents[:2]}"
+        )

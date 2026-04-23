@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
@@ -174,7 +175,7 @@ class WikidataPanel(QWidget):
 
         # Warning
         warning = QLabel("Note: Live upload requires bot approval for >50 items")
-        warning.setStyleSheet("color: #b45309; font-style: italic; font-size: 11px;")
+        warning.setStyleSheet(f"color: {theme.warning_text_color()}; font-style: italic; font-size: {theme.FONT_SM}px;")
         layout.addWidget(warning)
 
         # Buttons
@@ -208,8 +209,8 @@ class WikidataPanel(QWidget):
         # Stats preview (compact)
         self._stats_label = QLabel("")
         self._stats_label.setStyleSheet(
-            "background-color: #f0f9ff; border: 1px solid #bae6fd; "
-            "border-radius: 6px; padding: 4px 8px; font-size: 11px;"
+            f"background-color: {theme.ui('panel_bg')}; border: 1px solid {theme.ui('border')}; "
+            f"border-radius: {theme.RADIUS_MD}px; padding: 4px 8px; font-size: {theme.FONT_SM}px;"
         )
         self._stats_label.setWordWrap(True)
         self._stats_label.setMaximumHeight(60)
@@ -315,7 +316,7 @@ class WikidataPanel(QWidget):
             "<small>Formats: <b>OAuth 2.0</b>: consumer_key|consumer_secret<br>"
             "<b>Bot password</b>: Username@BotName:password</small>"
         )
-        auth_help.setStyleSheet("color: #6b7280;")
+        auth_help.setStyleSheet(f"color: {theme.ui('subtext')};")
         form.addRow(auth_help)
 
         btn_layout = QHBoxLayout()

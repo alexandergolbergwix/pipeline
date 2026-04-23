@@ -8,6 +8,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -151,6 +152,13 @@ class AuthorityPanel(QWidget):
         self._progress = PercentProgressWidget()
         layout.addWidget(self._progress)
 
+        # ── Review banner (hidden until results load) ──────────────────
+        self._review_banner = self._build_review_banner(
+            "⚠  Authority matches are AI-assisted — please verify each match "
+            "before building RDF. Incorrect matches will produce wrong Wikidata links."
+        )
+        layout.addWidget(self._review_banner)
+
         # ── Authority matcher view ────────────────────────────────────
         # Results header with expand button
         results_header = QHBoxLayout()
@@ -167,6 +175,41 @@ class AuthorityPanel(QWidget):
         # ── Log viewer ─────────────────────────────────────────────────
         self._log_viewer = LogViewer()
         layout.addWidget(self._log_viewer, stretch=1)
+
+    # ── Review banner helper ───────────────────────────────────────────
+
+    def _build_review_banner(self, message: str) -> QFrame:
+        """Return an amber warning banner (hidden by default)."""
+        banner = QFrame()
+        banner.setFrameShape(QFrame.Shape.StyledPanel)
+        banner.setStyleSheet(
+            "QFrame { background: #fffbeb; border: 1px solid #f59e0b; border-radius: 6px; }"
+        )
+        row = QHBoxLayout(banner)
+        row.setContentsMargins(10, 6, 10, 6)
+        row.setSpacing(8)
+
+        lbl = QLabel(message)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("border: none; color: #92400e; font-size: 12px;")
+        row.addWidget(lbl, stretch=1)
+
+        dismiss = QPushButton("✕")
+        dismiss.setFixedSize(22, 22)
+        dismiss.setToolTip("Dismiss")
+        dismiss.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #92400e; font-size: 13px; }"
+            "QPushButton:hover { color: #78350f; }"
+        )
+        dismiss.clicked.connect(banner.hide)
+        row.addWidget(dismiss)
+
+        banner.hide()
+        return banner
+
+    def show_review_banner(self) -> None:
+        """Show the review banner (called by main window after results load)."""
+        self._review_banner.show()
 
     # ── Accessors ─────────────────────────────────────────────────────
 

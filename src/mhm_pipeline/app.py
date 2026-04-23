@@ -80,13 +80,41 @@ def main() -> None:
             sys.exit(0)
 
     from mhm_pipeline.controller.pipeline_controller import PipelineController
+    from mhm_pipeline.gui import theme
     from mhm_pipeline.gui.main_window import MainWindow
+
+    theme.apply_stylesheet(app)
 
     controller = PipelineController(settings)
     window = MainWindow(settings, controller)
     window.show()
+
     sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as _exc:
+        import traceback  # noqa: PLC0415
+
+        _tb = traceback.format_exc()
+        try:
+            import logging as _logging  # noqa: PLC0415
+
+            _logging.getLogger(__name__).critical("Unhandled exception: %s\n%s", _exc, _tb)
+        except Exception:
+            pass
+        # Also write to a plain crash file so it's visible even without logging
+        try:
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            _crash = _Path.home() / "Library" / "Logs" / "MHMPipeline" / "crash.log"
+            _crash.parent.mkdir(parents=True, exist_ok=True)
+            with open(_crash, "a") as _f:
+                import datetime  # noqa: PLC0415
+
+                _f.write(f"\n--- {datetime.datetime.now()} ---\n{_tb}")
+        except Exception:
+            pass
+        raise

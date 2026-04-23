@@ -66,6 +66,49 @@ TYPE_COLORS: dict[str, str] = {
 }
 
 
+class EntityFilterProxy(QSortFilterProxyModel):
+    """Proxy that filters by source/type/role in addition to the default text search."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.source_filter: set[str] = set()
+        self.type_filter: set[str] = set()
+        self.role_filter: set[str] = set()
+
+    def set_dimension_filters(
+        self,
+        sources: set[str],
+        types: set[str],
+        roles: set[str],
+    ) -> None:
+        self.source_filter = set(sources)
+        self.type_filter = set(types)
+        self.role_filter = set(roles)
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802
+        model = self.sourceModel()
+        if not isinstance(model, EditableEntityModel):
+            return True
+        if source_row >= len(model._entities):
+            return True
+        ent = model._entities[source_row]
+
+        # Dimension filters — if set is non-empty, entity's value must be in set
+        if self.source_filter and str(ent.get("source") or "") not in self.source_filter:
+            return False
+        if self.type_filter and str(ent.get("type") or "") not in self.type_filter:
+            return False
+        if self.role_filter:
+            r = str(ent.get("role") or "")
+            # Non-role entities (e.g. FOLIO) are kept regardless of role filter
+            if r and r not in self.role_filter:
+                return False
+
+        # Then apply the default text-search filter
+        return super().filterAcceptsRow(source_row, source_parent)
+
+
 class EditableEntityModel(QAbstractTableModel):
     """Table model for editable NER entity data."""
 
@@ -327,7 +370,7 @@ class ExtractionEditor(QWidget):
 
         # Table
         self._model = EditableEntityModel()
-        self._proxy = QSortFilterProxyModel()
+        self._proxy = EntityFilterProxy()
         self._proxy.setSourceModel(self._model)
         self._proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._proxy.setFilterKeyColumn(-1)  # Search all columns
@@ -357,12 +400,45 @@ class ExtractionEditor(QWidget):
         """Load NER results for editing."""
         self._model.load_from_records(records)
         self._output_path = output_path
+        self._active_filters: dict[str, set[str]] = {
+            "sources": set(), "types": set(), "roles": set(),
+        }
         self._update_stats()
 
     def _update_stats(self) -> None:
-        n = self._model.rowCount()
+        total = self._model.rowCount()
+        visible = self._proxy.rowCount() if self._proxy else total
         dirty = " (modified)" if self._model.is_dirty() else ""
-        self._stats_label.setText(f"{n} entities{dirty}")
+        if visible == total:
+            self._stats_label.setText(f"{total} entities{dirty}")
+        else:
+            self._stats_label.setText(f"{visible} of {total} entities{dirty}")
+
+    # ── Filtering (source / type / role) ─────────────────────────────────
+
+    def get_all_sources(self) -> list[str]:
+        return sorted({str(e.get("source") or "") for e in self._model._entities if e.get("source")})
+
+    def get_all_types(self) -> list[str]:
+        return sorted({str(e.get("type") or "") for e in self._model._entities if e.get("type")})
+
+    def get_all_roles(self) -> list[str]:
+        return sorted({str(e.get("role") or "") for e in self._model._entities if e.get("role")})
+
+    def apply_filters(
+        self,
+        sources: set[str] | None,
+        types: set[str] | None,
+        roles: set[str] | None,
+    ) -> None:
+        """Hide rows that do not match any of the given source/type/role sets."""
+        if isinstance(self._proxy, EntityFilterProxy):
+            self._proxy.set_dimension_filters(
+                set(sources or ()),
+                set(types or ()),
+                set(roles or ()),
+            )
+        self._update_stats()
 
     def _on_search(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)

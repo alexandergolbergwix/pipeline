@@ -577,30 +577,140 @@ Tests added (3): `TestUncertainAttributionP1480` (3). Total now **178**.
 P136 (genre) coverage was 69% — 31% of manuscripts have no MARC 655 genre/form headings. A DictaBERT-based multi-label classifier trained via distant supervision fills this gap.
 
 **Architecture:**
-- Base: `dicta-il/dictabert` (frozen encoder — avoids overfitting on ~364 samples)
-- Head: Dropout(0.3) → Linear(768 → 51) → sigmoid
-- Loss: BCEWithLogitsLoss (multi-label, 51 genres)
-- Labels: keys of `GENRE_TO_QID` in `property_mapping.py`
-- Training data: records with MARC 655 genre/form headings (~364 of 997 TSV records)
-- Metric: micro-F1 at threshold 0.5
-- Strategy: 5-fold stratified CV; best-fold checkpoint saved
+- Base: `dicta-il/dictabert` warm-started from provenance NER checkpoint (domain-adapted on 12,100 Hebrew manuscript samples)
+- Bottom 10 of 12 BERT layers frozen; top 2 layers + head fine-tuned with differential LRs (2e-6 encoder, 2e-5 head)
+- Head: Dropout(0.3) → Linear(768 → 9) → sigmoid (8 genre classes + NOTA)
+- Loss: Focal loss (γ=2.0) with per-class pos_weight = n_neg/n_pos
+- Training data: 25,421 records from 123k-record NLI catalog, filtered by whole-token Hebrew keyword matching in MARC 500 notes; pre-extracted to `data/tsvs/genre_samples.tsv`
+- Classes with < 100 examples dropped; "Literature (Miscellaneous)" excluded (too generic)
+- 1,629 NOTA examples (genres outside top-8) provide explicit abstention signal
+- Metric: micro-F1 at per-fold tuned threshold (scan 0.20–0.80, step 0.05)
+- Strategy: 5-fold stratified CV, 30 epochs, patience=5; best-fold checkpoint saved
+- **Achieved micro-F1: 0.88** on 8-class held-out val set
 
 **Files:**
 - `ner/train_genre_classifier.py` — training script (run once to produce model)
+- `scripts/extract_genre_samples.py` — one-time extraction of 26k matched records from 123k TSV
 - `converter/authority/genre_classifier.py` — inference wrapper (GenreClassifier class)
+- `data/tsvs/genre_samples.tsv` — pre-extracted training data (fast reload)
 - `ner/genre_classifier_model.pt` — trained checkpoint (generated; not committed to git)
+
+**Inference — sliding window for long texts:**
+The model was trained on short 3-sentence context windows (max_length=64 tokens). At inference, the input (title + 3 full MARC 500 notes) may be longer. `GenreClassifier.predict()` handles this with a sliding window:
+1. Tokenize full text without truncation
+2. If ≤ 64 tokens: single inference call (normal case)
+3. If > 64 tokens: split into overlapping 64-token windows (stride=32), score each independently, **average sigmoid probabilities across windows**, then threshold
+The `max_length` is stored in the checkpoint and loaded automatically.
 
 **Integration in `item_builder.py`:**
 - After the MARC 655 genre loop, if `genres` is empty, `_get_genre_classifier()` is called
 - Lazy singleton: loaded once, skipped silently if model file absent (graceful degradation)
 - Inferred genres get `P1480=Q_PRESUMABLY` qualifier + `P887=Q2539` (machine learning) reference
 - MARC-sourced genres are unchanged — no qualifier added
+- `genre_str == "other"` (NOTA prediction) → skip, no P136 claim written
 
 **To retrain:**
 ```bash
-PYTHONPATH=src:. .venv/bin/python ner/train_genre_classifier.py
+# Step 1 (one-time): extract training samples from 123k TSV
+PYTHONPATH=src:. .venv/bin/python scripts/extract_genre_samples.py
+
+# Step 2: train
+PYTHONPATH=src:. .venv/bin/python ner/train_genre_classifier.py \
+  --exclude-genres "Literature (Miscellaneous, in manuscript)" \
+  --min-class-size 100 --top-k 8 --focal-gamma 2.0 \
+  --freeze-layers 10 --batch-size 64 --max-length 64
 ```
 
 **Expected coverage:** 69% → ~85% for P136 after training.
 
 Tests added (3): `TestGenreClassifierIntegration` (3). Total now **181**.
+
+### 35. MARC 500 sentence classifier for P1684 + P127/P11603 coverage (added 2026-04-20)
+
+P1684 (inscription/colophon) and P127/P11603 (owned by/transcribed by) are under-covered because MARC 500 general notes mix colophon and provenance sentences with unrelated codicological content. A sentence-level multi-label classifier routes each sentence to the appropriate downstream processor.
+
+**Architecture:** Single model with two independent sigmoid heads — COLOPHON (head 0) and PROVENANCE (head 1). Reuses `GenreClassificationModel` with `num_genres=2`. Trained with per-class focal loss and per-class threshold tuning.
+
+**Files:**
+- `ner/marc500_sentence_model.py` — thin re-export of GenreClassificationModel for app bundle
+- `scripts/extract_marc500_sentences.py` — extraction script → `data/tsvs/marc500_sentences.tsv`
+- `ner/train_marc500_classifier.py` — training script (5-fold CV, per-class thresholds)
+- `converter/authority/marc500_classifier.py` — inference wrapper (`classify_sentence`, `is_colophon`, `is_provenance`)
+- `ner/marc500_classifier_model.pt` — trained checkpoint (generated; not committed to git)
+
+**Integration in `workers.py`:**
+- Module-level lazy singleton `_MARC500_CLASSIFIER` with graceful degradation (model absent → skipped)
+- `NerWorker.run()` routes each MARC 500 sentence: COLOPHON sentences → `ml_colophon_sentences` list; PROVENANCE sentences → provenance NER pipeline (same as MARC 561)
+- `AuthorityWorker._merge_ner_into_records()` appends `ml_colophon_sentences` to `record["colophon_text"]`
+- `item_builder.py` already reads `record["colophon_text"]` for P1684 — no changes needed
+
+**To train:**
+```bash
+# Step 1 (one-time): extract sentences
+PYTHONPATH=src:. .venv/bin/python scripts/extract_marc500_sentences.py
+
+# Step 2: train (~1h on M4 Pro)
+PYTHONPATH=src:. .venv/bin/python ner/train_marc500_classifier.py
+```
+
+**Checkpoint format:**
+```python
+{
+    "model_state_dict": ...,
+    "label2id": {"COLOPHON": 0, "PROVENANCE": 1},
+    "task": "marc500_sentence_classification",
+    "threshold": {"COLOPHON": float, "PROVENANCE": float},
+    "num_classes": 2,
+    "max_length": 64,
+}
+```
+
+**Expected coverage impact:** P1684: 41% → ~55%. P127/P11603: 43%/18% → ~50%/25%. Graceful degradation when model absent.
+
+Tests added (8): `TestMarc500ModelRealInference` (8). Total now **189**.
+
+### 36. Centralized GUI design system in `theme.py` (added 2026-04-22)
+
+All GUI colors, spacing, border radii, and font sizes are centralized in `src/mhm_pipeline/gui/theme.py`. No widget may hardcode a hex color, px spacing, or font-size value.
+
+**Design tokens (module-level constants):**
+
+| Token group | Constants | Description |
+|---|---|---|
+| Spacing | `SPACE_XS=4` … `SPACE_2XL=32` | Layout margins and gaps (px) |
+| Border radius | `RADIUS_SM=4`, `RADIUS_MD=6`, `RADIUS_LG=8` | Corner rounding (px) |
+| Font sizes | `FONT_XS=10` … `FONT_XL=16` | Text sizes (px) |
+
+**Color accessor functions:**
+
+| Function | Returns |
+|---|---|
+| `theme.ui(key)` | UI chrome colors: `text`, `subtext`, `border`, `panel_bg`, `button_bg`, `highlight`, `warning`, etc. |
+| `theme.node_color(type)` | Graph node `(bg, border)` by semantic type |
+| `theme.entity_color(type)` | NER entity `(bg, text)` colors |
+| `theme.role_color(role)` | NER role `(bg, text)` colors |
+| `theme.severity(level)` | SHACL severity `(bg, accent)` |
+| `theme.confidence_bg(level)` | Authority confidence background |
+| `theme.source_bg(source)` | Wikidata Preview source badge background |
+| `theme.source_label(source)` | Wikidata Preview source display label |
+| `theme.status_hex(status)` | Upload status color |
+| `theme.field_color(tag)` | MARC field `(bg, text)` |
+
+**Stylesheet helpers:**
+
+| Function | Returns |
+|---|---|
+| `theme.button_style()` | Primary QPushButton QSS |
+| `theme.success_btn_style()` | Green "continue/save" button QSS |
+| `theme.warning_btn_style()` | Amber action button QSS |
+| `theme.frame_style()` | Bordered QFrame QSS |
+| `theme.info_banner_style()` | Info banner QFrame QSS (amber border, transparent bg) |
+| `theme.warning_banner_style()` | Warning banner QFrame QSS (amber tinted bg) |
+| `theme.warning_text_color()` | Foreground color string for warning content |
+
+**App-level integration:**
+`theme.apply_stylesheet(app)` is called in `app.py` after `QApplication` creation. It sets `app.setStyleSheet(theme.generate_app_stylesheet())` which covers scrollbars and splitter handles globally.
+
+All dark/light variants are resolved at call time via `theme.is_dark()`. Call `theme.invalidate_cache()` after a palette change to refresh the cached dark-mode flag.
+
+**Rule: NEVER hardcode** `#rrggbb` hex colors, spacing in px, border-radius in px, or font-size in px directly in `setStyleSheet()` calls or layout configs. Always reference a `theme.*` token or function.

@@ -221,6 +221,33 @@ def filter_entities_by_roles(entities: list[Entity], selected_roles: set[str]) -
     return [entity for entity in entities if not entity.role or entity.role in selected_roles]
 
 
+def filter_entities(
+    entities: list[Entity],
+    *,
+    sources: set[str] | None = None,
+    types: set[str] | None = None,
+    roles: set[str] | None = None,
+) -> list[Entity]:
+    """Filter entities by source, type, and role simultaneously.
+
+    ``None`` or empty set for a dimension means "include all" for that dimension.
+    Entities must match all specified dimensions to pass the filter.
+    """
+    out: list[Entity] = []
+    for e in entities:
+        if sources and (e.source or "") not in sources:
+            continue
+        if types and (e.type or "") not in types:
+            continue
+        if roles:
+            # Roles only apply to entities that have one — keep non-role entities
+            # (e.g. WORK, FOLIO) unless the user has actively restricted sources.
+            if e.role and e.role not in roles:
+                continue
+        out.append(e)
+    return out
+
+
 def create_entity_from_record(ent: dict) -> Entity | None:
     """Create an Entity from a raw dictionary extracted from a record.
 
@@ -246,6 +273,7 @@ def create_entity_from_record(ent: dict) -> Entity | None:
         end=ent.get("end", 0),
         role=ent.get("role"),
         confidence=ent.get("confidence"),
+        source=ent.get("source"),
     )
 
 
@@ -357,6 +385,7 @@ class Entity:
     end: int
     role: str | None = None
     confidence: float | None = None
+    source: str | None = None
 
 
 class EntityHighlighter(QWidget):
@@ -591,6 +620,83 @@ class EntityHighlighter(QWidget):
             if entity.role:
                 roles.add(entity.role)
         return sorted(roles)
+
+    def get_all_sources(self) -> list[str]:
+        """Get all unique sources (person_ner, provenance_ner, contents_ner, …)."""
+        return sorted({e.source for e in getattr(self, "_current_entities", []) if e.source})
+
+    def get_all_types(self) -> list[str]:
+        """Get all unique entity types (PERSON, OWNER, WORK, FOLIO, …)."""
+        return sorted({e.type for e in getattr(self, "_current_entities", []) if e.type})
+
+    def apply_filters(
+        self,
+        sources: set[str] | None,
+        types: set[str] | None,
+        roles: set[str] | None,
+    ) -> None:
+        """Filter the entity list and text highlighting by source/type/role."""
+        if not hasattr(self, "_current_entities"):
+            return
+
+        self._role_filter = roles or set()
+        self._entity_list.clear()
+
+        filtered = filter_entities(
+            self._current_entities,
+            sources=sources or None,
+            types=types or None,
+            roles=roles or None,
+        )
+        self._populate_entity_list(filtered)
+
+        total = len(self._current_entities)
+        if len(filtered) == total:
+            self._header_label.setText(f"Entities Found ({total} entities)")
+        else:
+            self._header_label.setText(
+                f"Entities Found ({len(filtered)} of {total} entities)"
+            )
+
+        if hasattr(self, "_current_text") and self._current_text:
+            # Dim entities that don't match the active filters
+            visible_keys = {(e.start, e.end, e.text) for e in filtered}
+            self._rebuild_text_highlighting_filtered(visible_keys)
+
+    def _rebuild_text_highlighting_filtered(
+        self,
+        visible_keys: set[tuple[int, int, str]],
+    ) -> None:
+        """Rebuild the text HTML dimming entities not in *visible_keys*."""
+        if not self._current_text or not self._current_entities:
+            return
+
+        sorted_entities = sort_entities_by_position(self._current_entities)
+        segments = calculate_text_segments(self._current_text, sorted_entities)
+
+        html_parts: list[str] = []
+        for segment_text, entity in segments:
+            if entity is None:
+                html_parts.append(escape(segment_text))
+                continue
+            key = (entity.start, entity.end, entity.text)
+            escaped_text = escape(segment_text)
+            if key not in visible_keys:
+                html_parts.append(escaped_text)
+            else:
+                bg, fg = get_entity_colors(
+                    entity,
+                    self.ROLE_COLORS,
+                    self.ENTITY_COLORS,
+                )
+                html_parts.append(
+                    f'<span style="background-color: {bg}; color: {fg}; '
+                    f'padding: 1px 3px; border-radius: 3px;">{escaped_text}</span>'
+                )
+        self._text_edit.setHtml(
+            '<div style="line-height: 1.6; font-family: \'Segoe UI\', Arial, sans-serif; '
+            f"font-size: 13px;\">{''.join(html_parts)}</div>"
+        )
 
     def filter_by_roles(self, selected_roles: set[str]) -> None:
         """Filter the entity list and text highlighting by roles.
