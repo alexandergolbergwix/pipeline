@@ -589,6 +589,24 @@ class MatchComparisonDialog(GlassDialog):
         # For each line on each side, find the best cross-side value
         # match. Both sides contribute, so a match lights up both
         # lines simultaneously regardless of which key they live under.
+        # Three tiers (cheapest first):
+        #   1. exact match (after NFKC + case-fold)
+        #   2. shared "significant token" — any alphanumeric token of
+        #      length >= 5 present in both values. Catches ID-sharing
+        #      cases like ``"authority id: 987…"`` vs ``"NLI authority:
+        #      987…"`` where SequenceMatcher's character-level ratio
+        #      falls just under 0.90 because the prefix differs.
+        #   3. SequenceMatcher.ratio() >= 0.90 — fuzzy fallback
+        def _sig_tokens(s: str) -> set[str]:
+            return {
+                t.casefold()
+                for t in _re.findall(r"[\w]+", s, flags=_re.UNICODE)
+                if len(t) >= 5
+            }
+
+        marc_tokens = [_sig_tokens(v) for v in marc_vals]
+        auth_tokens = [_sig_tokens(v) for v in auth_vals]
+
         marc_matched: set[int] = set()
         auth_matched: set[int] = set()
         for i, m in enumerate(marc_vals):
@@ -597,14 +615,19 @@ class MatchComparisonDialog(GlassDialog):
             m_norm = _norm(m)
             if len(m_norm) < 2:
                 continue
+            m_toks = marc_tokens[i]
             for j, a in enumerate(auth_vals):
                 if not a:
                     continue
                 a_norm = _norm(a)
                 if len(a_norm) < 2:
                     continue
-                # Fast path: exact match bypasses SequenceMatcher.
                 if m_norm == a_norm:
+                    marc_matched.add(i)
+                    auth_matched.add(j)
+                    continue
+                # Shared significant-token fast path
+                if m_toks and auth_tokens[j] and (m_toks & auth_tokens[j]):
                     marc_matched.add(i)
                     auth_matched.add(j)
                     continue
