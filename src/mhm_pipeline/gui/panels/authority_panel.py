@@ -89,66 +89,84 @@ class AuthorityPanel(QWidget):
         self._kima_enabled = False
         self._mazal_enabled = True
 
-        # ── Mazal index ────────────────────────────────────────────────
-        self._mazal_group = QGroupBox("Mazal (NLI) Authority Index ▼")
-        self._mazal_group.setCheckable(True)
-        self._mazal_group.setChecked(True)
-        self._mazal_group.toggled.connect(self._on_mazal_group_toggled)
-        mazal_layout = QVBoxLayout(self._mazal_group)
-
-        self._mazal_db_selector = FileSelector("Index DB:", mode="open", filter="SQLite DB (*.db)")
+        # ── Mazal + KIMA index state ───────────────────────────────────
+        # The file-selector widgets are kept in-memory so the rebuild
+        # handlers have access to the defaults (``_mazal_db_selector.path``
+        # etc.) but they are NOT added to the panel layout — the user
+        # should never see or need to manage these paths. They live in
+        # the bundled app at ``Contents/Resources/pipeline/...`` and are
+        # pre-initialised on first launch.
+        self._mazal_db_selector = FileSelector(
+            "Index DB:", mode="open", filter="SQLite DB (*.db)",
+        )
         if default_mazal_db:
             self._mazal_db_selector.path = default_mazal_db
+        self._mazal_db_selector.setVisible(False)
 
         self._xml_dir_selector = FileSelector("XML Dir:", mode="directory")
         if default_xml_dir:
             self._xml_dir_selector.path = default_xml_dir
+        self._xml_dir_selector.setVisible(False)
 
-        self._rebuild_mazal_btn = QPushButton("Rebuild Mazal Index…")
+        self._kima_db_selector = FileSelector(
+            "Index DB:", mode="open", filter="SQLite DB (*.db)",
+        )
+        if default_kima_db:
+            self._kima_db_selector.path = default_kima_db
+        self._kima_db_selector.setVisible(False)
+
+        self._kima_tsv_selector = FileSelector("TSV Dir:", mode="directory")
+        if default_kima_tsv:
+            self._kima_tsv_selector.path = default_kima_tsv
+        self._kima_tsv_selector.setVisible(False)
+
+        # Create rebuild buttons (hidden by default; exposed via the
+        # Advanced expander below so power-users can still trigger a
+        # rebuild but the common path is uncluttered).
+        self._rebuild_mazal_btn = QPushButton("🔄 Rebuild Mazal index…")
         self._rebuild_mazal_btn.setStyleSheet(theme.button_style("warning"))
         self._rebuild_mazal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._rebuild_mazal_btn.setToolTip(
-            "Re-parse all NLIAUT*.xml files in the XML Dir and write a fresh SQLite index."
+            "Re-parse the bundled NLIAUT*.xml authority files and write "
+            "a fresh SQLite index. Only needed after the app bundle's "
+            "XML data changes."
         )
         self._rebuild_mazal_btn.clicked.connect(self._on_rebuild_mazal)
 
-        mazal_layout.addWidget(self._mazal_db_selector)
-        mazal_layout.addWidget(self._xml_dir_selector)
-        mazal_layout.addWidget(self._rebuild_mazal_btn)
-        layout.addWidget(self._mazal_group)
-
-        # ── KIMA index ─────────────────────────────────────────────────
-        self._kima_group = QGroupBox("KIMA Place Authority Index ▼")
-        self._kima_group.setCheckable(True)
-        self._kima_group.setChecked(False)
-        self._kima_group.toggled.connect(self._on_kima_group_toggled)
-        kima_layout = QVBoxLayout(self._kima_group)
-
-        self._kima_db_selector = FileSelector("Index DB:", mode="open", filter="SQLite DB (*.db)")
-        if default_kima_db:
-            self._kima_db_selector.path = default_kima_db
-
-        self._kima_tsv_selector = FileSelector("TSV Dir:", mode="directory")
-        self._kima_tsv_selector.setToolTip(
-            "Directory containing the three KIMA TSV files "
-            "('20251015 Kima places.tsv', 'Kima-Hebrew-Variants-*.tsv', "
-            "'Maagarim-Zurot-&-Arachim.tsv')."
-        )
-        if default_kima_tsv:
-            self._kima_tsv_selector.path = default_kima_tsv
-
-        self._rebuild_kima_btn = QPushButton("Rebuild KIMA Index…")
+        self._rebuild_kima_btn = QPushButton("🔄 Rebuild KIMA index…")
         self._rebuild_kima_btn.setStyleSheet(theme.button_style("warning"))
         self._rebuild_kima_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._rebuild_kima_btn.setToolTip(
-            "Parse the KIMA TSV files and build a fresh SQLite place authority index."
+            "Parse the bundled KIMA TSV files and build a fresh SQLite "
+            "place-authority index. Only needed after the TSV data changes."
         )
         self._rebuild_kima_btn.clicked.connect(self._on_rebuild_kima)
 
-        kima_layout.addWidget(self._kima_db_selector)
-        kima_layout.addWidget(self._kima_tsv_selector)
-        kima_layout.addWidget(self._rebuild_kima_btn)
-        layout.addWidget(self._kima_group)
+        # Advanced expander — collapsed by default so the panel shows
+        # just the 'Match Authorities' action.
+        self._advanced_group = QGroupBox("Advanced ▶")
+        self._advanced_group.setCheckable(True)
+        self._advanced_group.setChecked(False)
+        self._advanced_group.toggled.connect(self._on_advanced_toggled)
+        advanced_layout = QVBoxLayout(self._advanced_group)
+        advanced_layout.addWidget(self._rebuild_mazal_btn)
+        advanced_layout.addWidget(self._rebuild_kima_btn)
+        # Hide children until the group is expanded
+        for w in (self._rebuild_mazal_btn, self._rebuild_kima_btn):
+            w.setVisible(False)
+        layout.addWidget(self._advanced_group)
+
+        # Backward-compat attributes so the rest of the file keeps
+        # referencing ``_mazal_group`` / ``_kima_group``. They're hidden
+        # proxies — no UI, but the enable-state API stays usable.
+        self._mazal_group = QGroupBox()
+        self._mazal_group.setVisible(False)
+        self._mazal_group.setCheckable(True)
+        self._mazal_group.setChecked(True)
+        self._kima_group = QGroupBox()
+        self._kima_group.setVisible(False)
+        self._kima_group.setCheckable(True)
+        self._kima_group.setChecked(False)
 
         # ── Run button ─────────────────────────────────────────────────
         self._run_btn = QPushButton("Match Authorities")
@@ -539,16 +557,22 @@ class AuthorityPanel(QWidget):
         self._authority_editor.hide()
 
     def _on_mazal_group_toggled(self, checked: bool) -> None:
-        """Handle Mazal group box toggle - update arrow and stored value."""
-        arrow = "▼" if checked else "▶"
-        self._mazal_group.setTitle(f"Mazal (NLI) Authority Index {arrow}")
+        """Legacy handler kept for tests — the Mazal group box is now
+        hidden; enable state is driven by the Sources dialog."""
         self._mazal_enabled = checked
 
     def _on_kima_group_toggled(self, checked: bool) -> None:
-        """Handle KIMA group box toggle - update arrow and stored value."""
-        arrow = "▼" if checked else "▶"
-        self._kima_group.setTitle(f"KIMA Place Authority Index {arrow}")
+        """Legacy handler kept for tests — the KIMA group box is now
+        hidden; enable state is driven by the Sources dialog."""
         self._kima_enabled = checked
+
+    def _on_advanced_toggled(self, checked: bool) -> None:
+        """Expand/collapse the Advanced group: reveal/hide the two
+        rebuild-index buttons and update the arrow in the title."""
+        arrow = "▼" if checked else "▶"
+        self._advanced_group.setTitle(f"Advanced {arrow}")
+        self._rebuild_mazal_btn.setVisible(checked)
+        self._rebuild_kima_btn.setVisible(checked)
 
     def _on_view_full_results(self) -> None:
         """Open a dialog with the full results table."""
