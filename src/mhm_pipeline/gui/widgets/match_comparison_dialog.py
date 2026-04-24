@@ -311,7 +311,12 @@ class MatchComparisonDialog(GlassDialog):
     # Public API -----------------------------------------------------------
 
     def show_comparison(self, cmp_: BioComparison) -> None:
-        """Render the tabs from a ready :class:`BioComparison`."""
+        """Render the tabs from a ready :class:`BioComparison`.
+
+        Idempotent: safe to call twice (e.g., once synchronously with the
+        MARC side + empty authority, once again when the async authority
+        fetch resolves). Subsequent calls replace tab contents.
+        """
         self._progress.setVisible(False)
         self._populate_dates(cmp_)
         self._populate_places(cmp_)

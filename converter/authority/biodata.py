@@ -61,15 +61,31 @@ class BioComparison:
 # ── Extractor: MARC record ───────────────────────────────────────────────
 
 
-def extract_marc_biodata(record: dict[str, Any] | None) -> BioData:
-    """Pull dates / places / occupations / names from a MARC record.
+def extract_marc_biodata(
+    record: dict[str, Any] | None,
+    row: dict[str, Any] | None = None,
+) -> BioData:
+    """Pull dates / places / occupations / names from a MARC record, scoped
+    to a specific authority-match *row* when one is supplied.
 
-    Reads the fields the pipeline already stores on the authority-
-    enriched record: 046, 368, 370, 372, 373, 374, 375, 377, plus
-    100/700/710 sub-fields.
+    Reads the real authority-enriched schema produced by
+    :func:`converter.transformer.field_handlers.extract_all_data` —
+    ``authors``, ``contributors``, ``entities``, ``dates``, ``place``,
+    ``related_places``, ``provenance``, ``marc_authority_matches`` —
+    not the raw MARC tag names (which don't survive extraction).
+
+    When *row* is provided, the extractor prefers biographical info
+    that belongs to the SPECIFIC entity named by ``row['entity_text']``
+    (the person/place being matched) over record-level fallbacks.
     """
-    if not record:
+    if not record and not row:
         return BioData()
+
+    record = record or {}
+    row = row or {}
+    entity_text = str(row.get("entity_text") or "").strip()
+    etype = str(row.get("match_type") or "").strip()
+    role = str(row.get("role") or "").strip()
 
     dates: dict[str, str] = {}
     places: dict[str, list[str]] = {}
@@ -77,85 +93,101 @@ def extract_marc_biodata(record: dict[str, Any] | None) -> BioData:
     occupations: list[str] = []
     notes: list[str] = []
 
-    # 046 — special coded dates
-    f046 = record.get("marc_046") or record.get("046") or {}
-    if isinstance(f046, dict):
-        birth = f046.get("f") or f046.get("birth_date")
-        death = f046.get("g") or f046.get("death_date")
-        if birth:
-            dates["birth"] = str(birth)
-        if death:
-            dates["death"] = str(death)
+    # 1. Row-level signals (highest priority — this IS the matched entity)
+    if entity_text:
+        lang = "he" if _has_hebrew(entity_text) else "lat"
+        names.setdefault(lang, []).append(entity_text)
+    if role:
+        occupations.append(role)
+    row_dates = str(row.get("dates") or "").strip()
+    if row_dates:
+        if "-" in row_dates:
+            b, _, d = row_dates.partition("-")
+            if b.strip():
+                dates["birth"] = b.strip()
+            if d.strip():
+                dates["death"] = d.strip()
+        else:
+            dates["date_range"] = row_dates
 
-    # 370 — associated place (birth / death / residence)
-    f370 = record.get("marc_370") or record.get("370") or {}
-    if isinstance(f370, dict):
-        for code, key in (("a", "birth_place"), ("b", "death_place"),
-                           ("c", "country"), ("f", "residence")):
-            v = f370.get(code)
-            if v:
-                places.setdefault(key, []).append(str(v))
+    # 2. Enrich with details from the matching entry in the record
+    def _matches(candidate_name: Any) -> bool:
+        if not candidate_name or not entity_text:
+            return False
+        return _has_token_overlap(str(candidate_name), entity_text)
 
-    # 374 — occupation
-    for fx in (record.get("marc_374") or record.get("374") or []):
-        if isinstance(fx, dict):
-            v = fx.get("a") or fx.get("occupation")
-            if v:
-                occupations.append(str(v))
-        elif isinstance(fx, str):
-            occupations.append(fx)
-
-    # 372 — field of activity
-    for fx in (record.get("marc_372") or record.get("372") or []):
-        if isinstance(fx, dict):
-            v = fx.get("a")
-            if v:
-                notes.append(f"field of activity: {v}")
-
-    # 375 — gender
-    g = record.get("marc_375") or record.get("gender")
-    if g:
-        notes.append(f"gender: {g}")
-
-    # 377 — language
-    for lang in (record.get("marc_377") or record.get("languages") or []):
-        if lang:
-            notes.append(f"language: {lang}")
-
-    # 100/700/710 names — the primary + added entries
-    for tag in ("marc_100", "marc_700", "marc_710"):
-        entries = record.get(tag) or []
-        if isinstance(entries, dict):
-            entries = [entries]
-        for e in entries:
-            if not isinstance(e, dict):
+    for key in ("authors", "contributors"):
+        for entry in record.get(key) or []:
+            if not isinstance(entry, dict):
                 continue
-            name = e.get("a") or e.get("name")
-            d = e.get("d")       # dates on name field
-            if name:
-                # Heuristic: Hebrew script → "he", Latin → "lat"
-                lang = "he" if _has_hebrew(str(name)) else "lat"
-                names.setdefault(lang, []).append(str(name))
-            if d and "date_range" not in dates:
-                dates["date_range"] = str(d)
+            if entity_text and not _matches(entry.get("name")):
+                continue
+            for nk in ("name", "preferred_name", "hebrew_name", "latin_name"):
+                nv = entry.get(nk)
+                if nv and str(nv) not in {v for vs in names.values() for v in vs}:
+                    lang = "he" if _has_hebrew(str(nv)) else "lat"
+                    names.setdefault(lang, []).append(str(nv))
+            ed = entry.get("dates") or entry.get("date_range")
+            if ed and not dates:
+                s = str(ed).strip()
+                if "-" in s:
+                    b, _, d = s.partition("-")
+                    if b.strip():
+                        dates["birth"] = b.strip()
+                    if d.strip():
+                        dates["death"] = d.strip()
+                else:
+                    dates["date_range"] = s
+            er = entry.get("role")
+            if er and er not in occupations:
+                occupations.append(str(er))
 
-    # Fallback: authority_matches carried on the record
-    for m in (record.get("marc_authority_matches") or []):
-        if not isinstance(m, dict):
+    # 3. NER entities carry role + surrounding context
+    for ent in record.get("entities") or []:
+        if not isinstance(ent, dict):
             continue
-        mn = m.get("name")
-        if mn:
-            lang = "he" if _has_hebrew(str(mn)) else "lat"
-            names.setdefault(lang, []).append(str(mn))
+        ename = ent.get("person") or ent.get("text") or ent.get("place")
+        if entity_text and not _matches(ename):
+            continue
+        er = ent.get("role")
+        if er and er not in occupations:
+            occupations.append(str(er))
 
-    # Record-level fallbacks
-    ds = record.get("dates")
-    if isinstance(ds, dict):
-        for k in ("year", "start", "end"):
-            v = ds.get(k)
-            if v and "date_range" not in dates:
-                dates["date_range"] = str(v)
+    # 4. Place matches — record-level places are the match targets
+    if etype == "place" and entity_text:
+        for k, label in (("place", "place"),):
+            v = record.get(k)
+            if v and str(v) == entity_text:
+                places.setdefault(label, []).append(str(v))
+        for rp in record.get("related_places") or []:
+            if isinstance(rp, dict):
+                rn = rp.get("name") or rp.get("place")
+                if rn and (not entity_text or _matches(rn)):
+                    places.setdefault("associated_places", []).append(str(rn))
+            elif isinstance(rp, str) and (not entity_text or _matches(rp)):
+                places.setdefault("associated_places", []).append(rp)
+
+    # 5. Record-level fallbacks — always add as context
+    rec_dates = record.get("dates")
+    if isinstance(rec_dates, dict):
+        for k in ("year", "start", "end", "range"):
+            v = rec_dates.get(k)
+            if v and "manuscript_date" not in dates:
+                dates["manuscript_date"] = str(v)
                 break
+    place = record.get("place")
+    if place and "manuscript_place" not in places:
+        places["manuscript_place"] = [str(place)]
+    for lang in record.get("languages") or []:
+        if lang:
+            notes.append(f"manuscript language: {lang}")
+    cn = record.get("_control_number")
+    if cn:
+        notes.append(f"MARC control number: {cn}")
+    if row.get("field_origin"):
+        notes.append(f"match field: {row['field_origin']}")
+    if row.get("matched_id"):
+        notes.append(f"authority id: {row['matched_id']}")
 
     return BioData(
         dates=dates,
@@ -369,6 +401,62 @@ _HEBREW_RANGE = range(0x0590, 0x0600)
 
 def _has_hebrew(text: str) -> bool:
     return any(ord(c) in _HEBREW_RANGE for c in text)
+
+
+# Name-joining particles that should NOT count as matching tokens.
+# Hebrew: "ben"/"bat"/"ibn" (son-of/daughter-of); Latin: "de"/"di"/
+# "da"/"von"/"van"/"of"/"the"; short honorifics and initials.
+_NAME_STOPWORDS: frozenset[str] = frozenset({
+    # Hebrew
+    "בן", "בת", "ב'", "ב\"ר", "בר",
+    # Latin / Romance / Germanic particles
+    "ben", "ibn", "aben", "abu", "abou",
+    "de", "di", "da", "du", "des", "del", "della", "delle",
+    "von", "van", "vom", "der", "den",
+    "le", "la", "les", "el", "al",
+    "of", "the", "and",
+    # One-letter initials (hebrew + latin)
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
+    "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
+    "u", "v", "w", "x", "y", "z",
+    "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט", "י",
+    "כ", "ל", "מ", "נ", "ס", "ע", "פ", "צ", "ק", "ר", "ש", "ת",
+})
+
+
+def _tokenize_name(s: str) -> set[str]:
+    """Tokenise *s* into meaningful name parts, stripping particles +
+    punctuation + single-letter initials."""
+    import re
+    import unicodedata
+
+    n = unicodedata.normalize("NFKC", s).casefold()
+    parts = re.split(r"[\s,.;:/()\-\"'\u05BE\u2013\u2014]+", n)
+    return {p for p in parts if len(p) >= 2 and p not in _NAME_STOPWORDS}
+
+
+def _has_token_overlap(a: str, b: str) -> bool:
+    """Name-scoped matcher: True if *a* and *b* share enough
+    meaningful tokens (after particle-stripping) to plausibly refer to
+    the same person. Requires ≥2 overlapping tokens OR the shorter
+    side is fully covered by the longer.
+
+    Deliberately strict to avoid sweeping in every ``<given> בן <father>``
+    name that shares the surname particle with the query.
+    """
+    a_tokens = _tokenize_name(a)
+    b_tokens = _tokenize_name(b)
+    if not a_tokens or not b_tokens:
+        return False
+    overlap = a_tokens & b_tokens
+    if not overlap:
+        return False
+    shorter = a_tokens if len(a_tokens) <= len(b_tokens) else b_tokens
+    # Full containment of the shorter side is sufficient (e.g., "yaaqov"
+    # matches "yaaqov ben avraham"). Otherwise require ≥2 overlaps.
+    if overlap >= shorter:
+        return True
+    return len(overlap) >= 2
 
 
 def _iter_nested(obj: Any, *keys: str) -> list[Any]:

@@ -1024,9 +1024,12 @@ class AuthorityEditor(QWidget):
     def _on_compare(self, proxy_row: int) -> None:
         """Open the biodata comparison dialog for this match.
 
-        Schedules a background fetch (VIAF may need a network round-
-        trip); the dialog shows an indeterminate progress bar until
-        the fetch resolves, then swaps in the populated tabs.
+        MARC-side data is extracted synchronously from the already-
+        loaded record and rendered immediately; the dialog is usable
+        even if the async authority fetch is slow or fails. The
+        authority side fills in when the VIAF/Mazal fetch resolves
+        (or stays blank for ``marc_field`` matches, which have no
+        external counterpart).
         """
         src = self._proxy_to_source(proxy_row)
         if not 0 <= src < len(self._model._rows):
@@ -1045,19 +1048,35 @@ class AuthorityEditor(QWidget):
             MatchComparisonDialog,
             fetch_biodata_async,
         )
-
-        dlg = MatchComparisonDialog(row, parent=self)
-
-        # Build lazy fetchers that bind to the live authority services.
-        viaf_fetcher = self._make_viaf_fetcher()
-        mazal_fetcher = self._make_mazal_fetcher()
-        kima_fetcher = self._make_kima_fetcher()
+        from converter.authority.biodata import (  # noqa: PLC0415
+            BioComparison, BioData, extract_marc_biodata,
+        )
 
         source = str(row.get("source", ""))
         auth_id = str(row.get("matched_id", ""))
-        # Strip VIAF URI → id
         if source == "viaf" and "/" in auth_id:
             auth_id = auth_id.rstrip("/").split("/")[-1]
+
+        # Render MARC side + any data already on the row immediately;
+        # the dialog is useful even before the async authority fetch
+        # resolves. An empty authority side stays blank until ready.
+        marc_bio = extract_marc_biodata(marc_record, row=row)
+        initial = BioComparison(
+            marc=marc_bio, authority=BioData(), source=source,
+        )
+        dlg = MatchComparisonDialog(row, parent=self, comparison=initial)
+
+        # For marc_field matches there's no external authority — the
+        # name simply came straight from MARC. Mark the dialog done
+        # without spawning a pointless fetch.
+        if source in ("marc_field", "") or not auth_id:
+            dlg._progress.setVisible(False)  # type: ignore[attr-defined]
+            dlg.exec()
+            return
+
+        viaf_fetcher = self._make_viaf_fetcher()
+        mazal_fetcher = self._make_mazal_fetcher()
+        kima_fetcher = self._make_kima_fetcher()
 
         signals = fetch_biodata_async(
             source=source,
@@ -1067,9 +1086,18 @@ class AuthorityEditor(QWidget):
             mazal_fetcher=mazal_fetcher,
             kima_fetcher=kima_fetcher,
         )
-        signals.ready.connect(
-            lambda _s, _i, cmp_: dlg.show_comparison(cmp_),
-        )
+        # Keep a reference so the signal holder isn't GC'd while the
+        # runnable is queued in the thread-pool.
+        dlg._bio_signals = signals  # type: ignore[attr-defined]
+        # The MARC side is already in place; the async result carries
+        # both sides freshly-extracted, but we prefer the *existing*
+        # MARC side because it was computed against ``row``. Merge.
+        def _on_ready(_s: str, _i: str, cmp_: object) -> None:
+            merged = BioComparison(
+                marc=marc_bio, authority=cmp_.authority, source=cmp_.source,
+            )
+            dlg.show_comparison(merged)
+        signals.ready.connect(_on_ready)
         signals.failed.connect(
             lambda _s, _i, msg: dlg.show_error(msg),
         )
