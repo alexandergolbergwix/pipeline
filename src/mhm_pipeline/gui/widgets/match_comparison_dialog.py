@@ -348,19 +348,47 @@ class MatchComparisonDialog(GlassDialog):
             f" margin-left:{theme.SPACE_SM}px'>APPROVED</span>"
             if approved else ""
         )
+        # ``marc_field`` source is NOT a real authority match — the
+        # pipeline extracted a name from MARC 100/700/710/711 and
+        # neither Mazal nor VIAF returned a hit. Surface that clearly
+        # so the reviewer doesn't waste time asking "why is the
+        # authority side empty?"
+        if source == "marc_field" or not matched_id:
+            banner = (
+                f"<div style='background: rgba(245, 158, 11, 60);"
+                f" color: {theme.ui('warning')};"
+                f" padding: 8px 12px; border-radius: {theme.RADIUS_SM}px;"
+                f" margin-top: 8px; font-size: {theme.FONT_SM}px;'>"
+                f"<b>⚠ No external authority match.</b> This entry was "
+                f"extracted from MARC field <code>"
+                f"{row.get('field_origin') or '100/700/710'}</code> but "
+                f"neither Mazal nor VIAF returned a hit. Nothing to "
+                f"compare on the authority side — you can still approve "
+                f"the MARC-side name as-is."
+                f"</div>"
+            )
+            match_summary = (
+                f"Source: <b>{source or 'unmatched'}</b> · "
+                f"<i>no authority data</i>"
+            )
+            title_tail = "(no external match)"
+        else:
+            banner = ""
+            match_summary = (
+                f"Source: <b>{source}</b> · "
+                f"Match: <b>{match_name}</b>"
+                + (f" (<code>{matched_id}</code>)" if matched_id else "")
+            )
+            title_tail = match_name or matched_id
+
         self._header_label.setText(
             f"<div style='font-size:{theme.FONT_LG}px; font-weight:600;"
             f" color:{theme.ui('text')}'>{entity}{badge}</div>"
             f"<div style='color:{theme.ui('subtext')};"
-            f" font-size:{theme.FONT_SM}px; margin-top:4px'>"
-            f"Source: <b>{source}</b> · "
-            f"Match: <b>{match_name}</b>"
-            + (f" (<code>{matched_id}</code>)" if matched_id else "")
-            + "</div>",
+            f" font-size:{theme.FONT_SM}px; margin-top:4px'>{match_summary}"
+            f"</div>{banner}",
         )
-        self.setWindowTitle(
-            f"Compare — {entity}  ↔  {match_name or matched_id}"
-        )
+        self.setWindowTitle(f"Compare — {entity}  ↔  {title_tail}")
 
     def _refresh_approve_button(self) -> None:
         if self._row.get("approved"):
