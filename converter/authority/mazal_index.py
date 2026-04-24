@@ -260,6 +260,15 @@ class MazalIndex:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def lookup_full(self, nli_id: str) -> dict | None:
+        """Alias for :meth:`get_record` named to match the biodata
+        extractor's expectation. When the schema grows to include
+        places / occupations / variants, this is the method the review
+        dialog calls — implementing the extension only here keeps the
+        caller code stable.
+        """
+        return self.get_record(nli_id)
+
     def get_stats(self) -> dict:
         """Get index statistics."""
         cursor = self.conn.cursor()

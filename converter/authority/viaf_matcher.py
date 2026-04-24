@@ -31,6 +31,9 @@ class VIAFMatcher:
     def __init__(self) -> None:
         self._cache: dict[str, str | None] = {}
         self._cluster_cache: dict[str, dict[str, str]] = {}
+        # Raw cluster JSON cache — shared across identifier + biodata
+        # consumers so one HTTP fetch serves both.
+        self._cluster_raw_cache: dict[str, dict | None] = {}
         self._last_request: float = 0.0
         self._session = requests.Session()
         self._session.headers["Accept"] = "application/json"
@@ -57,6 +60,42 @@ class VIAFMatcher:
         """Return the VIAF cluster URI for a uniform title, or None."""
         return self._search(title, cql_field="local.uniformTitleWorks")
 
+    def get_cluster_raw(self, viaf_id: str) -> dict | None:
+        """Fetch + cache the raw VIAF cluster JSON (unwrapped from
+        ``ns1:VIAFCluster``). Shared by :meth:`get_cluster_identifiers`
+        and :meth:`get_cluster_biodata` so a single HTTP call serves
+        both callers.
+
+        Returns ``None`` on network failure so callers can degrade
+        gracefully — the review dialog shows "VIAF fetch failed" rather
+        than crashing.
+        """
+        if viaf_id in self._cluster_raw_cache:
+            return self._cluster_raw_cache[viaf_id]
+
+        url = f"https://viaf.org/viaf/{viaf_id}"
+        elapsed = time.monotonic() - self._last_request
+        if elapsed < _RATE_LIMIT:
+            time.sleep(_RATE_LIMIT - elapsed)
+        try:
+            resp = self._session.get(url, timeout=_TIMEOUT)
+            self._last_request = time.monotonic()
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.debug("VIAF cluster fetch failed for %s: %s", viaf_id, exc)
+            self._last_request = time.monotonic()
+            self._cluster_raw_cache[viaf_id] = None
+            return None
+        cluster = data.get("ns1:VIAFCluster", data)
+        self._cluster_raw_cache[viaf_id] = cluster
+        return cluster
+
+    def get_cluster_biodata(self, viaf_id: str) -> dict | None:
+        """Return the raw cluster blob shaped for
+        :func:`converter.authority.biodata.extract_viaf_biodata`."""
+        return self.get_cluster_raw(viaf_id)
+
     def get_cluster_identifiers(self, viaf_id: str) -> dict[str, str]:
         """Fetch VIAF cluster JSON and extract LOD authority identifiers.
 
@@ -73,27 +112,10 @@ class VIAFMatcher:
             return self._cluster_cache[viaf_id]
 
         ids: dict[str, str] = {}
-        # /viaf.json endpoint was removed; use content negotiation instead
-        url = f"https://viaf.org/viaf/{viaf_id}"
-
-        # Respect rate limit
-        elapsed = time.monotonic() - self._last_request
-        if elapsed < _RATE_LIMIT:
-            time.sleep(_RATE_LIMIT - elapsed)
-
-        try:
-            resp = self._session.get(url, timeout=_TIMEOUT)
-            self._last_request = time.monotonic()
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:
-            logger.debug("VIAF cluster fetch failed for %s: %s", viaf_id, exc)
-            self._last_request = time.monotonic()
+        cluster = self.get_cluster_raw(viaf_id)
+        if cluster is None:
             self._cluster_cache[viaf_id] = ids
             return ids
-
-        # Navigate ns1:VIAFCluster wrapper
-        cluster = data.get("ns1:VIAFCluster", data)
 
         # Extract source identifiers from ns1:sources.ns1:source array
         sources = cluster.get("ns1:sources", cluster.get("sources", {}))
