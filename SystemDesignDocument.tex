@@ -768,6 +768,58 @@ The module \filepath{src/mhm\_pipeline/gui/widgets/glass\_dialog.py} provides:
 
 Dialogs that currently use the backdrop: \code{ClaimsEditDialog}, \code{ItemDetailDialog}, \code{ItemEditDialog}, \code{ItemStatusDialog}, \code{AutoApproveDialog}, plus the full-screen popup of \code{WikidataStudioPanel} and the credentials card on that panel. New dialogs must either inherit \code{GlassDialog} or call \code{install\_glass\_backdrop(self)}; the \code{reinstall-app} skill contains a grep-audit that fails if a \code{QDialog} subclass is added without the backdrop.
 
+\subsection{Authority-Match Biodata Comparison}
+\label{sec:biodata-compare}
+
+Reviewing authority matches (Mazal / VIAF / KIMA) is faster when the curator can see every biographical field --- dates, places, names in multiple scripts, occupations --- from the MARC record alongside the matched authority, in one dialog, without leaving the review queue.
+
+A new \code{MatchComparisonDialog} (a \code{GlassDialog} per rule~37) opens from a per-row \textbf{🧬} icon next to the existing \textbf{✎} (edit) and \textbf{↗} (source) icons. It contains five tabs:
+
+\begin{description}
+\item[Dates] Birth / death / date-range values, with the MARC side on the left and the authority side on the right, each pill coloured by diff verdict.
+\item[Places] Birth / death / country / coordinates / associated places, same two-column layout.
+\item[Names / variants] Every known name grouped by language (``he'' / ``lat'' / ``en'' / ``ar'').
+\item[Occupations] Cross-diff of MARC occupation + NER role tags against authority occupation data.
+\item[Raw] Two side-by-side pretty-JSON panes; lines whose \emph{value content} matches across sides at $\ge 0.90$ similarity (regardless of which key they live under) are tinted blue. Purely structural JSON lines (\code{\{\}}, \code{[]}, closing brackets) are excluded so trivial matches do not dominate the signal.
+\end{description}
+
+Colour legend across the first four tabs:
+
+\begin{longtable}{|l|l|}
+\hline
+\textbf{Verdict} & \textbf{Meaning} \\
+\hline
+\code{matched}            & NFKC-normalised + case-folded values are equal \\
+\hline
+\code{differs}            & Both sides have a value, but they disagree --- inspect carefully \\
+\hline
+\code{only-in-marc}       & Value exists only on the MARC side (authority is incomplete) \\
+\hline
+\code{only-in-authority}  & Value exists only on the authority side (MARC is incomplete) \\
+\hline
+\end{longtable}
+
+\paragraph{Shared schema.}
+All four data sources (MARC, Mazal, VIAF, KIMA) flow through pure extractors in \filepath{converter/authority/biodata.py} that return a common \code{BioData} dataclass:
+
+\begin{lstlisting}[basicstyle=\ttfamily\small, frame=single]
+@dataclass(frozen=True)
+class BioData:
+    dates:       dict[str, str]            # birth / death / date_range / manuscript_date
+    places:      dict[str, list[str]]      # birth_place / death_place / country / coords
+    names:       dict[str, list[str]]      # he / en / lat / ar
+    occupations: list[str]
+    notes:       list[str]
+\end{lstlisting}
+
+The MARC extractor is \emph{entity-scoped}: given the authority-match row, it pulls only the fields belonging to the specific entity being matched (filtered through a name-token-overlap matcher with stop-word stripping for Hebrew particles \code{בן} / \code{בת} and Latin particles \code{de} / \code{di} / \code{ibn} / single-letter initials).
+
+\paragraph{Threading model.}
+VIAF cluster JSON takes 200--800~ms over the network; Mazal SQLite lookups take $\sim$2~ms. The dialog renders the MARC side \emph{synchronously} on open, then schedules the authority fetch on \code{QThreadPool.globalInstance()} via a \code{QRunnable} that emits the result through a \code{QObject} signals holder. Results are cached process-wide in a \code{QMutex}-protected dict keyed \code{(source, authority\_id)} so re-opens are instant. The Mazal fetcher opens a fresh SQLite connection per call (cheap; worker-thread safe).
+
+\paragraph{Navigation.}
+The footer has three buttons: \textbf{[✓ Approve]} (flips the row's approved flag + shows an \emph{APPROVED} badge in the header), \textbf{[→ Next]} (advances to the next viable row without closing the dialog; MARC side re-paints instantly, authority side streams in from the same async pipeline), and \textbf{[Close]}. This turns bulk review of 20+ matches into a keyboard-paced workflow instead of an open-dismiss-open cycle.
+
 \subsection{Validation Workbench Architecture}
 \label{sec:validation-workbench}
 

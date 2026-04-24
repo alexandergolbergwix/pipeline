@@ -959,6 +959,8 @@ Authority resolution follows a cascading priority by entity type:
 \item \textbf{Unresolved:} Place stored as literal; manual review.
 \end{enumerate}
 
+\textbf{Curator review (Wikidata Studio → Authority panel).} Each match surfaced by the pipeline is reviewed by a human curator before it feeds the downstream RDF build. A dedicated \emph{``Review \& Edit Authority Matches''} dialog exposes every proposed match with a per-row \textbf{🧬 Compare} button that opens a side-by-side biodata comparison between the MARC record and the matched authority (Mazal / VIAF / KIMA). The comparison covers dates (birth / death / range), places (birth-place / death-place / country / coordinates), names in every known script (Hebrew / Latin / English / Arabic), and occupations; each field is pill-coloured \emph{matched} / \emph{differs} / \emph{only-in-MARC} / \emph{only-in-authority} after Unicode NFKC normalisation. A Raw tab shows both sides as pretty-printed JSON with cross-key value matches highlighted in blue. Approve / Next buttons in the footer enable bulk review without dismissing the dialog between rows. All data sources flow through pure extractors in \code{converter/authority/biodata.py} emitting a common \code{BioData} dataclass, so adding a new source (LC NAF, GND) requires only one extractor function.
+
 \subsection{File Inventory: Authority Integration}
 
 \begin{longtable}{|p{10cm}|r|}
