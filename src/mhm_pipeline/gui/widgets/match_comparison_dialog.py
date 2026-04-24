@@ -193,11 +193,20 @@ def _diff_pairs(marc_vals: list[str], auth_vals: list[str]) -> list[tuple[str, s
 class MatchComparisonDialog(GlassDialog):
     """Glass dialog showing side-by-side MARC↔authority biodata.
 
-    Usage::
-
-        dlg = MatchComparisonDialog(row, parent=self, ...)
-        dlg.show_comparison(cmp_)  # once a BioComparison is available
+    Footer exposes **✓ Approve**, **→ Next**, and **Close** so the
+    reviewer can bulk-approve matches without dismissing the dialog
+    between rows. The Approve + Next buttons call back into a
+    :class:`NavigationController` that the parent editor supplies;
+    that keeps this widget layer-free of model knowledge.
     """
+
+    # Callback protocol for the parent editor. Each attribute is a
+    # callable the dialog invokes on user action. Keeping the dialog
+    # ignorant of the parent model keeps its tests trivial.
+    #   controller.approve(row_dict) -> None
+    #   controller.next(current_row_dict) -> NextState | None  where
+    #     NextState has .row (new dict) and .comparison_getter (callable
+    #     returning a BioComparison or kicking off an async fetch).
 
     def __init__(
         self,
@@ -205,23 +214,20 @@ class MatchComparisonDialog(GlassDialog):
         parent: QWidget | None = None,
         *,
         comparison: BioComparison | None = None,
+        on_approve: Any = None,
+        on_next: Any = None,
     ) -> None:
         super().__init__(parent)
         from mhm_pipeline.gui import theme  # noqa: PLC0415
 
         self._row = row
         self._theme = theme
+        self._on_approve = on_approve
+        self._on_next = on_next
 
-        source = row.get("source") or ""
-        entity = row.get("entity_text") or ""
-        match_name = row.get("matched_name") or ""
-        matched_id = row.get("matched_id") or ""
-
-        self.setWindowTitle(
-            f"Compare — {entity}  ↔  {match_name or matched_id}"
-        )
-        self.resize(920, 640)
-        self.setMinimumSize(640, 480)
+        self.setWindowTitle("Compare authority match")
+        self.resize(960, 680)
+        self.setMinimumSize(720, 500)
 
         outer = QVBoxLayout(self.glass_content)
         outer.setContentsMargins(
@@ -229,20 +235,12 @@ class MatchComparisonDialog(GlassDialog):
         )
         outer.setSpacing(theme.SPACE_MD)
 
-        # Header
-        header = QLabel(
-            f"<div style='font-size:{theme.FONT_LG}px; font-weight:600;"
-            f" color:{theme.ui('text')}'>{entity}</div>"
-            f"<div style='color:{theme.ui('subtext')};"
-            f" font-size:{theme.FONT_SM}px; margin-top:4px'>"
-            f"Source: <b>{source}</b> · "
-            f"Match: <b>{match_name}</b>"
-            + (f" (<code>{matched_id}</code>)" if matched_id else "")
-            + "</div>",
-        )
-        header.setTextFormat(Qt.TextFormat.RichText)
-        header.setWordWrap(True)
-        outer.addWidget(header)
+        # Header (will be rebuilt on navigation so extracted into a setter)
+        self._header_label = QLabel()
+        self._header_label.setTextFormat(Qt.TextFormat.RichText)
+        self._header_label.setWordWrap(True)
+        outer.addWidget(self._header_label)
+        self._refresh_header()
 
         # Progress bar shown while a fetch is in flight
         self._progress = QProgressBar()
@@ -268,9 +266,14 @@ class MatchComparisonDialog(GlassDialog):
         self._occupations_tab = self._make_diff_tab(
             headers=("", "MARC record", "Authority", "Status"),
         )
-        self._raw_tab = QTextEdit()
-        self._raw_tab.setReadOnly(True)
-        self._raw_tab.setStyleSheet(
+        # Raw tab: side-by-side split with per-line similarity
+        # highlighting. Left = MARC, right = Authority.
+        self._raw_tab = QWidget()
+        raw_layout = QHBoxLayout(self._raw_tab)
+        raw_layout.setContentsMargins(0, 0, 0, 0)
+        raw_layout.setSpacing(theme.SPACE_SM)
+
+        raw_pane_qss = (
             f"QTextEdit {{ background: rgba(0,0,0, 90);"
             f" color: {theme.ui('text')}; border: 1px solid rgba(255,255,255, 22);"
             f" border-radius: {theme.RADIUS_MD}px;"
@@ -278,6 +281,16 @@ class MatchComparisonDialog(GlassDialog):
             f" font-size: {theme.FONT_SM}px;"
             f" padding: 8px; }}"
         )
+        self._raw_left = QTextEdit()
+        self._raw_left.setReadOnly(True)
+        self._raw_left.setAcceptRichText(True)
+        self._raw_left.setStyleSheet(raw_pane_qss)
+        self._raw_right = QTextEdit()
+        self._raw_right.setReadOnly(True)
+        self._raw_right.setAcceptRichText(True)
+        self._raw_right.setStyleSheet(raw_pane_qss)
+        raw_layout.addWidget(self._raw_left, stretch=1)
+        raw_layout.addWidget(self._raw_right, stretch=1)
 
         self._tabs.addTab(self._dates_tab, "Dates")
         self._tabs.addTab(self._places_tab, "Places")
@@ -285,9 +298,27 @@ class MatchComparisonDialog(GlassDialog):
         self._tabs.addTab(self._occupations_tab, "Occupations")
         self._tabs.addTab(self._raw_tab, "Raw")
 
-        # Footer
+        # Footer — Approve + Next + Close
         bar = QHBoxLayout()
         bar.addStretch()
+
+        self._approve_btn = QPushButton("✓ Approve")
+        self._approve_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._approve_btn.setStyleSheet(theme.button_style("success"))
+        self._approve_btn.setToolTip(
+            "Mark this match approved and keep the dialog open so you can "
+            "advance to the next row without losing context."
+        )
+        self._approve_btn.clicked.connect(self._handle_approve)
+        bar.addWidget(self._approve_btn)
+
+        self._next_btn = QPushButton("→ Next")
+        self._next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._next_btn.setStyleSheet(theme.button_style("primary"))
+        self._next_btn.setToolTip("Load the next match into this same dialog.")
+        self._next_btn.clicked.connect(self._handle_next)
+        bar.addWidget(self._next_btn)
+
         close_btn = QPushButton("Close")
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setStyleSheet(theme.button_style())
@@ -295,6 +326,90 @@ class MatchComparisonDialog(GlassDialog):
         bar.addWidget(close_btn)
         outer.addLayout(bar)
 
+        # Refresh Approve button state so it reflects the starting row's
+        # current approval flag.
+        self._refresh_approve_button()
+
+        if comparison is not None:
+            self.show_comparison(comparison)
+
+    def _refresh_header(self) -> None:
+        theme = self._theme
+        row = self._row
+        source = row.get("source") or ""
+        entity = row.get("entity_text") or ""
+        match_name = row.get("matched_name") or ""
+        matched_id = row.get("matched_id") or ""
+        approved = bool(row.get("approved"))
+        badge = (
+            f"<span style='background:rgba(34,197,94,180);"
+            f" color:white; padding:2px 8px;"
+            f" border-radius:{theme.RADIUS_SM}px; font-size:{theme.FONT_XS}px;"
+            f" margin-left:{theme.SPACE_SM}px'>APPROVED</span>"
+            if approved else ""
+        )
+        self._header_label.setText(
+            f"<div style='font-size:{theme.FONT_LG}px; font-weight:600;"
+            f" color:{theme.ui('text')}'>{entity}{badge}</div>"
+            f"<div style='color:{theme.ui('subtext')};"
+            f" font-size:{theme.FONT_SM}px; margin-top:4px'>"
+            f"Source: <b>{source}</b> · "
+            f"Match: <b>{match_name}</b>"
+            + (f" (<code>{matched_id}</code>)" if matched_id else "")
+            + "</div>",
+        )
+        self.setWindowTitle(
+            f"Compare — {entity}  ↔  {match_name or matched_id}"
+        )
+
+    def _refresh_approve_button(self) -> None:
+        if self._row.get("approved"):
+            self._approve_btn.setText("✓ Approved")
+            self._approve_btn.setEnabled(False)
+        else:
+            self._approve_btn.setText("✓ Approve")
+            self._approve_btn.setEnabled(True)
+
+    def _handle_approve(self) -> None:
+        if self._on_approve is None:
+            return
+        self._on_approve(self._row)
+        # Flip local state + refresh the badge
+        self._row["approved"] = True
+        self._refresh_header()
+        self._refresh_approve_button()
+
+    def _handle_next(self) -> None:
+        if self._on_next is None:
+            self.accept()
+            return
+        next_state = self._on_next(self._row)
+        if not next_state:
+            # Nothing after this row — close
+            self.accept()
+            return
+        self.load_row(next_state["row"], next_state.get("comparison"))
+        # If an async fetch was kicked off, the caller will call
+        # show_comparison() a second time when it resolves; until then
+        # the progress bar indicates activity.
+        if next_state.get("show_progress"):
+            self._progress.setVisible(True)
+
+    def load_row(self, row: dict, comparison: BioComparison | None = None) -> None:
+        """Swap the dialog's content to show a different match.
+
+        Called by the navigation handler after the user clicks → Next.
+        Resets all tabs, header badge, and Approve button state.
+        """
+        self._row = row
+        self._refresh_header()
+        self._refresh_approve_button()
+        self._dates_tab.clear()
+        self._places_tab.clear()
+        self._names_tab.clear()
+        self._occupations_tab.clear()
+        self._raw_left.setPlainText("")
+        self._raw_right.setPlainText("")
         if comparison is not None:
             self.show_comparison(comparison)
 
@@ -326,7 +441,7 @@ class MatchComparisonDialog(GlassDialog):
 
     def show_error(self, message: str) -> None:
         self._progress.setVisible(False)
-        self._raw_tab.setPlainText(f"Fetch failed: {message}")
+        self._raw_right.setPlainText(f"Fetch failed: {message}")
         self._tabs.setCurrentWidget(self._raw_tab)
 
     # Internals ------------------------------------------------------------
@@ -404,18 +519,69 @@ class MatchComparisonDialog(GlassDialog):
             self._add_row(self._occupations_tab, "", "", "", "no data")
 
     def _populate_raw(self, cmp_: BioComparison) -> None:
-        import json  # noqa: PLC0415
+        """Render MARC + Authority side-by-side as pretty JSON with any
+        line scoring ≥ 90% similarity (case-insensitive, token-shuffled)
+        highlighted in blue on both sides."""
+        import json   # noqa: PLC0415
+        import html   # noqa: PLC0415
+        from difflib import SequenceMatcher  # noqa: PLC0415
 
         def to_dict(b: BioData) -> dict:
             return {
                 "dates": b.dates, "places": b.places, "names": b.names,
                 "occupations": b.occupations, "notes": b.notes,
             }
-        self._raw_tab.setPlainText(json.dumps({
-            "source": cmp_.source,
-            "marc":      to_dict(cmp_.marc),
-            "authority": to_dict(cmp_.authority),
-        }, indent=2, ensure_ascii=False, default=str))
+
+        marc_json = json.dumps(
+            to_dict(cmp_.marc), indent=2, ensure_ascii=False, default=str,
+        )
+        auth_json = json.dumps(
+            to_dict(cmp_.authority), indent=2, ensure_ascii=False, default=str,
+        )
+
+        marc_lines = marc_json.splitlines() or [""]
+        auth_lines = auth_json.splitlines() or [""]
+
+        # For each MARC line, find its best-matching authority line.
+        # Threshold 0.90 per the user request. Mark BOTH sides.
+        def _norm(s: str) -> str:
+            return s.strip().casefold()
+
+        marc_matched: set[int] = set()
+        auth_matched: set[int] = set()
+        auth_norm = [_norm(s) for s in auth_lines]
+        for i, m in enumerate(marc_lines):
+            if not _norm(m):
+                continue
+            for j, a in enumerate(auth_norm):
+                if not a:
+                    continue
+                if SequenceMatcher(None, _norm(m), a).ratio() >= 0.90:
+                    marc_matched.add(i)
+                    auth_matched.add(j)
+                    break
+
+        hl_bg = "rgba(59,130,246,70)"       # blue-500 @ 28% opacity
+        hl_fg = "rgba(147,197,253,255)"     # blue-300 text
+
+        def _render(lines: list[str], matched: set[int]) -> str:
+            out_lines: list[str] = [
+                "<pre style='margin:0; font-family:SF Mono,Menlo,Consolas,monospace;"
+                " white-space:pre-wrap; word-break:break-word'>"
+            ]
+            for i, line in enumerate(lines):
+                escaped = html.escape(line) or "&nbsp;"
+                if i in matched:
+                    out_lines.append(
+                        f"<div style='background:{hl_bg}; color:{hl_fg}'>{escaped}</div>"
+                    )
+                else:
+                    out_lines.append(f"<div>{escaped}</div>")
+            out_lines.append("</pre>")
+            return "".join(out_lines)
+
+        self._raw_left.setHtml(_render(marc_lines, marc_matched))
+        self._raw_right.setHtml(_render(auth_lines, auth_matched))
 
 
 __all__ = [

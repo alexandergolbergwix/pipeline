@@ -1029,11 +1029,38 @@ class AuthorityEditor(QWidget):
         even if the async authority fetch is slow or fails. The
         authority side fills in when the VIAF/Mazal fetch resolves
         (or stays blank for ``marc_field`` matches, which have no
-        external counterpart).
+        external counterpart). The dialog exposes Approve + Next so
+        the reviewer can bulk-process without closing between rows.
         """
         src = self._proxy_to_source(proxy_row)
         if not 0 <= src < len(self._model._rows):
             return
+
+        from mhm_pipeline.gui.widgets.match_comparison_dialog import (  # noqa: PLC0415
+            MatchComparisonDialog,
+        )
+
+        dlg = MatchComparisonDialog(
+            self._model._rows[src],
+            parent=self,
+            on_approve=self._compare_approve_handler,
+            on_next=self._compare_next_handler,
+        )
+        self._hydrate_compare_dialog(dlg, src)
+        dlg.exec()
+
+    def _hydrate_compare_dialog(self, dlg, src: int) -> None:
+        """Populate *dlg* with MARC + authority data for source row *src*.
+
+        Called both on initial open and when the user clicks → Next.
+        """
+        from mhm_pipeline.gui.widgets.match_comparison_dialog import (  # noqa: PLC0415
+            fetch_biodata_async,
+        )
+        from converter.authority.biodata import (  # noqa: PLC0415
+            BioComparison, BioData, extract_marc_biodata,
+        )
+
         row = self._model._rows[src]
 
         # Find the MARC record that hosts this match
@@ -1044,34 +1071,20 @@ class AuthorityEditor(QWidget):
                 marc_record = r
                 break
 
-        from mhm_pipeline.gui.widgets.match_comparison_dialog import (  # noqa: PLC0415
-            MatchComparisonDialog,
-            fetch_biodata_async,
-        )
-        from converter.authority.biodata import (  # noqa: PLC0415
-            BioComparison, BioData, extract_marc_biodata,
-        )
-
         source = str(row.get("source", ""))
         auth_id = str(row.get("matched_id", ""))
         if source == "viaf" and "/" in auth_id:
             auth_id = auth_id.rstrip("/").split("/")[-1]
 
-        # Render MARC side + any data already on the row immediately;
-        # the dialog is useful even before the async authority fetch
-        # resolves. An empty authority side stays blank until ready.
         marc_bio = extract_marc_biodata(marc_record, row=row)
         initial = BioComparison(
             marc=marc_bio, authority=BioData(), source=source,
         )
-        dlg = MatchComparisonDialog(row, parent=self, comparison=initial)
+        dlg.load_row(row, comparison=initial)
 
-        # For marc_field matches there's no external authority — the
-        # name simply came straight from MARC. Mark the dialog done
-        # without spawning a pointless fetch.
         if source in ("marc_field", "") or not auth_id:
+            # No async work — keep the dialog synchronous
             dlg._progress.setVisible(False)  # type: ignore[attr-defined]
-            dlg.exec()
             return
 
         viaf_fetcher = self._make_viaf_fetcher()
@@ -1079,29 +1092,116 @@ class AuthorityEditor(QWidget):
         kima_fetcher = self._make_kima_fetcher()
 
         signals = fetch_biodata_async(
-            source=source,
-            auth_id=auth_id,
-            marc_record=marc_record,
+            source=source, auth_id=auth_id, marc_record=marc_record,
             viaf_fetcher=viaf_fetcher,
             mazal_fetcher=mazal_fetcher,
             kima_fetcher=kima_fetcher,
         )
-        # Keep a reference so the signal holder isn't GC'd while the
-        # runnable is queued in the thread-pool.
+        # Reference pinning — without this, Python may GC the signals
+        # holder before the QRunnable queues.
         dlg._bio_signals = signals  # type: ignore[attr-defined]
-        # The MARC side is already in place; the async result carries
-        # both sides freshly-extracted, but we prefer the *existing*
-        # MARC side because it was computed against ``row``. Merge.
+
         def _on_ready(_s: str, _i: str, cmp_: object) -> None:
             merged = BioComparison(
                 marc=marc_bio, authority=cmp_.authority, source=cmp_.source,
             )
             dlg.show_comparison(merged)
+
         signals.ready.connect(_on_ready)
         signals.failed.connect(
             lambda _s, _i, msg: dlg.show_error(msg),
         )
-        dlg.exec()
+
+    def _compare_approve_handler(self, row: dict) -> None:
+        """Flip the approved flag on the row in the model + refresh view."""
+        for i, r in enumerate(self._model._rows):
+            if r is row:
+                r["approved"] = True
+                tl = self._model.index(i, 0)
+                br = self._model.index(i, self._model.columnCount() - 1)
+                self._model.dataChanged.emit(tl, br)
+                self.entities_changed.emit()
+                self._update_stats()
+                break
+
+    def _compare_next_handler(self, row: dict) -> dict | None:
+        """Return the next row + hydrate the caller's dialog.
+
+        The returned dict ``{"row": ..., "comparison": BioComparison,
+        "show_progress": bool}`` is what :meth:`MatchComparisonDialog
+        .load_row` expects. We hydrate the dialog asynchronously; for
+        VIAF/Mazal rows the dialog shows the MARC side immediately +
+        a spinner.
+        """
+        current_src = -1
+        for i, r in enumerate(self._model._rows):
+            if r is row:
+                current_src = i
+                break
+        if current_src < 0:
+            return None
+        next_src = self._find_next_compare_row(current_src)
+        if next_src is None:
+            return None
+
+        # Hydrate via the same path used for initial open — pull the
+        # parent dialog from the caller's stack via self.focusWidget()
+        # fallback. Simpler: we just rebuild the initial comparison
+        # here and let load_row apply it.
+        from converter.authority.biodata import (  # noqa: PLC0415
+            BioComparison, BioData, extract_marc_biodata,
+        )
+
+        next_row = self._model._rows[next_src]
+        cn = str(next_row.get("_control_number", ""))
+        marc_record: dict | None = None
+        for r in self._model._records:
+            if str(r.get("_control_number", "")) == cn:
+                marc_record = r
+                break
+        marc_bio = extract_marc_biodata(marc_record, row=next_row)
+        initial = BioComparison(
+            marc=marc_bio, authority=BioData(), source=str(next_row.get("source", "")),
+        )
+
+        # Kick off the async fetch so that by the time the dialog's
+        # load_row returns, the authority side will start filling in
+        # through the dialog's existing signals wiring. To keep the
+        # signals attached to THIS dialog we reach up the widget tree
+        # — the parent of the caller row is self, and the active modal
+        # child of self is the dialog.
+        dlg = None
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+
+        for w in QApplication.topLevelWidgets():
+            if w.__class__.__name__ == "MatchComparisonDialog" and w.isVisible():
+                dlg = w
+                break
+        if dlg is not None:
+            self._hydrate_compare_dialog(dlg, next_src)
+
+        return {
+            "row": next_row,
+            "comparison": initial,
+            "show_progress": str(next_row.get("source", ""))
+                not in ("marc_field", "")
+                and bool(next_row.get("matched_id")),
+        }
+
+    def _find_next_compare_row(self, current_src: int) -> int | None:
+        """Return the index of the next row after *current_src* that has
+        a matched entity worth comparing. Wraps at the end."""
+        n = len(self._model._rows)
+        if n == 0:
+            return None
+        for offset in range(1, n + 1):
+            idx = (current_src + offset) % n
+            if idx == current_src:
+                return None
+            r = self._model._rows[idx]
+            if r.get("entity_text") or r.get("matched_name"):
+                return idx
+        return None
 
     def _make_viaf_fetcher(self):  # noqa: ANN001
         """Return a callable ``id -> raw_cluster_dict`` or ``None`` if
@@ -1115,19 +1215,34 @@ class AuthorityEditor(QWidget):
             return None
 
     def _make_mazal_fetcher(self):  # noqa: ANN001
-        try:
-            from converter.authority.mazal_index import MazalIndex  # noqa: PLC0415
-            if not hasattr(self, "_mazal_index") or self._mazal_index is None:
-                from pathlib import Path as _Path  # noqa: PLC0415
-                # Default bundle path; the authority panel writes the
-                # same value back into settings.
-                default_db = _Path(__file__).resolve().parents[4] / (
-                    "converter/authority/mazal_index.db"
-                )
-                self._mazal_index = MazalIndex(str(default_db))
-            return self._mazal_index.lookup_full
-        except Exception:
-            return None
+        """Return a thread-safe Mazal fetcher.
+
+        SQLite connections are bound to the thread that created them —
+        reusing a single connection across the main thread and a
+        QThreadPool worker raises ``SQLite objects created in a thread
+        can only be used in that same thread``. Opening a fresh
+        connection per call is cheap (~2 ms) and the dialog already
+        caches results in :data:`match_comparison_dialog._CACHE`, so
+        on the steady state this only fires on the first miss per
+        authority ID.
+        """
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        db_path = str(
+            _Path(__file__).resolve().parents[4]
+            / "converter/authority/mazal_index.db"
+        )
+
+        def _fetch(auth_id: str) -> dict | None:
+            try:
+                from converter.authority.mazal_index import MazalIndex  # noqa: PLC0415
+
+                with MazalIndex(db_path) as idx:
+                    return idx.get_record(auth_id)
+            except Exception:
+                return None
+
+        return _fetch
 
     def _make_kima_fetcher(self):  # noqa: ANN001
         # KIMA currently resolves by name, not by ID; return None until
