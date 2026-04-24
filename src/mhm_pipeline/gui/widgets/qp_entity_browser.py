@@ -404,6 +404,25 @@ class _PaginationProxy(QSortFilterProxyModel):
         offset = self._page * self._page_size
         return offset <= source_row < offset + self._page_size
 
+    def sort(  # noqa: D401
+        self,
+        column: int,
+        order: Qt.SortOrder = Qt.SortOrder.AscendingOrder,
+    ) -> None:
+        """Delegate sort to the source proxy so the ordering applies to
+        ALL filtered rows, not just the current page's 50-row window.
+        Without this override, clicking a column header only re-orders
+        whatever is currently on screen — exactly the bug the user hit.
+        """
+        src = self.sourceModel()
+        if src is not None:
+            src.sort(column, order)
+        # Re-window onto the now-sorted source — jump back to page 0 so
+        # the user sees the top of the sorted order, not a random page.
+        self._page = 0
+        self.invalidateFilter()
+        self.page_changed.emit(self._page, self.total_pages())
+
 
 class QPEntityFilterProxy(QSortFilterProxyModel):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -1900,6 +1919,31 @@ class QPEntityBrowser(QWidget):
         search.addWidget(self._search)
         layout.addLayout(search)
 
+        # Filter chips: Type + Status. Each chip toggles inclusion of that
+        # dimension value in the filter proxy's dimension filter.
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(theme.SPACE_SM)
+        filter_row.addWidget(QLabel("Type:"))
+        self._type_chips: dict[str, QPushButton] = {}
+        for t in ("person", "work", "manuscript"):
+            chip = self._make_filter_chip(t, "type")
+            filter_row.addWidget(chip)
+            self._type_chips[t] = chip
+        filter_row.addSpacing(theme.SPACE_LG)
+        filter_row.addWidget(QLabel("Status:"))
+        self._status_chips: dict[str, QPushButton] = {}
+        for s in (_STATUS_NEW, _STATUS_OURS, _STATUS_OTHER, _STATUS_UNKNOWN):
+            chip = self._make_filter_chip(s, "status")
+            filter_row.addWidget(chip)
+            self._status_chips[s] = chip
+        filter_row.addStretch()
+        self._clear_filters_btn = QPushButton("Clear filters")
+        self._clear_filters_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_filters_btn.setStyleSheet(theme.ghost_button_style())
+        self._clear_filters_btn.clicked.connect(self._on_clear_filters)
+        filter_row.addWidget(self._clear_filters_btn)
+        layout.addLayout(filter_row)
+
         # Table — chained proxies:
         #   model → _proxy (filter/search/sort) → _page_proxy (paginate) → view
         # Pagination at the proxy layer keeps rowCount() at page_size, so
@@ -2204,8 +2248,75 @@ class QPEntityBrowser(QWidget):
 
     # ── Filters + bulk ──────────────────────────────────────────────────
 
+    def _make_filter_chip(self, value: str, kind: str) -> QPushButton:
+        """Create a toggle chip that contributes *value* to the type-
+        or status-filter set when checked."""
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        chip = QPushButton(value)
+        chip.setCheckable(True)
+        chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Colour chips by meaning: types stay neutral; statuses inherit
+        # their pill colour so checked/unchecked reads at a glance.
+        if kind == "status":
+            bg, fg = _status_colors(value)
+            chip.setStyleSheet(
+                f"QPushButton {{ background: rgba(255,255,255, 10);"
+                f" color: {theme.ui('subtext')};"
+                f" border: 1px solid rgba(255,255,255, 30);"
+                f" border-radius: {theme.RADIUS_SM}px;"
+                f" padding: 4px 10px;"
+                f" font-size: {theme.FONT_SM}px; font-weight: 600; }}"
+                f"QPushButton:checked {{ background: {bg}; color: {fg};"
+                f" border-color: {bg}; }}"
+                f"QPushButton:hover {{ border-color: {theme.ui('highlight')}; }}"
+            )
+        else:
+            chip.setStyleSheet(
+                f"QPushButton {{ background: rgba(255,255,255, 10);"
+                f" color: {theme.ui('subtext')};"
+                f" border: 1px solid rgba(255,255,255, 30);"
+                f" border-radius: {theme.RADIUS_SM}px;"
+                f" padding: 4px 10px;"
+                f" font-size: {theme.FONT_SM}px; font-weight: 600; }}"
+                f"QPushButton:checked {{ background: rgba(99, 102, 241, 160);"
+                f" color: white; border-color: rgba(99, 102, 241, 220); }}"
+                f"QPushButton:hover {{ border-color: {theme.ui('highlight')}; }}"
+            )
+        chip.toggled.connect(self._on_filter_chip_toggled)
+        return chip
+
+    def _on_filter_chip_toggled(self, _checked: bool) -> None:
+        types = {t for t, c in self._type_chips.items() if c.isChecked()}
+        statuses = {s for s, c in self._status_chips.items() if c.isChecked()}
+        self._proxy.set_dimension_filters(types, statuses)
+        # Force-reset + re-invalidate the page window. set_page(0) is a
+        # no-op when already at page 0, which would leave the proxy
+        # looking at stale row indices from before the filter change.
+        self._page_proxy._page = 0
+        self._page_proxy.invalidateFilter()
+        self._page_proxy.page_changed.emit(0, self._page_proxy.total_pages())
+        self._refresh_actions()
+        self._update_stats()
+
+    def _on_clear_filters(self) -> None:
+        for c in list(self._type_chips.values()) + list(self._status_chips.values()):
+            c.blockSignals(True)
+            c.setChecked(False)
+            c.blockSignals(False)
+        self._proxy.set_dimension_filters(set(), set())
+        self._search.clear()
+        self._page_proxy._page = 0
+        self._page_proxy.invalidateFilter()
+        self._page_proxy.page_changed.emit(0, self._page_proxy.total_pages())
+        self._refresh_actions()
+        self._update_stats()
+
     def _on_search(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)
+        self._page_proxy._page = 0
+        self._page_proxy.invalidateFilter()
+        self._page_proxy.page_changed.emit(0, self._page_proxy.total_pages())
         self._refresh_actions()
         self._update_stats()
 
