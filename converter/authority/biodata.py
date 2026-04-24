@@ -283,42 +283,49 @@ def extract_viaf_biodata(cluster: dict[str, Any] | None) -> BioData:
 
     names: dict[str, list[str]] = {}
     # mainHeadings.data → list of {text, sources:{s: ["NLI",...]}}
+    # VIAF's real payload uses ``ns1:`` prefixes on every inner key
+    # (ns1:text, ns1:sources, ns1:s) — always read through _nget.
     for head in _iter_nested(cluster, "mainHeadings", "data"):
-        text = _unwrap_text(head.get("text") if isinstance(head, dict) else None)
+        if not isinstance(head, dict):
+            continue
+        text = _unwrap_text(_nget(head, "text"))
         if not text:
             continue
-        srcs = head.get("sources", {}) if isinstance(head, dict) else {}
+        srcs = _nget(head, "sources") or {}
         code_list = _iter_inner(srcs, "s")
-        # Map provenance to language: NLI → he, LC/LoC/BNF → lat/en, ...
         lang = "lat"
-        if any("NLI" in str(c) for c in code_list):
+        if any("NLI" in str(c) or "J9U" in str(c) for c in code_list):
             lang = "he"
         if _has_hebrew(text):
             lang = "he"
         names.setdefault(lang, []).append(text)
 
-    # x400s (alt names)
+    # x400s (alt names) — nested as x400s.x400[].datafield.subfield
     for alt in _iter_nested(cluster, "x400s", "x400"):
         if not isinstance(alt, dict):
             continue
-        t = _unwrap_text(alt.get("datafield", {}).get("subfield"))
-        if t:
-            lang = "he" if _has_hebrew(t) else "lat"
-            names.setdefault(lang, []).append(t)
+        df = _nget(alt, "datafield") or {}
+        sf = _nget(df, "subfield")
+        # subfield can be a single dict, a list, or a string
+        for piece in (sf if isinstance(sf, list) else [sf]):
+            t = _unwrap_text(piece)
+            if t:
+                lang = "he" if _has_hebrew(t) else "lat"
+                names.setdefault(lang, []).append(t)
 
     dates: dict[str, str] = {}
-    bd = cluster.get("birthDate") or cluster.get("ns1:birthDate")
-    dd = cluster.get("deathDate") or cluster.get("ns1:deathDate")
+    bd = _nget(cluster, "birthDate")
+    dd = _nget(cluster, "deathDate")
     if bd and str(bd) not in ("0", "00000000"):
         dates["birth"] = str(bd)
     if dd and str(dd) not in ("0", "00000000"):
         dates["death"] = str(dd)
 
     places: dict[str, list[str]] = {}
-    nat = _iter_inner(cluster.get("nationalityOfEntity") or {}, "data")
+    nat = _iter_inner(_nget(cluster, "nationalityOfEntity") or {}, "data")
     for n in nat:
         if isinstance(n, dict):
-            t = _unwrap_text(n.get("text"))
+            t = _unwrap_text(_nget(n, "text"))
             if t:
                 places.setdefault("country", []).append(t)
         elif isinstance(n, str):
@@ -327,18 +334,18 @@ def extract_viaf_biodata(cluster: dict[str, Any] | None) -> BioData:
     occupations: list[str] = []
     for occ in _iter_nested(cluster, "occupation", "data"):
         if isinstance(occ, dict):
-            t = _unwrap_text(occ.get("text"))
+            t = _unwrap_text(_nget(occ, "text"))
             if t:
                 occupations.append(t)
         elif isinstance(occ, str):
             occupations.append(occ)
 
     notes: list[str] = []
-    viaf_id = cluster.get("viafID") or cluster.get("ns1:viafID")
+    viaf_id = _nget(cluster, "viafID")
     if viaf_id:
         notes.append(f"VIAF: {viaf_id}")
     for act in _iter_nested(cluster, "fieldOfActivity", "data"):
-        t = _unwrap_text(act.get("text") if isinstance(act, dict) else act)
+        t = _unwrap_text(_nget(act, "text") if isinstance(act, dict) else act)
         if t:
             notes.append(f"field: {t}")
 
@@ -459,6 +466,18 @@ def _has_token_overlap(a: str, b: str) -> bool:
     return len(overlap) >= 2
 
 
+def _nget(obj: Any, key: str) -> Any:
+    """Namespace-tolerant dict get — tries ``key`` then ``ns1:<key>``.
+    VIAF's real payload puts ``ns1:`` in front of every field; our
+    extractor was only handling that at the top level."""
+    if not isinstance(obj, dict):
+        return None
+    if key in obj:
+        return obj[key]
+    ns = f"ns1:{key}"
+    return obj.get(ns)
+
+
 def _iter_nested(obj: Any, *keys: str) -> list[Any]:
     """Walk dict-of-dict path ``keys`` and return the final list of items.
 
@@ -494,14 +513,21 @@ def _iter_inner(obj: Any, key: str) -> list[Any]:
 
 
 def _unwrap_text(val: Any) -> str:
-    """Pull a string out of VIAF's `{"#text": "..."}` wrapping or a bare
-    string / list-of-strings."""
+    """Pull a string out of VIAF's various text wrappers — bare string,
+    ``{"#text": "..."}``, ``{"content": "..."}``, or a nested list."""
     if val is None:
         return ""
     if isinstance(val, str):
         return val
     if isinstance(val, dict):
-        return str(val.get("#text") or val.get("content") or "").strip()
+        for k in ("#text", "content", "ns1:text", "text"):
+            if k in val and isinstance(val[k], str):
+                return val[k].strip()
+        # Last-ditch: single string value in the dict
+        for v in val.values():
+            if isinstance(v, str):
+                return v.strip()
+        return ""
     if isinstance(val, list):
         return ", ".join(_unwrap_text(x) for x in val if x)
     return str(val)
