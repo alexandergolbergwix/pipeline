@@ -35,6 +35,7 @@ from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -104,12 +105,34 @@ class _BuildWorker(QThread):
             self.failed.emit(str(exc))
 
 
-class _DuplicateCheckWorker(QThread):
-    """Queries Wikidata to classify each item as new / ours / others."""
+class _ValidationWorker(QThread):
+    """Full validate-with-Wikidata pass over the built items.
 
-    status = pyqtSignal(str, str, str, str)   # (local_id, status, qid, reason)
-    finished_all = pyqtSignal()
+    Runs every live check the pipeline supports: duplicate-detection via
+    the reconciler, identifier-collision, item-existence SPARQL ASK,
+    three-channel creator verification, and a re-run of
+    ``item_validator.validate_item()`` against the possibly-edited item.
+
+    Emits a full per-row payload on :attr:`row_validated`, so the
+    status-info popup has every signal it needs without another network
+    round-trip. The legacy :attr:`status` 4-tuple stays for backward
+    compatibility with earlier callers.
+    """
+
+    # Per-row full payload — drives the ℹ status popup.
+    row_validated = pyqtSignal(str, dict)
+    # Legacy thin signal kept for backward compat with callers that only
+    # care about (local_id, status, qid, reason).
+    status = pyqtSignal(str, str, str, str)
+    progress = pyqtSignal(int)                # 0–100 percent
+    log_line = pyqtSignal(str)                # live-log passthrough
+    finished_all = pyqtSignal(dict)           # summary counters
     failed = pyqtSignal(str)
+
+    _LOG_EVERY = 50   # running-counts log line every N items
+    _PROGRESS_EVERY = 1
+
+    _ID_PIDS = ("P214", "P8189", "P244", "P227", "P213")
 
     def __init__(
         self,
@@ -120,10 +143,16 @@ class _DuplicateCheckWorker(QThread):
         super().__init__(parent)
         self._items = items
         self._token = token
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Request a graceful stop — checked between items."""
+        self._cancelled = True
 
     def run(self) -> None:
         try:
             import sys as _sys  # noqa: PLC0415
+            import time as _time  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
 
             _repo = _Path(__file__).resolve().parents[4]
@@ -142,75 +171,216 @@ class _DuplicateCheckWorker(QThread):
             # upload_item(), so construction is safe without it lifted.
             uploader = WikidataUploader(token=self._token)
             auth_user = uploader._get_authenticated_user() or ""
+            if auth_user:
+                self.log_line.emit(f"Authenticated as Wikidata user: {auth_user}")
+            else:
+                self.log_line.emit(
+                    "Anonymous session — creator-verification will be "
+                    "best-effort only (no bot token provided).",
+                )
 
-            for item in self._items:
+            total = len(self._items)
+            counts = {"new": 0, "ours": 0, "other": 0}
+            started = _time.monotonic()
+            self.progress.emit(0)
+
+            def _tally(status: str) -> None:
+                if status == _STATUS_NEW:
+                    counts["new"] += 1
+                elif status == _STATUS_OURS:
+                    counts["ours"] += 1
+                elif status == _STATUS_OTHER:
+                    counts["other"] += 1
+
+            from converter.wikidata.item_validator import validate_item  # noqa: PLC0415
+            from datetime import datetime, UTC  # noqa: PLC0415
+
+            for idx, item in enumerate(self._items, start=1):
+                if self._cancelled:
+                    self.log_line.emit(f"Check cancelled at item {idx}/{total}.")
+                    break
+
+                row_start = _time.monotonic()
                 local_id = str(getattr(item, "local_id", "") or "")
-                # Only persons are currently reconciled by identifier.
-                # Works & manuscripts → stay as "new" unless existing_qid set.
                 etype = getattr(item, "entity_type", "")
                 existing = getattr(item, "existing_qid", "") or ""
 
-                if existing:
-                    creator = uploader._get_first_revision_author(existing) or ""
-                    if auth_user and creator == auth_user:
-                        self.status.emit(local_id, _STATUS_OURS, existing,
-                                         f"First revision by {creator}")
-                    else:
-                        self.status.emit(local_id, _STATUS_OTHER, existing,
-                                         f"First revision by {creator or 'unknown'}")
-                    continue
+                # --- Re-run in-process validator on the (possibly edited) item
+                validator_issues = validate_item(item)
 
-                if etype != "person":
-                    self.status.emit(local_id, _STATUS_NEW, "",
-                                     "No reconciliation available for non-person")
-                    continue
-
-                # Pull identifiers off the person item's statements
-                ids = {}
+                # --- Per-identifier collision table
+                id_checks: dict[str, dict] = {}
+                proposed_ids: dict[str, str] = {}
                 for s in getattr(item, "statements", []) or []:
                     pid = getattr(s, "property_id", "")
-                    val = str(getattr(s, "value", "") or "")
-                    if pid == "P214":
-                        ids["viaf_uri"] = val
-                    elif pid == "P8189":
-                        ids["nli_id"] = val
-                    elif pid == "P244":
-                        ids["lc_id"] = val
-                    elif pid == "P227":
-                        ids["gnd_id"] = val
-                    elif pid == "P213":
-                        ids["isni"] = val
+                    if pid in self._ID_PIDS:
+                        proposed_ids[pid] = str(getattr(s, "value", "") or "")
+                for pid, val in proposed_ids.items():
+                    try:
+                        owner = reconciler.reconcile_person_by_external_id(pid, val)
+                    except Exception:  # noqa: BLE001
+                        owner = None
+                    if not owner:
+                        verdict = "not-found"
+                    elif existing and owner == existing:
+                        verdict = "matched"
+                    elif existing and owner != existing:
+                        verdict = "conflict"
+                    else:
+                        verdict = "matched"
+                    id_checks[pid] = {
+                        "proposed": val, "existing": owner or "", "verdict": verdict,
+                    }
 
-                qid: str | None = None
+                # --- Overall reconcile match for persons
+                match_qid: str | None = None
                 labels = getattr(item, "labels", {}) or {}
                 name = labels.get("he") or labels.get("en") or ""
-                try:
-                    qid = reconciler.reconcile_person(
-                        name=name,
-                        viaf_uri=ids.get("viaf_uri"),
-                        nli_id=ids.get("nli_id"),
-                        lc_id=ids.get("lc_id"),
-                        gnd_id=ids.get("gnd_id"),
-                        isni=ids.get("isni"),
-                    )
-                except Exception as _exc:  # noqa: BLE001
-                    logger.debug("reconcile_person error for %s: %s", name, _exc)
+                if etype == "person":
+                    try:
+                        match_qid = reconciler.reconcile_person(
+                            name=name,
+                            viaf_uri=proposed_ids.get("P214"),
+                            nli_id=proposed_ids.get("P8189"),
+                            lc_id=proposed_ids.get("P244"),
+                            gnd_id=proposed_ids.get("P227"),
+                            isni=proposed_ids.get("P213"),
+                        )
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.debug("reconcile_person error for %s: %s", name, _exc)
 
-                if not qid:
-                    self.status.emit(local_id, _STATUS_NEW, "", "No match on Wikidata")
-                    continue
+                # --- Target QID to verify (existing beats freshly matched)
+                target_qid = existing or match_qid or ""
 
-                creator = uploader._get_first_revision_author(qid) or ""
-                if auth_user and creator == auth_user:
-                    self.status.emit(local_id, _STATUS_OURS, qid,
-                                     f"First revision by {creator}")
+                # --- Three-channel creator check (only if we have a target)
+                creator_check: dict | None = None
+                sparql_ask = ""
+                sparql_answer: bool | None = None
+                if target_qid:
+                    rev_author = uploader._get_first_revision_author(target_qid) or ""
+                    contribs_new: bool | None = None
+                    if auth_user:
+                        contribs_new = uploader._user_created_via_contribs(
+                            target_qid, auth_user,
+                        )
+                    sparql_answer = uploader._item_exists_on_wikidata_sparql(target_qid)
+                    sparql_ask = f"ASK WHERE {{ wd:{target_qid} ?p ?o . }}"
+                    if not auth_user:
+                        verdict = "unknown-auth"
+                    elif rev_author == auth_user and contribs_new is not False:
+                        verdict = "ours"
+                    elif rev_author and rev_author != auth_user:
+                        verdict = "other"
+                    else:
+                        verdict = "unverified"
+                    creator_check = {
+                        "auth_user": auth_user,
+                        "first_rev_author": rev_author,
+                        "contribs_new": contribs_new,
+                        "verdict": verdict,
+                    }
+
+                # --- Collapse into a status constant
+                if target_qid:
+                    if sparql_answer is False:
+                        status_final = _STATUS_OTHER  # item vanished — block
+                        reason = (
+                            f"SPARQL ASK returned false — {target_qid} has no "
+                            "triples (deleted / redirected / blanked)"
+                        )
+                    elif creator_check and creator_check["verdict"] == "ours":
+                        status_final = _STATUS_OURS
+                        reason = (
+                            f"First revision by {creator_check['first_rev_author']}"
+                        )
+                    elif creator_check and creator_check["verdict"] == "other":
+                        status_final = _STATUS_OTHER
+                        reason = (
+                            f"First revision by "
+                            f"{creator_check['first_rev_author'] or 'unknown'} "
+                            f"(not the authenticated user)"
+                        )
+                    else:
+                        status_final = _STATUS_UNKNOWN
+                        reason = "Creator could not be verified"
+                elif etype != "person":
+                    status_final = _STATUS_NEW
+                    reason = "No reconciliation available for non-person"
                 else:
-                    self.status.emit(local_id, _STATUS_OTHER, qid,
-                                     f"First revision by {creator or 'unknown'}")
-            self.finished_all.emit()
+                    status_final = _STATUS_NEW
+                    reason = "No match on Wikidata"
+
+                # --- Identifier-collision downgrade
+                had_conflict = any(
+                    c.get("verdict") == "conflict" for c in id_checks.values()
+                )
+                if had_conflict and status_final == _STATUS_NEW:
+                    status_final = _STATUS_OTHER
+                    reason += " · IDENTIFIER CONFLICT with existing item(s)"
+
+                latency_ms = int((_time.monotonic() - row_start) * 1000)
+
+                payload = {
+                    "status": status_final,
+                    "status_reason": reason,
+                    "matched_qid": target_qid,
+                    "identifier_checks": id_checks,
+                    "label_collision": None,  # reserved for future extension
+                    "sparql_ask": sparql_ask,
+                    "sparql_answer": sparql_answer,
+                    "creator_check": creator_check,
+                    "validator_issues": validator_issues,
+                    "validated_at": datetime.now(UTC).isoformat(),
+                    "validation_latency_ms": latency_ms,
+                }
+                self.row_validated.emit(local_id, payload)
+                # Legacy thin signal for callers that only want status
+                self.status.emit(local_id, status_final, target_qid, reason)
+
+                _tally(status_final)
+
+                # Surface safety-critical events immediately
+                if status_final == _STATUS_OTHER:
+                    self.log_line.emit(
+                        f"[{idx}/{total}] blocked — {local_id} → {target_qid} · {reason}"
+                    )
+                elif had_conflict:
+                    self.log_line.emit(
+                        f"[{idx}/{total}] identifier conflict on {local_id}: "
+                        + ", ".join(
+                            f"{pid}={c['proposed']} owned by {c['existing']}"
+                            for pid, c in id_checks.items()
+                            if c.get("verdict") == "conflict"
+                        )
+                    )
+
+                # Progress update every item; summary log every _LOG_EVERY
+                if idx % self._PROGRESS_EVERY == 0 or idx == total:
+                    pct = int(idx * 100 / total) if total else 100
+                    self.progress.emit(pct)
+                if idx % self._LOG_EVERY == 0 or idx == total:
+                    elapsed = _time.monotonic() - started
+                    rate = idx / elapsed if elapsed > 0 else 0.0
+                    eta = (total - idx) / rate if rate > 0 else 0.0
+                    self.log_line.emit(
+                        f"[{idx}/{total}] new={counts['new']} · "
+                        f"ours={counts['ours']} · blocked={counts['other']} · "
+                        f"{rate:.1f} items/s · ETA {int(eta)}s"
+                    )
+
+            self.progress.emit(100)
+            self.log_line.emit(
+                f"Validation complete: {counts['new']} new · {counts['ours']} ours · "
+                f"{counts['other']} blocked (existing, not ours)"
+            )
+            self.finished_all.emit(dict(counts))
         except Exception as exc:  # noqa: BLE001
-            logger.error("Duplicate check failed: %s", exc, exc_info=True)
+            logger.error("Validation failed: %s", exc, exc_info=True)
             self.failed.emit(str(exc))
+
+
+# Backward-compat alias — older imports still use the old name.
+_DuplicateCheckWorker = _ValidationWorker
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -324,17 +494,32 @@ class WikidataStudioPanel(QWidget):
         # ── Step 3: Duplicate-check + upload row ───────────────────────
         action_row = QHBoxLayout()
         action_row.setSpacing(theme.SPACE_LG)
-        self._check_btn = QPushButton("Check Wikidata for duplicates")
+        self._check_btn = QPushButton("Validate with Wikidata")
         self._check_btn.setStyleSheet(theme.button_style("load"))
         self._check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._check_btn.setEnabled(False)
         self._check_btn.setToolTip(
-            "Queries Wikidata for each person item by VIAF / Mazal / LCCN / "
-            "GND / ISNI and marks items as new / existing-ours / "
-            "existing-other. Requires bot password for the creator check."
+            "Runs the full live validation pass per item:\n"
+            "  • duplicate detection (VIAF / NLI / LCCN / GND / ISNI)\n"
+            "  • per-identifier collision check against the live ID owner\n"
+            "  • SPARQL ASK existence check on matched QIDs\n"
+            "  • three-channel creator verification (revisions, contribs, SPARQL)\n"
+            "  • re-run of in-process validator against the current item\n"
+            "Updates each row's status + info-icon with the full payload."
         )
-        self._check_btn.clicked.connect(self._on_check_duplicates)
+        self._check_btn.clicked.connect(self._on_validate)
         action_row.addWidget(self._check_btn)
+
+        self._save_validation_btn = QPushButton("💾 Save validation")
+        self._save_validation_btn.setStyleSheet(theme.button_style("success"))
+        self._save_validation_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._save_validation_btn.setEnabled(False)
+        self._save_validation_btn.setToolTip(
+            "Save the current items + validation payloads to a JSON file "
+            "that round-trips with the uploader."
+        )
+        self._save_validation_btn.clicked.connect(self._on_save_validation)
+        action_row.addWidget(self._save_validation_btn)
 
         action_row.addStretch()
 
@@ -596,48 +781,102 @@ class WikidataStudioPanel(QWidget):
                 f"(could not serialise RDF: {exc})"
             )
 
-    # ── Step 4: duplicate check ───────────────────────────────────────
+    # ── Step 4: validate with Wikidata ─────────────────────────────────
 
-    def _on_check_duplicates(self) -> None:
+    def _on_validate(self) -> None:
         items = self._qp_browser.all_items()
         if not items:
-            QMessageBox.information(self, "Nothing to check", "Load + build items first.")
+            QMessageBox.information(self, "Nothing to validate", "Load + build items first.")
             return
         token = self._token_edit.text().strip()
         if not token:
             reply = QMessageBox.question(
                 self, "No bot password",
-                "Duplicate-check and creator-verification are most accurate with a "
-                "bot password. Proceed anonymously anyway?",
+                "Creator-verification and contribs cross-check need an "
+                "authenticated session. Proceed anonymously anyway?",
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
         self._update_stepper(step=4)
         self._check_btn.setEnabled(False)
+        self._save_validation_btn.setEnabled(False)
+        self._progress.set_progress(0)
+        self._progress.setVisible(True)
         self._log_viewer.append_line(
-            f"Checking {len(items)} items against Wikidata via SPARQL…"
+            f"Validating {len(items)} items against Wikidata…"
         )
-        self._check_worker = _DuplicateCheckWorker(items, token, parent=self)
-        self._check_worker.status.connect(self._on_status)
-        self._check_worker.finished_all.connect(self._on_check_done)
+        self._check_worker = _ValidationWorker(items, token, parent=self)
+        # New richer signal — full payload per row.
+        self._check_worker.row_validated.connect(self._on_row_validated)
+        self._check_worker.progress.connect(self._progress.set_progress)
+        self._check_worker.log_line.connect(self._log_viewer.append_line)
+        self._check_worker.finished_all.connect(self._on_validation_done)
         self._check_worker.failed.connect(self._on_check_failed)
         self._check_worker.start()
 
-    def _on_status(self, local_id: str, status: str, qid: str, reason: str) -> None:
-        self._qp_browser.update_status(local_id, status, qid=qid, reason=reason)
+    # Backward-compat alias for the old handler name
+    _on_check_duplicates = _on_validate
 
-    def _on_check_done(self) -> None:
-        self._log_viewer.append_line("Wikidata check complete.")
+    def _on_row_validated(self, local_id: str, payload: dict) -> None:
+        self._qp_browser.update_validation(local_id, payload)
+
+    def _on_validation_done(self, summary: dict) -> None:
+        self._progress.set_progress(100)
         self._check_btn.setEnabled(True)
+        self._save_validation_btn.setEnabled(True)
         self._update_stepper(step=5)
         if self._check_worker is not None:
             self._check_worker.wait()
             self._check_worker = None
+        self._log_viewer.append_line(
+            f"Validation complete: {summary.get('new', 0)} new · "
+            f"{summary.get('ours', 0)} ours · "
+            f"{summary.get('other', 0)} blocked."
+        )
+
+    # Backward-compat alias
+    _on_check_done = _on_validation_done
 
     def _on_check_failed(self, message: str) -> None:
-        self._log_viewer.append_line(f"Check failed: {message}")
-        QMessageBox.critical(self, "Check failed", message)
+        self._log_viewer.append_line(f"Validation failed: {message}")
+        QMessageBox.critical(self, "Validation failed", message)
+
+    # ── Save validation results ────────────────────────────────────────
+
+    def _on_save_validation(self) -> None:
+        """Serialise the checked-items table (with full validation payload)
+        to a JSON file. Round-trips with the uploader's input format."""
+        rows = self._qp_browser.rows_snapshot()
+        if not rows:
+            QMessageBox.information(self, "Nothing to save", "No items to save.")
+            return
+
+        default_dir = self._output_selector.path or (
+            self._input_selector.path.parent if self._input_selector.path else Path.home()
+        )
+        default_path = str(Path(default_dir) / "wikidata_validation_result.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save validation results", default_path, "JSON files (*.json)",
+        )
+        if not path:
+            return
+
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (  # noqa: PLC0415
+            serialize_validated_rows,
+        )
+        import json  # noqa: PLC0415
+
+        try:
+            out = serialize_validated_rows(rows)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2, default=str)
+            self._log_viewer.append_line(
+                f"Saved {len(out)} validated items → {path}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to save validation: %s", exc, exc_info=True)
+            QMessageBox.critical(self, "Save failed", str(exc))
         self._check_btn.setEnabled(True)
         if self._check_worker is not None:
             self._check_worker.wait()

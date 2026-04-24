@@ -190,6 +190,75 @@ def _glass_table_style(theme_mod: Any) -> str:
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def serialize_validated_rows(rows: list[dict]) -> list[dict]:
+    """Serialise ``QPEntityModel._rows`` entries to a JSON-friendly list.
+
+    Round-trippable with the uploader's input format: each entry carries
+    the full ``WikidataItem`` (labels / descriptions / aliases / statements
+    with qualifiers + references), the local ID, entity type, and the
+    full validation payload.
+    """
+    def _item_to_dict(it: Any) -> dict:
+        if it is None:
+            return {}
+        return {
+            "local_id": str(getattr(it, "local_id", "") or ""),
+            "entity_type": str(getattr(it, "entity_type", "") or ""),
+            "existing_qid": getattr(it, "existing_qid", "") or "",
+            "labels": dict(getattr(it, "labels", {}) or {}),
+            "descriptions": dict(getattr(it, "descriptions", {}) or {}),
+            "aliases": {
+                k: list(v) for k, v in (getattr(it, "aliases", {}) or {}).items()
+            },
+            "statements": [
+                {
+                    "property_id": getattr(s, "property_id", ""),
+                    "value": getattr(s, "value", ""),
+                    "value_type": getattr(s, "value_type", ""),
+                    "qualifiers": list(getattr(s, "qualifiers", []) or []),
+                    "references": list(getattr(s, "references", []) or []),
+                }
+                for s in (getattr(it, "statements", []) or [])
+            ],
+        }
+
+    def _issues_to_json(issues: list[Any]) -> list[dict]:
+        return [
+            {
+                "severity": getattr(i, "severity", ""),
+                "code": getattr(i, "code", ""),
+                "message": getattr(i, "message", ""),
+                "reference": getattr(i, "reference", ""),
+            }
+            for i in (issues or [])
+        ]
+
+    out: list[dict] = []
+    for r in rows:
+        validation_payload = r.get("validation")
+        if validation_payload is not None:
+            payload = dict(validation_payload)
+            payload["validator_issues"] = _issues_to_json(
+                payload.get("validator_issues") or r.get("issues"),
+            )
+        else:
+            payload = None
+        out.append({
+            "local_id": r.get("local_id", ""),
+            "entity_type": r.get("entity_type", ""),
+            "label": r.get("label", ""),
+            "description": r.get("description", ""),
+            "status": r.get("status", ""),
+            "status_reason": r.get("status_reason", ""),
+            "severity": r.get("severity", "ok"),
+            "approved": bool(r.get("approved", False)),
+            "item": _item_to_dict(r.get("_item")),
+            "validation": payload,
+            "issues": _issues_to_json(r.get("issues") or []),
+        })
+    return out
+
+
 def flatten_items(items: list[Any]) -> list[dict]:
     """Convert ``list[WikidataItem]`` into flat row dicts for the model.
 
@@ -258,6 +327,17 @@ def flatten_items(items: list[Any]) -> list[dict]:
             "issues": issues,
             "severity": severity,
             "approved": False,
+            # Live-validation payload — filled by _ValidationWorker.row_validated.
+            # Presence of ``validation`` != None means the Validate-with-Wikidata
+            # pass has run for this row (drives ℹ icon visibility).
+            "validation": None,
+            "identifier_checks": {},           # {pid: {"proposed", "existing", "verdict"}}
+            "label_collision": None,           # {"lang", "proposed_label", "proposed_desc", "collisions": [qid]}
+            "sparql_ask": None,
+            "sparql_answer": None,             # True / False / None
+            "creator_check": None,             # {"auth_user", "first_rev_author", "contribs_new", "verdict"}
+            "validated_at": None,              # ISO timestamp
+            "validation_latency_ms": None,
             "_item": item,
         })
     return rows
@@ -266,6 +346,63 @@ def flatten_items(items: list[Any]) -> list[dict]:
 # ────────────────────────────────────────────────────────────────────────────
 # Model + proxy
 # ────────────────────────────────────────────────────────────────────────────
+
+
+class _PaginationProxy(QSortFilterProxyModel):
+    """Chained proxy that shows only one page of its source.
+
+    Placed AFTER the entity-filter proxy::
+
+        QPEntityModel → QPEntityFilterProxy → _PaginationProxy → QTableView
+
+    Rendering 5000+ rows with per-row action widgets is what kills the
+    UI. Truncating rowCount() at the proxy layer means the view itself
+    only materialises ``page_size`` rows (25 / 50 / 100), which is where
+    Qt model/view performance is actually fast.
+    """
+
+    page_changed = pyqtSignal(int, int)   # (page, total_pages)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._page = 0             # zero-indexed
+        self._page_size = 50
+
+    def set_page_size(self, size: int) -> None:
+        if size == self._page_size:
+            return
+        self._page_size = max(1, int(size))
+        self._page = 0
+        self.invalidateFilter()
+        self.page_changed.emit(self._page, self.total_pages())
+
+    def set_page(self, page: int) -> None:
+        page = max(0, min(page, self.total_pages() - 1))
+        if page == self._page:
+            return
+        self._page = page
+        self.invalidateFilter()
+        self.page_changed.emit(self._page, self.total_pages())
+
+    def page(self) -> int:
+        return self._page
+
+    def page_size(self) -> int:
+        return self._page_size
+
+    def total_rows(self) -> int:
+        src = self.sourceModel()
+        return src.rowCount() if src is not None else 0
+
+    def total_pages(self) -> int:
+        n = self.total_rows()
+        if n == 0:
+            return 1
+        return (n + self._page_size - 1) // self._page_size
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802
+        offset = self._page * self._page_size
+        return offset <= source_row < offset + self._page_size
 
 
 class QPEntityFilterProxy(QSortFilterProxyModel):
@@ -329,16 +466,56 @@ class QPEntityModel(QAbstractTableModel):
         ]
 
     def update_status(self, local_id: str, status: str, qid: str = "", reason: str = "") -> None:
+        """Legacy thin-payload setter. Kept for backward-compat with the
+        old ``_DuplicateCheckWorker.status`` 4-tuple signal. Internally
+        delegates to :meth:`update_validation` with a minimal payload."""
+        self.update_validation(local_id, {
+            "status": status,
+            "status_reason": reason,
+            "matched_qid": qid,
+        })
+
+    def update_validation(self, local_id: str, payload: dict) -> None:
+        """Apply a validation payload to the row identified by *local_id*.
+
+        The payload is the full dict emitted by ``_ValidationWorker.row_validated``.
+        Flat columns (status, status_reason, existing_qid) are updated so
+        the existing view stays in sync; the whole payload is stored on
+        the row so the ℹ-icon popup can surface every detail.
+
+        dataChanged is emitted across the full row so status colour,
+        issues cell, and the ℹ-glyph decoration all refresh.
+        """
         for i, r in enumerate(self._rows):
-            if r["local_id"] == local_id:
-                r["status"] = status
-                r["status_reason"] = reason
-                if qid:
-                    r["existing_qid"] = qid
-                tl = self.index(i, 0)
-                br = self.index(i, self.columnCount() - 1)
-                self.dataChanged.emit(tl, br)
-                break
+            if r["local_id"] != local_id:
+                continue
+            if "status" in payload:
+                r["status"] = payload["status"]
+            if "status_reason" in payload:
+                r["status_reason"] = payload["status_reason"]
+            matched_qid = payload.get("matched_qid")
+            if matched_qid:
+                r["existing_qid"] = matched_qid
+            # Full payload + flat-mirrored sub-fields for fast rendering
+            r["validation"] = payload
+            for k in (
+                "identifier_checks", "label_collision", "sparql_ask",
+                "sparql_answer", "creator_check", "validated_at",
+                "validation_latency_ms",
+            ):
+                if k in payload:
+                    r[k] = payload[k]
+            # Validator issues may have been re-run with live data;
+            # refresh severity to match.
+            fresh_issues = payload.get("validator_issues")
+            if fresh_issues is not None:
+                r["issues"] = fresh_issues
+                from converter.wikidata.item_validator import worst_severity  # noqa: PLC0415
+                r["severity"] = worst_severity(fresh_issues)
+            tl = self.index(i, 0)
+            br = self.index(i, self.columnCount() - 1)
+            self.dataChanged.emit(tl, br)
+            break
 
     def set_approved_bulk(self, source_rows: list[int], approved: bool) -> int:
         if not source_rows:
@@ -389,9 +566,12 @@ class QPEntityModel(QAbstractTableModel):
             if col == COL_EXT_ID:
                 return r["ext_id"]
             if col == COL_STATUS:
+                # Append an ℹ glyph when a full validation payload exists —
+                # tells the user this cell is clickable for details.
+                glyph = " ⓘ" if r.get("validation") is not None else ""
                 if r["existing_qid"]:
-                    return f"{r['status']}  ({r['existing_qid']})"
-                return r["status"]
+                    return f"{r['status']}  ({r['existing_qid']}){glyph}"
+                return f"{r['status']}{glyph}"
             if col == COL_ISSUES:
                 issues = r.get("issues") or []
                 if not issues:
@@ -440,7 +620,10 @@ class QPEntityModel(QAbstractTableModel):
             from mhm_pipeline.gui import theme  # noqa: PLC0415
             return QColor(22, 163, 74, 28 if theme.is_dark() else 18)
         if role == Qt.ItemDataRole.ToolTipRole and col == COL_STATUS:
-            return r.get("status_reason", "") or r["status"]
+            parts = [r.get("status_reason", "") or r["status"]]
+            if r.get("validation") is not None:
+                parts.append("Click for full validation details.")
+            return "\n".join(p for p in parts if p)
         if role == Qt.ItemDataRole.ToolTipRole and col == COL_ISSUES:
             issues = r.get("issues") or []
             if not issues:
@@ -1217,6 +1400,298 @@ class _ClaimsTableModel(QAbstractTableModel):
         return base
 
 
+class ItemStatusDialog(QDialog):
+    """Rich ``Validate-with-Wikidata`` status popup.
+
+    Surfaces every signal the worker collected for a single item: status,
+    matched QID, identifier cross-check, creator three-channel result,
+    the actual SPARQL ASK string, and the re-run validator issues.
+    Read-only — editing happens through the other per-row dialogs.
+    """
+
+    def __init__(self, row: dict, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        self._row = row
+        self._theme = theme
+
+        label = row.get("label", "") or "(no label)"
+        qid = row.get("existing_qid", "") or ""
+        self.setWindowTitle(
+            f"Status — {label}" + (f" ({qid})" if qid else "")
+        )
+        self.resize(780, 620)
+        self.setMinimumSize(560, 420)
+
+        content = _install_glass_backdrop(self)
+        outer = QVBoxLayout(content)
+        outer.setContentsMargins(
+            theme.SPACE_LG, theme.SPACE_LG, theme.SPACE_LG, theme.SPACE_LG,
+        )
+        outer.setSpacing(theme.SPACE_MD)
+
+        outer.addWidget(self._build_header())
+
+        tabs = QTabWidget()
+        tabs.setStyleSheet(
+            f"QTabWidget::pane {{ background: rgba(0,0,0, 75);"
+            f" border: 1px solid rgba(255,255,255, 22);"
+            f" border-radius: {theme.RADIUS_MD}px; }}"
+            f"QTabBar::tab {{ background: rgba(255,255,255, 12);"
+            f" color: {theme.ui('subtext')}; padding: 6px 14px;"
+            f" border-top-left-radius: {theme.RADIUS_SM}px;"
+            f" border-top-right-radius: {theme.RADIUS_SM}px;"
+            f" margin-right: 2px; }}"
+            f"QTabBar::tab:selected {{ background: rgba(99, 102, 241, 120);"
+            f" color: white; }}"
+        )
+        tabs.addTab(self._build_summary_tab(), "Summary")
+        tabs.addTab(self._build_identifiers_tab(), "Identifiers")
+        tabs.addTab(self._build_creator_tab(), "Creator check")
+        tabs.addTab(self._build_sparql_tab(), "SPARQL")
+        tabs.addTab(self._build_validator_tab(), "Validator")
+        outer.addWidget(tabs, stretch=1)
+
+        bar = QHBoxLayout()
+        bar.addStretch()
+        close = QPushButton("Close")
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(theme.button_style())
+        close.clicked.connect(self.accept)
+        bar.addWidget(close)
+        outer.addLayout(bar)
+
+    def _build_header(self) -> QWidget:
+        theme = self._theme
+        row = self._row
+        qid = row.get("existing_qid", "") or ""
+        status = row.get("status", "") or "unknown"
+        bg, fg = _status_colors(status)
+        v = row.get("validated_at", "")
+        lat = row.get("validation_latency_ms")
+        validated_badge = ""
+        if v:
+            validated_badge = (
+                f"<span style='color:{theme.ui('subtext')};"
+                f" font-size:{theme.FONT_SM}px'>"
+                f"validated {v[:19]}"
+                + (f" · {lat}ms" if isinstance(lat, int) else "")
+                + "</span>"
+            )
+        parts = [
+            f"<div style='font-size:{theme.FONT_XL}px; font-weight:600;"
+            f" color:{theme.ui('text')}'>{row.get('label','(no label)')}</div>",
+            f"<div style='margin-top:4px'>",
+            f"<span style='background:{bg}; color:{fg};"
+            f" padding:3px 10px; border-radius:{theme.RADIUS_SM}px;"
+            f" font-size:{theme.FONT_SM}px; font-weight:600'>{status}</span>",
+        ]
+        if qid:
+            parts.append(
+                f"&nbsp;&nbsp;<a href='https://www.wikidata.org/wiki/{qid}'"
+                f" style='color:{theme.ui('highlight')}'>{qid}</a>"
+            )
+        if row.get("status_reason"):
+            parts.append(
+                f"&nbsp;&nbsp;<span style='color:{theme.ui('subtext')}'>"
+                f"— {row.get('status_reason','')}</span>"
+            )
+        parts.append("</div>")
+        if validated_badge:
+            parts.append(f"<div style='margin-top:6px'>{validated_badge}</div>")
+        lbl = QLabel("".join(parts))
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setOpenExternalLinks(True)
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _scroll_html(self, html: str) -> QWidget:
+        edit = QTextEdit()
+        edit.setReadOnly(True)
+        edit.setAcceptRichText(True)
+        edit.setHtml(html)
+        edit.setStyleSheet(
+            f"QTextEdit {{ background: transparent;"
+            f" color: {self._theme.ui('text')}; border: none; }}"
+        )
+        return edit
+
+    def _build_summary_tab(self) -> QWidget:
+        theme = self._theme
+        row = self._row
+        v = row.get("validation") or {}
+        lines = [
+            f"<b>Local ID:</b> {row.get('local_id','')}",
+            f"<b>Type:</b> {row.get('entity_type','')}",
+            f"<b>Status:</b> {row.get('status','')}",
+            f"<b>Reason:</b> {row.get('status_reason','')}",
+        ]
+        if v.get("matched_qid"):
+            lines.append(
+                f"<b>Matched QID:</b> <a href='https://www.wikidata.org/wiki/"
+                f"{v['matched_qid']}' style='color:{theme.ui('highlight')}'>"
+                f"{v['matched_qid']}</a>"
+            )
+        if v.get("validated_at"):
+            lines.append(f"<b>Validated:</b> {v['validated_at']}")
+        if v.get("validation_latency_ms") is not None:
+            lines.append(f"<b>Latency:</b> {v['validation_latency_ms']}ms")
+        # Approved/blocked hints
+        if row.get("severity") == "error":
+            lines.append(
+                f"<div style='margin-top:8px; color:{theme.ui('warning')}'>"
+                "⚠ Approval is blocked by a validator error.</div>"
+            )
+        if row.get("status") == _STATUS_OTHER:
+            lines.append(
+                f"<div style='margin-top:8px; color:{theme.ui('warning')}'>"
+                "⚠ Approval is blocked — item was not created by the "
+                "authenticated user (Rule 38).</div>"
+            )
+        body = "<br>".join(lines)
+        return self._scroll_html(body)
+
+    def _build_identifiers_tab(self) -> QWidget:
+        theme = self._theme
+        v = self._row.get("validation") or {}
+        checks = (v.get("identifier_checks") or self._row.get("identifier_checks") or {})
+        if not checks:
+            return self._scroll_html(
+                f"<i style='color:{theme.ui('subtext')}'>"
+                f"No identifier checks recorded — run Validate with Wikidata first."
+                f"</i>"
+            )
+        verdict_colors = {
+            "matched": ("#dcfce7", "#14532d"),
+            "conflict": ("#fee2e2", "#7f1d1d"),
+            "not-found": ("#fef3c7", "#78350f"),
+            "not-checked": ("#f3f4f6", "#374151"),
+        }
+        rows = []
+        for pid, c in checks.items():
+            verdict = c.get("verdict") or "not-checked"
+            bg, fg = verdict_colors.get(verdict, verdict_colors["not-checked"])
+            owner = c.get("existing") or "—"
+            rows.append(
+                f"<tr>"
+                f"<td style='padding:6px 10px'><b>{pid}</b></td>"
+                f"<td style='padding:6px 10px'>{c.get('proposed','')}</td>"
+                f"<td style='padding:6px 10px; color:{theme.ui('subtext')}'>{owner}</td>"
+                f"<td style='padding:6px 10px'>"
+                f"<span style='background:{bg}; color:{fg};"
+                f" padding:2px 8px; border-radius:{theme.RADIUS_SM}px;"
+                f" font-size:{theme.FONT_SM}px'>{verdict}</span>"
+                f"</td></tr>"
+            )
+        html = (
+            "<table style='width:100%; border-collapse:collapse;'>"
+            "<thead><tr>"
+            f"<th style='text-align:left; padding:6px 10px;"
+            f" color:{theme.ui('subtext')};"
+            f" border-bottom:1px solid {theme.ui('border')}'>Property</th>"
+            f"<th style='text-align:left; padding:6px 10px;"
+            f" color:{theme.ui('subtext')};"
+            f" border-bottom:1px solid {theme.ui('border')}'>Proposed</th>"
+            f"<th style='text-align:left; padding:6px 10px;"
+            f" color:{theme.ui('subtext')};"
+            f" border-bottom:1px solid {theme.ui('border')}'>On Wikidata</th>"
+            f"<th style='text-align:left; padding:6px 10px;"
+            f" color:{theme.ui('subtext')};"
+            f" border-bottom:1px solid {theme.ui('border')}'>Verdict</th>"
+            "</tr></thead><tbody>"
+            + "".join(rows)
+            + "</tbody></table>"
+        )
+        return self._scroll_html(html)
+
+    def _build_creator_tab(self) -> QWidget:
+        theme = self._theme
+        v = self._row.get("validation") or {}
+        c = (v.get("creator_check") or self._row.get("creator_check") or {})
+        if not c:
+            return self._scroll_html(
+                f"<i style='color:{theme.ui('subtext')}'>No creator check recorded.</i>"
+            )
+        verdict = c.get("verdict") or "unknown"
+        verdict_colors = {
+            "ours": ("#dcfce7", "#14532d"),
+            "other": ("#fee2e2", "#7f1d1d"),
+            "unverified": ("#fef3c7", "#78350f"),
+            "unknown-auth": ("#f3f4f6", "#374151"),
+        }
+        bg, fg = verdict_colors.get(verdict, verdict_colors["unknown-auth"])
+        contribs = c.get("contribs_new")
+        contribs_label = {
+            True: "new-page contribution found",
+            False: "no new-page contribution found",
+            None: "contribs API unreachable",
+        }.get(contribs, "?")
+        lines = [
+            f"<b>Authenticated user:</b> {c.get('auth_user','') or '(none)'}",
+            f"<b>First revision author (API):</b> {c.get('first_rev_author','') or '(unknown)'}",
+            f"<b>Contribs cross-check (API):</b> {contribs_label}",
+            f"<b>SPARQL ASK result:</b> {v.get('sparql_answer')}",
+            f"<br><b>Verdict:</b> <span style='background:{bg}; color:{fg};"
+            f" padding:2px 8px; border-radius:{theme.RADIUS_SM}px'>{verdict}</span>",
+        ]
+        return self._scroll_html("<br>".join(lines))
+
+    def _build_sparql_tab(self) -> QWidget:
+        theme = self._theme
+        v = self._row.get("validation") or {}
+        ask = v.get("sparql_ask") or self._row.get("sparql_ask") or ""
+        ans = v.get("sparql_answer")
+        if ans is None:
+            ans_text = "null (endpoint unreachable or not yet checked)"
+        else:
+            ans_text = str(ans)
+        if not ask:
+            return self._scroll_html(
+                f"<i style='color:{theme.ui('subtext')}'>"
+                "No SPARQL query fired for this row.</i>"
+            )
+        return self._scroll_html(
+            "<b>Query:</b><br>"
+            f"<pre style='background: rgba(0,0,0,90);"
+            f" color:{theme.ui('text')};"
+            f" padding:{theme.SPACE_MD}px;"
+            f" border-radius:{theme.RADIUS_SM}px;"
+            f" font-family: SF Mono,Menlo,Consolas,monospace;"
+            f" font-size:{theme.FONT_SM}px;'>{ask}</pre>"
+            f"<br><b>Answer:</b> {ans_text}"
+        )
+
+    def _build_validator_tab(self) -> QWidget:
+        theme = self._theme
+        issues = self._row.get("issues") or []
+        if not issues:
+            return self._scroll_html(
+                f"<i style='color:{theme.ui('subtext')}'>No validator findings.</i>"
+            )
+        sev_rank = {"error": 2, "warning": 1}
+        issues_sorted = sorted(
+            issues, key=lambda i: sev_rank.get(i.severity, 0), reverse=True,
+        )
+        blocks = []
+        for iss in issues_sorted:
+            sev = iss.severity
+            bg, fg = _severity_colors(sev)
+            icon = "✗" if sev == "error" else ("⚠" if sev == "warning" else "✓")
+            ref_html = (
+                f" · <a href='{iss.reference}' style='color:{fg}'>policy</a>"
+                if iss.reference else ""
+            )
+            blocks.append(
+                f"<div style='background:{bg}; color:{fg};"
+                f" padding:{theme.SPACE_SM}px {theme.SPACE_MD}px;"
+                f" border-radius:{theme.RADIUS_SM}px; margin:4px 0;'>"
+                f"<b>{icon} [{iss.code}]</b>&nbsp;&nbsp;{iss.message}{ref_html}"
+                f"</div>"
+            )
+        return self._scroll_html("".join(blocks))
+
+
 class ItemEditDialog(QDialog):
     """Edit the label/description of a Wikidata item (limited for safety)."""
 
@@ -1425,7 +1900,10 @@ class QPEntityBrowser(QWidget):
         search.addWidget(self._search)
         layout.addLayout(search)
 
-        # Table
+        # Table — chained proxies:
+        #   model → _proxy (filter/search/sort) → _page_proxy (paginate) → view
+        # Pagination at the proxy layer keeps rowCount() at page_size, so
+        # the view materialises ≤ 100 rows regardless of backing size.
         self._model = QPEntityModel()
         self._proxy = QPEntityFilterProxy()
         self._proxy.setSourceModel(self._model)
@@ -1433,8 +1911,11 @@ class QPEntityBrowser(QWidget):
         self._proxy.setFilterKeyColumn(-1)
         self._proxy.setSortRole(Qt.ItemDataRole.UserRole)
 
+        self._page_proxy = _PaginationProxy()
+        self._page_proxy.setSourceModel(self._proxy)
+
         self._table = QTableView()
-        self._table.setModel(self._proxy)
+        self._table.setModel(self._page_proxy)
         self._table.setSortingEnabled(True)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
@@ -1455,7 +1936,77 @@ class QPEntityBrowser(QWidget):
         h.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(COL_ACTIONS, 118)
 
+        # ── Pagination bar (25 / 50 / 100 per page) ─────────────────────
+        page_bar = QHBoxLayout()
+        page_bar.setSpacing(theme.SPACE_SM)
+        page_bar.addWidget(QLabel("Page size:"))
+        self._page_size_combo = QComboBox()
+        self._page_size_combo.addItems(["25", "50", "100"])
+        self._page_size_combo.setCurrentText("50")
+        self._page_size_combo.currentTextChanged.connect(self._on_page_size_changed)
+        page_bar.addWidget(self._page_size_combo)
+        page_bar.addSpacing(theme.SPACE_LG)
+
+        self._first_btn = QPushButton("«")
+        self._first_btn.setToolTip("First page")
+        self._first_btn.setFixedWidth(36)
+        self._first_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._first_btn.setStyleSheet(theme.ghost_button_style())
+        self._first_btn.clicked.connect(lambda: self._page_proxy.set_page(0))
+        page_bar.addWidget(self._first_btn)
+
+        self._prev_btn = QPushButton("‹")
+        self._prev_btn.setToolTip("Previous page")
+        self._prev_btn.setFixedWidth(36)
+        self._prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._prev_btn.setStyleSheet(theme.ghost_button_style())
+        self._prev_btn.clicked.connect(
+            lambda: self._page_proxy.set_page(self._page_proxy.page() - 1),
+        )
+        page_bar.addWidget(self._prev_btn)
+
+        self._page_label = QLabel("Page 1 of 1")
+        self._page_label.setStyleSheet(
+            f"color: {theme.ui('subtext')}; min-width: 120px;"
+            " qproperty-alignment: AlignCenter;",
+        )
+        page_bar.addWidget(self._page_label)
+
+        self._next_btn = QPushButton("›")
+        self._next_btn.setToolTip("Next page")
+        self._next_btn.setFixedWidth(36)
+        self._next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._next_btn.setStyleSheet(theme.ghost_button_style())
+        self._next_btn.clicked.connect(
+            lambda: self._page_proxy.set_page(self._page_proxy.page() + 1),
+        )
+        page_bar.addWidget(self._next_btn)
+
+        self._last_btn = QPushButton("»")
+        self._last_btn.setToolTip("Last page")
+        self._last_btn.setFixedWidth(36)
+        self._last_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._last_btn.setStyleSheet(theme.ghost_button_style())
+        self._last_btn.clicked.connect(
+            lambda: self._page_proxy.set_page(self._page_proxy.total_pages() - 1),
+        )
+        page_bar.addWidget(self._last_btn)
+        page_bar.addStretch()
+
+        layout.addLayout(page_bar)
         layout.addWidget(self._table, stretch=1)
+
+        # Initialise page size + wire pagination signals
+        self._page_proxy.set_page_size(50)
+        self._page_proxy.page_changed.connect(self._on_page_changed)
+        self._proxy.rowsInserted.connect(self._on_filter_changed)
+        self._proxy.rowsRemoved.connect(self._on_filter_changed)
+        self._proxy.modelReset.connect(self._on_filter_changed)
+        # Refresh actions + stats whenever the view's content set changes,
+        # which now includes page navigation.
+        self._page_proxy.rowsInserted.connect(self._refresh_actions)
+        self._page_proxy.rowsRemoved.connect(self._refresh_actions)
+        self._page_proxy.modelReset.connect(self._refresh_actions)
 
         self._model.dataChanged.connect(self._update_stats)
         self._model.modelReset.connect(self._refresh_actions)
@@ -1496,13 +2047,25 @@ class QPEntityBrowser(QWidget):
         self._model.update_status(local_id, status, qid=qid, reason=reason)
         self._update_stats()
 
+    def update_validation(self, local_id: str, payload: dict) -> None:
+        """Apply a validation payload emitted by _ValidationWorker.row_validated."""
+        self._model.update_validation(local_id, payload)
+        self._update_stats()
+
+    def rows_snapshot(self) -> list[dict]:
+        """Expose a shallow copy of the model's rows for serialisation."""
+        return list(self._model._rows)
+
     # ── Per-row action widgets ──────────────────────────────────────────
 
     def _refresh_actions(self) -> None:
         from mhm_pipeline.gui import theme  # noqa: PLC0415
 
-        for row in range(self._proxy.rowCount()):
-            idx = self._proxy.index(row, COL_ACTIONS)
+        # Operate on the VIEW's model (the page proxy) so we only attach
+        # action widgets to the currently-visible page.
+        view_model = self._page_proxy
+        for row in range(view_model.rowCount()):
+            idx = view_model.index(row, COL_ACTIONS)
             self._table.setIndexWidget(idx, None)
 
         btn_qss = (
@@ -1516,8 +2079,8 @@ class QPEntityBrowser(QWidget):
             f" border-color: {theme.ui('highlight')}; }}"
         )
 
-        for row in range(self._proxy.rowCount()):
-            idx = self._proxy.index(row, COL_ACTIONS)
+        for row in range(view_model.rowCount()):
+            idx = view_model.index(row, COL_ACTIONS)
             container = QWidget()
             h = QHBoxLayout(container)
             h.setContentsMargins(2, 1, 2, 1)
@@ -1546,18 +2109,31 @@ class QPEntityBrowser(QWidget):
 
             self._table.setIndexWidget(idx, container)
 
-    def _proxy_to_source(self, proxy_row: int) -> int:
-        return self._proxy.mapToSource(
-            self._proxy.index(proxy_row, COL_ACTIONS),
-        ).row()
+    def _proxy_to_source(self, view_row: int) -> int:
+        """Map a row index from the view (page proxy) back to the source model."""
+        page_idx = self._page_proxy.index(view_row, COL_ACTIONS)
+        filter_idx = self._page_proxy.mapToSource(page_idx)
+        return self._proxy.mapToSource(filter_idx).row()
 
     def _on_cell_clicked(self, proxy_idx: QModelIndex) -> None:
-        """A click on the ``#Claims`` cell opens the claims edit dialog."""
+        """Click routing — #Claims cell → ClaimsEditDialog,
+        Status cell → ItemStatusDialog (ℹ popup)."""
         if not proxy_idx.isValid():
             return
-        if proxy_idx.column() != COL_NCLAIMS:
+        col = proxy_idx.column()
+        if col == COL_NCLAIMS:
+            self._open_claims_dialog(proxy_idx.row())
             return
-        self._open_claims_dialog(proxy_idx.row())
+        if col == COL_STATUS:
+            self._open_status_dialog(proxy_idx.row())
+            return
+
+    def _open_status_dialog(self, proxy_row: int) -> None:
+        src = self._proxy_to_source(proxy_row)
+        if not 0 <= src < len(self._model._rows):
+            return
+        row = self._model._rows[src]
+        ItemStatusDialog(row, parent=self).exec()
 
     def _open_claims_dialog(self, proxy_row: int) -> None:
         src = self._proxy_to_source(proxy_row)
@@ -1674,9 +2250,13 @@ class QPEntityBrowser(QWidget):
         )
 
     def _set_visible(self, approved: bool) -> None:
-        rows = [
-            self._proxy_to_source(r) for r in range(self._proxy.rowCount())
-        ]
+        # "Visible" = passes the filter proxy, irrespective of pagination.
+        # We want bulk-approve to cover the whole filtered set, not just
+        # the currently-rendered page.
+        rows: list[int] = []
+        for r in range(self._proxy.rowCount()):
+            src_idx = self._proxy.mapToSource(self._proxy.index(r, 0))
+            rows.append(src_idx.row())
         # Skip rows blocked by safety: community-owned items and validator errors.
         rows = [
             i for i in rows
@@ -1688,6 +2268,33 @@ class QPEntityBrowser(QWidget):
         del changed  # bulk feedback surfaces via _update_stats
         self._update_stats()
         self.items_changed.emit()
+
+    # ── Pagination handlers ─────────────────────────────────────────────
+
+    def _on_page_size_changed(self, text: str) -> None:
+        try:
+            size = int(text)
+        except ValueError:
+            return
+        self._page_proxy.set_page_size(size)
+
+    def _on_page_changed(self, page: int, total_pages: int) -> None:
+        self._page_label.setText(f"Page {page + 1} of {max(1, total_pages)}")
+        self._prev_btn.setEnabled(page > 0)
+        self._first_btn.setEnabled(page > 0)
+        self._next_btn.setEnabled(page + 1 < total_pages)
+        self._last_btn.setEnabled(page + 1 < total_pages)
+
+    def _on_filter_changed(self) -> None:
+        """Called whenever the underlying filter proxy's row set changes.
+        Clamp the current page into range and refresh the page label."""
+        total_pages = self._page_proxy.total_pages()
+        if self._page_proxy.page() >= total_pages:
+            self._page_proxy.set_page(max(0, total_pages - 1))
+        else:
+            # Same page, but label may have changed (fewer / more total
+            # rows after a filter re-evaluation).
+            self._on_page_changed(self._page_proxy.page(), total_pages)
 
     # ── Stats ────────────────────────────────────────────────────────────
 
