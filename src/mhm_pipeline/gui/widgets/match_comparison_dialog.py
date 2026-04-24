@@ -519,11 +519,25 @@ class MatchComparisonDialog(GlassDialog):
             self._add_row(self._occupations_tab, "", "", "", "no data")
 
     def _populate_raw(self, cmp_: BioComparison) -> None:
-        """Render MARC + Authority side-by-side as pretty JSON with any
-        line scoring ≥ 90% similarity (case-insensitive, token-shuffled)
-        highlighted in blue on both sides."""
-        import json   # noqa: PLC0415
-        import html   # noqa: PLC0415
+        """Render MARC + Authority side-by-side as pretty JSON.
+
+        Highlight rules (per user request 2026-04-25):
+
+        * Match the *value content* of each line, ignoring the key —
+          so MARC's ``"occupations": ["author"]`` line and Authority's
+          ``"notes": ["role: author"]`` line BOTH highlight because
+          the scalar "author" appears on both sides, even under
+          different keys. Cross-key matches are the valuable signal.
+        * Structural lines (``{``, ``}``, ``[``, ``]``, ``"k": {}``,
+          ``"k": []``, trailing commas) are *ignored* — they always
+          match trivially on both sides and adding them as highlights
+          drowns out the useful signal.
+        * Still use a ≥ 0.90 similarity threshold on the extracted
+          value content.
+        """
+        import html              # noqa: PLC0415
+        import json              # noqa: PLC0415
+        import re as _re         # noqa: PLC0415
         from difflib import SequenceMatcher  # noqa: PLC0415
 
         def to_dict(b: BioData) -> dict:
@@ -538,42 +552,81 @@ class MatchComparisonDialog(GlassDialog):
         auth_json = json.dumps(
             to_dict(cmp_.authority), indent=2, ensure_ascii=False, default=str,
         )
-
         marc_lines = marc_json.splitlines() or [""]
         auth_lines = auth_json.splitlines() or [""]
 
-        # For each MARC line, find its best-matching authority line.
-        # Threshold 0.90 per the user request. Mark BOTH sides.
+        def _extract_value(line: str) -> str:
+            """Return the *value* part of a pretty-JSON line, stripped of
+            keys, quotes, trailing commas, enclosing brackets. Empty if
+            the line is purely structural."""
+            s = line.strip()
+            # Pure brackets / separators
+            if s in ("{", "}", "[", "]", "{}", "[]", ",", ""):
+                return ""
+            # "key": {},  or  "key": [],  or  "key": {   or  "key": [
+            if _re.match(
+                r'^"[^"]+"\s*:\s*[\{\[]\s*[\}\]]?\s*,?\s*$', s,
+            ):
+                return ""
+            # Drop a leading "key":
+            m = _re.match(r'^"[^"]+"\s*:\s*(.*)$', s)
+            if m:
+                s = m.group(1)
+            # Strip trailing comma
+            s = s.rstrip(",")
+            s = s.strip()
+            # Strip enclosing quotes on string scalars
+            if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
+                s = s[1:-1]
+            return s.strip()
+
         def _norm(s: str) -> str:
             return s.strip().casefold()
 
+        marc_vals = [_extract_value(line) for line in marc_lines]
+        auth_vals = [_extract_value(line) for line in auth_lines]
+
+        # For each line on each side, find the best cross-side value
+        # match. Both sides contribute, so a match lights up both
+        # lines simultaneously regardless of which key they live under.
         marc_matched: set[int] = set()
         auth_matched: set[int] = set()
-        auth_norm = [_norm(s) for s in auth_lines]
-        for i, m in enumerate(marc_lines):
-            if not _norm(m):
+        for i, m in enumerate(marc_vals):
+            if not m:
                 continue
-            for j, a in enumerate(auth_norm):
+            m_norm = _norm(m)
+            if len(m_norm) < 2:
+                continue
+            for j, a in enumerate(auth_vals):
                 if not a:
                     continue
-                if SequenceMatcher(None, _norm(m), a).ratio() >= 0.90:
+                a_norm = _norm(a)
+                if len(a_norm) < 2:
+                    continue
+                # Fast path: exact match bypasses SequenceMatcher.
+                if m_norm == a_norm:
                     marc_matched.add(i)
                     auth_matched.add(j)
-                    break
+                    continue
+                if SequenceMatcher(None, m_norm, a_norm).ratio() >= 0.90:
+                    marc_matched.add(i)
+                    auth_matched.add(j)
 
-        hl_bg = "rgba(59,130,246,70)"       # blue-500 @ 28% opacity
-        hl_fg = "rgba(147,197,253,255)"     # blue-300 text
+        hl_bg = "rgba(59,130,246,70)"
+        hl_fg = "rgba(147,197,253,255)"
 
         def _render(lines: list[str], matched: set[int]) -> str:
             out_lines: list[str] = [
-                "<pre style='margin:0; font-family:SF Mono,Menlo,Consolas,monospace;"
-                " white-space:pre-wrap; word-break:break-word'>"
+                "<pre style='margin:0;"
+                " font-family:SF Mono,Menlo,Consolas,monospace;"
+                " white-space:pre-wrap; word-break:break-word'>",
             ]
             for i, line in enumerate(lines):
                 escaped = html.escape(line) or "&nbsp;"
                 if i in matched:
                     out_lines.append(
-                        f"<div style='background:{hl_bg}; color:{hl_fg}'>{escaped}</div>"
+                        f"<div style='background:{hl_bg}; color:{hl_fg}'>"
+                        f"{escaped}</div>",
                     )
                 else:
                     out_lines.append(f"<div>{escaped}</div>")
