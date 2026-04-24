@@ -26,22 +26,22 @@ from mhm_pipeline.gui.panels.convert_panel import ConvertPanel
 from mhm_pipeline.gui.panels.ner_panel import NerPanel
 from mhm_pipeline.gui.panels.rdf_panel import RdfPanel
 from mhm_pipeline.gui.panels.validate_panel import ValidatePanel
-from mhm_pipeline.gui.panels.wikidata_panel import WikidataPanel
-from mhm_pipeline.gui.panels.wikidata_preview_panel import WikidataPreviewPanel
+from mhm_pipeline.gui.panels.wikidata_studio_panel import WikidataStudioPanel
 from mhm_pipeline.gui.widgets.entity_highlighter import Entity
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
-from mhm_pipeline.gui.widgets.pipeline_flow_widget import PipelineFlowWidget
+# PipelineFlowWidget retired — the left sidebar is the single source of
+# truth for stage state, and the top bar duplicated that navigation.
 from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.settings.settings_manager import SettingsManager
 
+# Wikidata Preview + Wikidata Upload have been merged into "Wikidata Studio"
 _STAGE_LABELS: list[str] = [
     "MARC Parsing",
     "NER Extraction",
     "Authority Matching",
-    "Wikidata Preview",
     "RDF Graph",
     "SHACL Validation",
-    "Wikidata Upload",
+    "Wikidata Studio",
 ]
 
 _STATE_ICONS: dict[str, str] = {
@@ -113,26 +113,35 @@ class MainWindow(QMainWindow):
 
     def _build_central(self) -> None:
         """Build the sidebar + stacked panels + bottom log layout."""
-        central = QWidget()
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.graph_backdrop import GraphBackdrop  # noqa: PLC0415
+
+        # The central widget IS the graph backdrop — its paintEvent draws the
+        # node/edge wallpaper. Every child (flow widget, sidebar, panels, log)
+        # composites on top and their translucent surfaces "read through" it.
+        central = GraphBackdrop()
         self.setCentralWidget(central)
 
         main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD)
+        main_layout.setSpacing(theme.SPACE_MD)
 
-        # Pipeline flow widget (overview at top)
-        self._flow_widget = PipelineFlowWidget()
-        self._flow_widget.stage_clicked.connect(self._on_stage_clicked)
-        main_layout.addWidget(self._flow_widget)
+        # (Top pipeline flow bar removed — the left sidebar is the single
+        # source of truth for stage navigation + state; the duplicate
+        # top bar only added vertical clutter.)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(theme.SPACE_SM)
 
         # sidebar
         self._sidebar = QListWidget()
-        self._sidebar.setMinimumWidth(120)
-        self._sidebar.setMaximumWidth(200)
+        self._sidebar.setMinimumWidth(140)
+        self._sidebar.setMaximumWidth(220)
         for label in _STAGE_LABELS:
             item = QListWidgetItem(f"{_STATE_ICONS['pending']}  {label}")
             self._sidebar.addItem(item)
         self._sidebar.currentRowChanged.connect(self._on_sidebar_changed)
+        theme.apply_drop_shadow(self._sidebar, blur=22, offset_y=4)
         splitter.addWidget(self._sidebar)
 
         # stacked panels
@@ -145,32 +154,38 @@ class MainWindow(QMainWindow):
             default_kima_db=self._settings.kima_db_path,
             default_kima_tsv=self._settings.kima_tsv_dir,
         )
-        self._wikidata_preview_panel = WikidataPreviewPanel()
         self._rdf_panel = RdfPanel()
         self._validate_panel = ValidatePanel()
-        self._wikidata_panel = WikidataPanel()
+        # Unified tab: replaces the old WikidataPreview + WikidataUpload
+        self._wikidata_studio_panel = WikidataStudioPanel()
 
         self._panels: list[QWidget] = [
             self._convert_panel,
             self._ner_panel,
             self._authority_panel,
-            self._wikidata_preview_panel,   # stage 3
-            self._rdf_panel,                # stage 4
-            self._validate_panel,           # stage 5
-            self._wikidata_panel,           # stage 6
+            self._rdf_panel,                # stage 3
+            self._validate_panel,           # stage 4
+            self._wikidata_studio_panel,    # stage 5 (merged)
         ]
+        # Wrap each panel in a scroll area so content is reachable even when
+        # the window is resized below the panel's natural size. Native
+        # QTableView / QPlainTextEdit scrolling still works inside.
+        from mhm_pipeline.gui.widgets.flow_layout import make_scrollable  # noqa: PLC0415
         for panel in self._panels:
-            self._stack.addWidget(panel)
+            self._stack.addWidget(make_scrollable(panel, horizontal=True, vertical=True))
         splitter.addWidget(self._stack)
         splitter.setCollapsible(0, True)  # Sidebar can collapse
         splitter.setStretchFactor(0, 0)  # Sidebar doesn't stretch
         splitter.setStretchFactor(1, 1)  # Panels get all extra space
 
+        # Lift the stacked-panels area with a subtle drop shadow
+        theme.apply_drop_shadow(self._stack, blur=30, offset_y=8)
         main_layout.addWidget(splitter, stretch=3)
 
         # shared bottom log viewer
         self._shared_log = LogViewer()
         self._shared_log.setMaximumBlockCount(5000)
+        theme.apply_drop_shadow(self._shared_log, blur=22, offset_y=4)
         main_layout.addWidget(self._shared_log, stretch=1)
 
         self._sidebar.setCurrentRow(0)
@@ -198,16 +213,25 @@ class MainWindow(QMainWindow):
         self._controller.stage_error.connect(self._on_stage_error)
         self._controller.stage_progress.connect(self._on_stage_progress)
         self._controller.pipeline_finished.connect(self._on_pipeline_finished)
-        self._controller.entity_status.connect(self._wikidata_panel.update_entity_status)
+        # entity_status feeds per-item upload progress in the studio panel.
+        # The studio panel doesn't currently surface this (it owns its own
+        # dry-run / live progress internally). Keep the signal but route to
+        # a no-op so the controller doesn't error on emit.
+        self._controller.entity_status.connect(
+            lambda *_args: None  # TODO: route to the studio panel's upload view
+        )
 
         # Stage panels → controller
         self._convert_panel.run_requested.connect(self._on_run_convert)
         self._ner_panel.run_requested.connect(self._on_run_ner)
         self._authority_panel.run_requested.connect(self._on_run_authority)
-        self._wikidata_preview_panel.continue_clicked.connect(self._on_preview_continue)
         self._rdf_panel.run_requested.connect(self._on_run_rdf)
         self._validate_panel.run_requested.connect(self._on_run_validate)
-        self._wikidata_panel.run_requested.connect(self._on_run_wikidata)
+        # The merged Wikidata Studio panel emits its own upload_requested
+        # signal that carries the list of already-approved WikidataItems.
+        self._wikidata_studio_panel.upload_requested.connect(
+            self._on_run_wikidata_studio,
+        )
 
     def _on_stage_started(self, index: int) -> None:
         self._update_stage_state(index, "running")
@@ -228,9 +252,9 @@ class MainWindow(QMainWindow):
             self._ner_panel.show_review_banner()
         elif index == 2:
             self._authority_panel.show_review_banner()
-            # Auto-load the preview panel and switch to it
-            self._wikidata_preview_panel.load_authority_output(output)
-            self._sidebar.setCurrentRow(3)
+            # Pre-fill the studio's input selector with the authority output
+            # so the user can immediately click "Load & Build Items".
+            self._wikidata_studio_panel._input_selector.path = output
 
     def _load_stage_results(self, index: int, output: Path) -> None:
         """Load stage output into the appropriate panel visualization."""
@@ -286,6 +310,8 @@ class MainWindow(QMainWindow):
 
             # Display in the panel - use display_records for proper formatting
             display_text = texts[0] if texts else "NER results loaded"
+            # Let the panel remember where to save approved results later
+            self._ner_panel._last_output_path = output  # type: ignore[attr-defined]
             self._ner_panel.display_entities(display_text, all_entities, records)
 
         except Exception as e:
@@ -343,6 +369,13 @@ class MainWindow(QMainWindow):
                         matches.append((marc_match.get("name", ""), match))
 
             self._authority_panel.display_matches(matches)
+            # Also hydrate the full-featured AuthorityEditor and auto-open
+            # the Review & Edit Matches dialog — mirrors the NER flow.
+            self._authority_panel.load_authority_output(
+                records if isinstance(records, list) else [],
+                output_path=output,
+                auto_review=True,
+            )
             self._shared_log.append_line(
                 f"Loaded {len(matches)} authority matches from {output.name}"
             )
@@ -362,13 +395,15 @@ class MainWindow(QMainWindow):
         elif completed == 1:
             # Stage 1 output (NER results) feeds Authority as optional enrichment
             self._authority_panel._ner_selector.path = output
-        elif completed == 3:
-            # Stage 3 (Preview) output feeds RDF and Upload panels
+        elif completed == 2:
+            # Stage 2 (Authority enriched) output feeds the RDF panel AND
+            # the merged Wikidata Studio (which reads authority_enriched.json
+            # directly and builds Wikidata items offline).
             self._rdf_panel._input_selector.path = output
             self._rdf_panel._output_selector.path = out_dir
-            self._wikidata_panel._input_selector.path = output
-        elif completed == 4:
-            # Stage 4 (RDF) output feeds SHACL
+            self._wikidata_studio_panel._input_selector.path = output
+        elif completed == 3:
+            # Stage 3 (RDF) output feeds SHACL
             self._validate_panel._ttl_selector.path = output
 
     def _on_stage_error(self, index: int, message: str) -> None:
@@ -396,15 +431,6 @@ class MainWindow(QMainWindow):
     def _on_sidebar_changed(self, row: int) -> None:
         if 0 <= row < self._stack.count():
             self._stack.setCurrentIndex(row)
-            self._flow_widget.set_active_stage(row)
-
-    def _on_stage_clicked(self, index: int) -> None:
-        """Handle stage clicked in flow widget.
-
-        Args:
-            index: The stage index (0-5).
-        """
-        self._sidebar.setCurrentRow(index)
 
     def _on_run_convert(self, input_path: Path, output_path: Path, start: int, end: int) -> None:
         self._shared_log.append_line(f"Parsing {input_path.name}…")
@@ -460,17 +486,10 @@ class MainWindow(QMainWindow):
             mazal_db_path=mazal_db_path,
         )
 
-    def _on_preview_continue(self, reviewed_path: Path) -> None:
-        """Called when user clicks 'Save & Continue' in the Wikidata Preview panel."""
-        self._shared_log.append_line(
-            f"Wikidata Preview confirmed — reviewed JSON: {reviewed_path.name}"
-        )
-        self._controller.mark_stage_complete(3, reviewed_path)
-
     def _on_run_rdf(self, input_path: Path, output_path: Path, fmt: str) -> None:
         self._shared_log.append_line(f"Building RDF from {input_path.name}…")
         self._controller.start_stage(
-            4,
+            3,
             input_path=input_path,
             output_dir=output_path,
             rdf_format=fmt,
@@ -478,25 +497,35 @@ class MainWindow(QMainWindow):
 
     def _on_run_validate(self, ttl_path: Path, shapes_path: Path) -> None:
         self._shared_log.append_line(f"Validating {ttl_path.name}…")
-        self._controller.start_stage(5, input_path=ttl_path, shapes_path=shapes_path)
+        self._controller.start_stage(4, input_path=ttl_path, shapes_path=shapes_path)
 
-    def _on_run_wikidata(
+    def _on_run_wikidata_studio(
         self,
         input_path: Path,
         output_dir: Path,
         token: str,
         dry_run: bool,
         batch_mode: bool,
+        approved_items: list,
     ) -> None:
+        """Handle upload requested from the unified Wikidata Studio.
+
+        The studio panel has already pre-built the list of approved
+        WikidataItem objects. We hand them to the controller as the
+        merged Stage 5 (was Stage 6).
+        """
         mode = "dry run" if dry_run else "live upload"
-        self._shared_log.append_line(f"Wikidata {mode} from {input_path.name}…")
+        self._shared_log.append_line(
+            f"Wikidata {mode}: {len(approved_items)} approved item(s) → {output_dir}"
+        )
         self._controller.start_stage(
-            6,
+            5,
             input_path=input_path,
             output_dir=output_dir,
             token=token,
             dry_run=dry_run,
             batch_mode=batch_mode,
+            approved_items=approved_items,
         )
 
     def _on_open_marc(self) -> None:

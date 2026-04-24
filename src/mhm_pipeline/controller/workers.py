@@ -18,6 +18,35 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── Classifier weight discovery ──────────────────────────────────────────────
+
+
+def _find_classifier_weights(filename: str) -> Path | None:
+    """Locate a ``.pt`` file for one of the sentence / genre classifiers.
+
+    Search order: repo layout (``<repo>/ner/<filename>``) → bundle layout
+    (``.app/Contents/Resources/pipeline/ner/<filename>`` or
+    ``…/Contents/Resources/models/<filename>``). Returns None if missing.
+    """
+    # Repo / pipeline layout
+    here = Path(__file__).resolve()
+    primary = here.parents[3] / "ner" / filename
+    if primary.exists():
+        return primary
+    # macOS bundle: walk up to find .app
+    for parent in Path(__file__).parents:
+        if parent.name.endswith(".app"):
+            for rel in (
+                Path("Contents/Resources/pipeline/ner") / filename,
+                Path("Contents/Resources/models") / filename,
+            ):
+                cand = parent / rel
+                if cand.exists():
+                    return cand
+            break
+    return None
+
+
 # ── MARC 500 sentence classifier — lazy singleton ─────────────────────────────
 _MARC500_CLASSIFIER: object | None = "unloaded"
 
@@ -25,8 +54,8 @@ _MARC500_CLASSIFIER: object | None = "unloaded"
 def _get_marc500_classifier() -> object | None:
     global _MARC500_CLASSIFIER
     if _MARC500_CLASSIFIER == "unloaded":
-        model_path = Path(__file__).resolve().parents[3] / "ner" / "marc500_classifier_model.pt"
-        if model_path.exists():
+        model_path = _find_classifier_weights("marc500_classifier_model.pt")
+        if model_path is not None:
             try:
                 from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
                 _MARC500_CLASSIFIER = Marc500Classifier(str(model_path))
@@ -36,6 +65,26 @@ def _get_marc500_classifier() -> object | None:
         else:
             _MARC500_CLASSIFIER = None
     return _MARC500_CLASSIFIER
+
+
+# ── Genre classifier (Stage 3 P136 fallback) — lazy singleton ─────────────────
+_GENRE_CLASSIFIER: object | None = "unloaded"
+
+
+def _get_genre_classifier() -> object | None:
+    global _GENRE_CLASSIFIER
+    if _GENRE_CLASSIFIER == "unloaded":
+        model_path = _find_classifier_weights("genre_classifier_model.pt")
+        if model_path is not None:
+            try:
+                from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+                _GENRE_CLASSIFIER = GenreClassifier(str(model_path))
+            except Exception as _exc:
+                logger.warning("Could not load genre classifier: %s", _exc)
+                _GENRE_CLASSIFIER = None
+        else:
+            _GENRE_CLASSIFIER = None
+    return _GENRE_CLASSIFIER
 
 
 def _split_marc500_sentences(text: str) -> list[str]:
@@ -210,14 +259,56 @@ class NerWorker(StageWorker):
 
     @staticmethod
     def _resolve_model_path(explicit: str, env_var: str, fallback: str) -> str:
-        """Resolve model path from explicit arg, env var, or fallback."""
+        """Resolve a model path from explicit arg, env var, or bundle auto-discovery.
+
+        Search order:
+          1. Explicit argument from the UI / caller.
+          2. ``env_var`` (set by the macOS / Windows launcher).
+          3. The ``.app`` bundle's ``Contents/Resources/models/<filename>``
+             — discovered via ``sys.executable`` so it works regardless of
+             whether the native Mach-O launcher remembered to export env
+             vars.
+          4. The repo-relative fallback (``<repo>/ner/<filename>``).
+
+        Returns an empty string if nothing was found.
+        """
         import os  # noqa: PLC0415
+        import sys as _sys  # noqa: PLC0415
 
         if explicit:
             return explicit
+
         from_env = os.environ.get(env_var, "")
         if from_env and Path(from_env).exists():
             return from_env
+
+        # Auto-discover from the macOS .app bundle. We walk up from
+        # ``__file__`` (never resolved — so symlinks into Homebrew don't
+        # escape the bundle) looking for the first ``.app`` ancestor,
+        # then try ``Contents/Resources/models/<filename>`` there.
+        filename = Path(fallback).name
+        try:
+            here = Path(__file__)
+            for parent in here.parents:
+                if parent.name.endswith(".app"):
+                    candidate = parent / "Contents" / "Resources" / "models" / filename
+                    if candidate.exists():
+                        return str(candidate)
+                    break
+        except Exception:
+            pass
+
+        # Also try the sibling-of-pipeline layout that build_app.sh produces:
+        #   Contents/Resources/pipeline/   (this file's parents[3])
+        #   Contents/Resources/models/     (sibling dir)
+        try:
+            sibling = Path(__file__).parents[3].parent / "models" / filename
+            if sibling.exists():
+                return str(sibling)
+        except Exception:
+            pass
+
+        # Legacy / repo-relative fallback
         if Path(fallback).exists():
             return fallback
         return ""
@@ -256,6 +347,7 @@ class NerWorker(StageWorker):
                 "MHM_BUNDLED_PROVENANCE_MODEL",
                 str(_Path(__file__).parents[3] / "ner" / "provenance_ner_model.pt"),
             )
+            logger.debug("Provenance resolved path: %r", prov_path)
             if prov_path:
                 from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
 
@@ -276,6 +368,7 @@ class NerWorker(StageWorker):
                 "MHM_BUNDLED_CONTENTS_MODEL",
                 str(_Path(__file__).parents[3] / "ner" / "contents_ner_model.pt"),
             )
+            logger.debug("Contents resolved path: %r", cont_path)
             if cont_path:
                 from ner.ner_inference_pipeline import NERInferencePipeline  # noqa: PLC0415
 
@@ -346,18 +439,61 @@ class NerWorker(StageWorker):
                             except Exception as cont_exc:
                                 logger.warning("Contents NER error: %s", cont_exc)
 
-                # MARC 500 colophon sentence detection
+                # MARC 500 colophon sentence detection — each detected
+                # sentence also becomes an entity with source=colophon_ml
+                # so it shows up in the Review & Edit table and in the
+                # Sources filter chip row.
                 ml_colophon_sentences: list[str] = []
                 _marc500_clf = _get_marc500_classifier()
                 if _marc500_clf is not None:
                     for note in record.get("notes") or []:
                         for sent in _split_marc500_sentences(str(note)):
                             try:
-                                above_thr, _conf = _marc500_clf.is_colophon(sent)
+                                above_thr, conf = _marc500_clf.is_colophon(sent)
                                 if above_thr:
                                     ml_colophon_sentences.append(sent)
+                                    all_entities.append({
+                                        "text": sent,
+                                        "type": "COLOPHON",
+                                        "source": "colophon_ml",
+                                        "confidence": float(conf),
+                                        "start": 0,
+                                        "end": len(sent),
+                                    })
                             except Exception as _clf_exc:
                                 logger.debug("MARC 500 clf error: %s", _clf_exc)
+
+                # Genre classifier (Stage 3 P136 fallback) — run eagerly so
+                # the predicted genre appears as an entity row that the user
+                # can approve / reject before it becomes a P136 claim.
+                _genre_clf = _get_genre_classifier()
+                if _genre_clf is not None:
+                    try:
+                        title = str(record.get("title") or "").strip()
+                        notes_list = [
+                            str(n) for n in (record.get("notes") or []) if n
+                        ]
+                        predictions = _genre_clf.predict(title, notes_list)
+                        for item in predictions or []:
+                            # GenreClassifier.predict returns list[(label, conf)]
+                            if isinstance(item, tuple) and len(item) >= 2:
+                                label, conf = item[0], float(item[1])
+                            elif isinstance(item, dict):
+                                label, conf = item.get("label", ""), float(item.get("confidence", 0.0))
+                            else:
+                                continue
+                            if not label or label == "other":
+                                continue
+                            all_entities.append({
+                                "text": str(label),
+                                "type": "GENRE",
+                                "source": "genre_ml",
+                                "confidence": conf,
+                                "start": 0,
+                                "end": 0,
+                            })
+                    except Exception as _genre_exc:
+                        logger.debug("Genre ML error: %s", _genre_exc)
 
                 results.append(
                     {
@@ -376,18 +512,19 @@ class NerWorker(StageWorker):
             json_text = json.dumps(safe_results, ensure_ascii=False, indent=2, default=str)
             output_path.write_text(json_text, encoding="utf-8")
 
-            person_count = sum(
-                1 for r in results for e in r["entities"] if e.get("source") == "person_ner"
-            )
-            prov_count = sum(
-                1 for r in results for e in r["entities"] if e.get("source") == "provenance_ner"
-            )
-            cont_count = sum(
-                1 for r in results for e in r["entities"] if e.get("source") == "contents_ner"
-            )
+            def _count(src: str) -> int:
+                return sum(1 for r in results for e in r["entities"]
+                           if e.get("source") == src)
+            person_count = _count("person_ner")
+            prov_count = _count("provenance_ner")
+            cont_count = _count("contents_ner")
+            col_count = _count("colophon_ml")
+            genre_count = _count("genre_ml")
             self.log_line.emit(
                 f"NER complete — {total} records, "
-                f"{person_count} person + {prov_count} provenance + {cont_count} contents entities"
+                f"{person_count} person + {prov_count} provenance + "
+                f"{cont_count} contents + {col_count} colophon + "
+                f"{genre_count} genre entities"
             )
             self.finished.emit(output_path)
         except Exception as exc:

@@ -1089,8 +1089,20 @@ class TestP3959NotEmittedByPipeline:
     def test_p3959_absent_from_pipeline_source(self) -> None:
         import pathlib
 
+        # ``item_validator.py`` is the detection path: it MUST name P3959
+        # to reject items that carry it. It never emits the property.
+        # ``qp_entity_browser.py`` + ``property_labels.py`` are display-only:
+        # they surface already-built items in the GUI but never emit claims.
+        _ALLOWLIST = {
+            pathlib.Path("converter/wikidata/item_validator.py"),
+            pathlib.Path("converter/wikidata/property_labels.py"),
+            pathlib.Path("src/mhm_pipeline/gui/widgets/qp_entity_browser.py"),
+        }
+
         for root in ("converter", "src"):
             for path in pathlib.Path(root).rglob("*.py"):
+                if path in _ALLOWLIST:
+                    continue
                 text = path.read_text(encoding="utf-8")
                 if "P3959" not in text:
                     continue
@@ -2378,6 +2390,715 @@ class TestPersonLabelDedup:
         rec._query = MagicMock(return_value=[])
         result = rec.reconcile_person_by_label("שם לא קיים")
         assert result is None
+
+
+# ── Item validator: block the 11 known-bad patterns before approval ────────
+#
+# These tests pin every check in ``converter/wikidata/item_validator.py`` to
+# a concrete community complaint (Pallor / Geagea / Kolja21 / Epìdosis /
+# Mcampany). Deleting or weakening one of these is equivalent to saying the
+# 2026-04 incident is allowed to repeat.
+
+
+class TestItemValidator:
+    """Each rule is one community complaint. One test per rule + a ``clean``
+    counter-example to prove the validator does not over-flag.
+    """
+
+    @staticmethod
+    def _mk(**kw):  # type: ignore[no-untyped-def]
+        """Minimal fake item — we only need attribute access."""
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+
+        statements = []
+        for pid, val, vt in kw.pop("claims", []):
+            statements.append(WikidataStatement(
+                property_id=pid, value=val, value_type=vt,
+            ))
+        return WikidataItem(
+            labels=kw.pop("labels", {}),
+            descriptions=kw.pop("descriptions", {}),
+            aliases=kw.pop("aliases", {}),
+            statements=statements,
+            existing_qid=kw.pop("existing_qid", None),
+            entity_type=kw.pop("entity_type", "person"),
+            local_id=kw.pop("local_id", "_local_1"),
+        )
+
+    def _codes(self, issues):  # type: ignore[no-untyped-def]
+        return [i.code for i in issues]
+
+    def test_empty_label_rejected(self) -> None:
+        from converter.wikidata.item_validator import validate_item, worst_severity
+
+        item = self._mk(labels={}, entity_type="person",
+                        claims=[("P214", "12345", "external-id")])
+        issues = validate_item(item)
+        assert "EMPTY_LABEL" in self._codes(issues)
+        assert worst_severity(issues) == "error"
+
+    def test_anonymous_person_rejected(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(labels={"he": "אלמוני"}, entity_type="person",
+                        claims=[("P214", "12345", "external-id")])
+        assert "ANONYMOUS_PERSON" in self._codes(validate_item(item))
+
+    def test_kovetz_placeholder_label_rejected(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(labels={"he": "קובץ."}, entity_type="manuscript")
+        assert "KOVETZ_PLACEHOLDER" in self._codes(validate_item(item))
+
+    def test_trailing_punctuation_now_error(self) -> None:
+        """Q139231415 — Epìdosis flagged trailing commas on 280 items.
+        Upgraded from warning to error 2026-04-24."""
+        from converter.wikidata.item_validator import validate_item, worst_severity
+
+        item = self._mk(labels={"he": "משה בן מימון,"}, entity_type="person",
+                        claims=[("P214", "12345", "external-id")])
+        issues = validate_item(item)
+        assert "TRAILING_PUNCTUATION" in self._codes(issues)
+        # Upgraded to error — Epìdosis had to hand-correct these
+        assert worst_severity(issues) == "error"
+
+    def test_inverted_marc_label_now_error(self) -> None:
+        """Q139230386 — Epìdosis asked for natural-order Hebrew labels.
+        Upgraded from warning to error 2026-04-24."""
+        from converter.wikidata.item_validator import validate_item, worst_severity
+
+        item = self._mk(labels={"he": "מימון, משה בן"}, entity_type="person",
+                        claims=[("P214", "12345", "external-id")])
+        issues = validate_item(item)
+        assert "INVERTED_NAME_LABEL" in self._codes(issues)
+        assert worst_severity(issues) == "error"
+
+    def test_institution_as_person_rejected(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(labels={"he": "ספריית בודליאנה"}, entity_type="person",
+                        claims=[("P214", "12345", "external-id")])
+        assert "INSTITUTION_AS_PERSON" in self._codes(validate_item(item))
+
+    def test_p3959_on_human_rejected(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            entity_type="person",
+            claims=[
+                ("P214", "12345", "external-id"),
+                ("P3959", "990012345670", "external-id"),
+            ],
+        )
+        assert "P3959_ON_HUMAN" in self._codes(validate_item(item))
+
+    def test_p8189_bad_prefix_rejected(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            entity_type="person",
+            # P8189 must start with 9870 (authority record); 990… is bibliographic
+            claims=[("P8189", "990012345670", "external-id")],
+        )
+        assert "P8189_BAD_PREFIX" in self._codes(validate_item(item))
+
+    def test_viaf_on_non_person_warning(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "הספרייה הלאומית"},
+            entity_type="manuscript",
+            claims=[("P214", "12345", "external-id")],
+        )
+        assert "VIAF_ON_NON_PERSON" in self._codes(validate_item(item))
+
+    def test_p1559_latin_tagged_as_hebrew_now_error(self) -> None:
+        """Q139230386 — Epìdosis: 'only names in Hebrew script are entered
+        as being in Hebrew'. Upgraded from warning to error 2026-04-24."""
+        from converter.wikidata.item_validator import validate_item, worst_severity
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            entity_type="person",
+            claims=[
+                ("P214", "12345", "external-id"),
+                ("P1559", "he:Moses Maimonides", "monolingualtext"),
+            ],
+        )
+        issues = validate_item(item)
+        assert "P1559_LATIN_AS_HE" in self._codes(issues)
+        assert worst_severity(issues) == "error"
+
+    def test_multiple_p1559_same_language_rejected(self) -> None:
+        """Q139230386 had two P1559 tagged 'he'. Epìdosis asked for one
+        canonical value per language."""
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            entity_type="person",
+            claims=[
+                ("P214", "12345", "external-id"),
+                ("P1559", "he:משה בן מימון", "monolingualtext"),
+                ("P1559", "he:רמב\"ם", "monolingualtext"),
+            ],
+        )
+        assert "MULTIPLE_P1559_SAME_LANG" in self._codes(validate_item(item))
+
+    def test_he_label_containing_only_latin_rejected(self) -> None:
+        """Q139231608: 'The Jewish Theological Seminary of Breslau' was
+        stored in the `he` label slot despite being pure Latin."""
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "The Jewish Theological Seminary of Breslau"},
+            entity_type="manuscript",
+            claims=[("P217", "Heb. 1234", "string")],
+        )
+        assert "HE_LABEL_IS_LATIN" in self._codes(validate_item(item))
+
+    def test_ambiguous_single_latin_name_rejected(self) -> None:
+        """Q139231258 style — a single-word Latin surname with no
+        identifiers fails Wikidata:Notability."""
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"en": "Winter"},
+            entity_type="person",
+            claims=[],  # no identifiers
+        )
+        codes = self._codes(validate_item(item))
+        assert "AMBIGUOUS_SINGLE_NAME" in codes or "NO_IDENTIFIER" in codes
+
+    def test_no_identifier_rejected_for_new_person(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            entity_type="person",
+            existing_qid=None,
+            claims=[],
+        )
+        assert "NO_IDENTIFIER" in self._codes(validate_item(item))
+
+    def test_no_identifier_not_triggered_when_qid_exists(self) -> None:
+        """An already-matched person (existing QID) doesn't need an ID claim
+        attached to OUR output; Wikidata already has it."""
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            entity_type="person",
+            existing_qid="Q12345",
+            claims=[],
+        )
+        assert "NO_IDENTIFIER" not in self._codes(validate_item(item))
+
+    def test_clean_person_passes(self) -> None:
+        from converter.wikidata.item_validator import validate_item, worst_severity
+
+        item = self._mk(
+            labels={"he": "משה בן מימון"},
+            descriptions={"en": "Jewish philosopher"},
+            entity_type="person",
+            claims=[
+                ("P214", "12345", "external-id"),
+                ("P8189", "987001234567", "external-id"),
+                ("P1559", "he:משה בן מימון", "monolingualtext"),
+            ],
+        )
+        assert validate_item(item) == []
+        assert worst_severity([]) == "ok"
+
+    def test_clean_manuscript_passes(self) -> None:
+        from converter.wikidata.item_validator import validate_item
+
+        item = self._mk(
+            labels={"he": "כתב יד עברי, ספרייה לאומית, Heb. 1234"},
+            entity_type="manuscript",
+            claims=[("P217", "Heb. 1234", "string")],
+        )
+        issues = validate_item(item)
+        # Clean items should not trigger any of the 11 rules.
+        codes = self._codes(issues)
+        for bad in ("EMPTY_LABEL", "ANONYMOUS_PERSON", "KOVETZ_PLACEHOLDER",
+                    "INSTITUTION_AS_PERSON", "P3959_ON_HUMAN",
+                    "P8189_BAD_PREFIX", "VIAF_ON_NON_PERSON"):
+            assert bad not in codes
+
+    def test_worst_severity_orders_error_over_warning(self) -> None:
+        from converter.wikidata.item_validator import (
+            ValidationIssue, worst_severity,
+        )
+
+        issues = [
+            ValidationIssue("warning", "W1", "…"),
+            ValidationIssue("error", "E1", "…"),
+            ValidationIssue("warning", "W2", "…"),
+        ]
+        assert worst_severity(issues) == "error"
+        assert worst_severity([ValidationIssue("warning", "W1", "…")]) == "warning"
+        assert worst_severity([]) == "ok"
+
+
+class TestQPEntityBrowserApprovalBlocking:
+    """The approve checkbox MUST be disabled for rows with error-level issues
+    — this is the last gate before the user hits 'Upload to Wikidata'.
+    """
+
+    def _row(self, **kw):  # type: ignore[no-untyped-def]
+        # Minimal fake row compatible with the model's expectations.
+        from converter.wikidata.item_validator import ValidationIssue, worst_severity
+
+        issues = kw.pop("issues", [])
+        base = {
+            "local_id": "_local_1",
+            "entity_type": kw.pop("entity_type", "person"),
+            "label": kw.pop("label", "test"),
+            "description": "",
+            "n_claims": 0,
+            "ext_id": "",
+            "existing_qid": kw.pop("existing_qid", ""),
+            "status": kw.pop("status", "new"),
+            "status_reason": "",
+            "issues": issues,
+            "severity": worst_severity(issues) if issues else "ok",
+            "approved": False,
+            "_item": object(),
+        }
+        base.update(kw)
+        return base
+
+    def test_approved_items_excludes_error_rows(self) -> None:
+        """The model must never hand an error-level item to the uploader."""
+        from unittest.mock import patch
+        from converter.wikidata.item_validator import ValidationIssue
+
+        # Skip this test if PyQt6 isn't available in the test env
+        pytest.importorskip("PyQt6.QtCore")
+
+        from mhm_pipeline.gui.widgets.qp_entity_browser import QPEntityModel
+
+        model = QPEntityModel()
+        err = ValidationIssue("error", "P3959_ON_HUMAN", "bad")
+        item_ok = object()
+        item_bad = object()
+        model._rows = [
+            self._row(_item=item_ok, approved=True),
+            self._row(
+                _item=item_bad, approved=True,
+                issues=[err],
+            ),
+        ]
+        approved = model.approved_items()
+        assert item_ok in approved
+        assert item_bad not in approved
+
+    def test_flags_disable_checkbox_on_error_row(self) -> None:
+        pytest.importorskip("PyQt6.QtCore")
+
+        from PyQt6.QtCore import Qt
+        from converter.wikidata.item_validator import ValidationIssue
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (
+            COL_APPROVED, QPEntityModel,
+        )
+
+        model = QPEntityModel()
+        err = ValidationIssue("error", "NO_IDENTIFIER", "bad")
+        model._rows = [self._row(issues=[err])]
+        idx = model.index(0, COL_APPROVED)
+        flags = model.flags(idx)
+        assert not bool(flags & Qt.ItemFlag.ItemIsEnabled)
+
+    def test_setdata_refuses_to_approve_error_row(self) -> None:
+        pytest.importorskip("PyQt6.QtCore")
+
+        from PyQt6.QtCore import Qt
+        from converter.wikidata.item_validator import ValidationIssue
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (
+            COL_APPROVED, QPEntityModel,
+        )
+
+        model = QPEntityModel()
+        err = ValidationIssue("error", "INSTITUTION_AS_PERSON", "bad")
+        model._rows = [self._row(issues=[err])]
+        idx = model.index(0, COL_APPROVED)
+        ok = model.setData(idx, Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        assert ok is False
+        assert model._rows[0]["approved"] is False
+
+
+# ── Rule 38 — modification of non-our items MUST be blocked at every stage ─
+
+
+class TestRule38ModificationBlockedForNonOurItems:
+    """Four-stage defense-in-depth guard (added 2026-04-24 per explicit user
+    directive: "ensure 100 times that we will not modify entities not
+    created by me").
+
+    Every modification path in the uploader must refuse to write to an
+    existing Wikidata item whose first-revision author is anyone other
+    than the authenticated user. The four gates are:
+
+        1. ``_is_our_item(qid)``                 — fail-closed boolean
+        2. ``_assert_modifiable`` at upload entry — first gate
+        3. ``_assert_modifiable`` in ``_build_wbi_item`` — build-time gate
+        4. ``_assert_modifiable`` immediately before ``wbi_item.write()`` — last gate
+
+    This test class pins every gate to a concrete scenario. Weakening
+    any of these tests is equivalent to saying the 2026-04-12 mass-edit
+    incident is allowed to recur.
+    """
+
+    @staticmethod
+    def _make_uploader():  # type: ignore[no-untyped-def]
+        """Build an uploader with the moratorium + WBI init bypassed so
+        tests can exercise the guards without network access."""
+        import os
+        os.environ["MORATORIUM_LIFTED"] = "true"
+        from converter.wikidata.uploader import WikidataUploader
+
+        up = WikidataUploader.__new__(WikidataUploader)
+        up._token = "user@bot:pw"
+        up._is_test = False
+        up._batch_mode = False
+        up._wbi = None
+        up._last_edit_time = 0.0
+        up._authenticated_user = None
+        up._creator_cache = {}
+        up._is_our_item_cache = {}
+        up._bot_exclusion_cache = {}
+        return up
+
+    def test_is_our_item_fails_closed_when_auth_user_unknown(self) -> None:
+        """If we cannot determine who we are, refuse modification."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with patch.object(up, "_get_authenticated_user", return_value=None):
+            assert up._is_our_item("Q12345") is False
+
+    def test_is_our_item_fails_closed_when_creator_unknown(self) -> None:
+        """If we cannot determine the creator, refuse modification — the
+        previous fallback to the P1343=Q_KTIV marker was DANGEROUS because
+        community items can legitimately cite Ktiv as a source."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value=None),
+        ):
+            assert up._is_our_item("Q12345") is False
+
+    def test_is_our_item_rejects_other_creator(self) -> None:
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value="OtherUser"),
+        ):
+            assert up._is_our_item("Q12345") is False
+
+    def test_is_our_item_accepts_self(self) -> None:
+        """All four verification channels agree — modification permitted."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value="Me"),
+            patch.object(up, "_user_created_via_contribs", return_value=True),
+            patch.object(up, "_item_exists_on_wikidata_sparql", return_value=True),
+        ):
+            assert up._is_our_item("Q12345") is True
+
+    def test_is_our_item_refused_if_contribs_disagrees(self) -> None:
+        """Channel #3 cross-check: usercontribs says user did NOT create
+        the page, even though revisions-API said they did. REFUSE."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value="Me"),
+            patch.object(up, "_user_created_via_contribs", return_value=False),
+            patch.object(up, "_item_exists_on_wikidata_sparql", return_value=True),
+        ):
+            assert up._is_our_item("Q12345") is False
+
+    def test_is_our_item_accepts_if_contribs_endpoint_down(self) -> None:
+        """Channel #3 returns None (network failure). Channels #1+#2
+        agree on creator ⇒ fall-through is safe because the revision
+        call IS the authoritative creator signal."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value="Me"),
+            patch.object(up, "_user_created_via_contribs", return_value=None),
+            patch.object(up, "_item_exists_on_wikidata_sparql", return_value=True),
+        ):
+            assert up._is_our_item("Q12345") is True
+
+    def test_is_our_item_refused_if_sparql_says_deleted(self) -> None:
+        """Channel #4: if SPARQL reports the QID has zero triples (item
+        was deleted / redirected / blanked), refuse — any modification
+        would target an ambiguous entity."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value="Me"),
+            patch.object(up, "_user_created_via_contribs", return_value=True),
+            patch.object(up, "_item_exists_on_wikidata_sparql", return_value=False),
+        ):
+            assert up._is_our_item("Q12345") is False
+
+    def test_is_our_item_accepts_if_sparql_endpoint_down(self) -> None:
+        """Channel #4 returns None (SPARQL endpoint 503). Other three
+        channels agreed ⇒ modification permitted under fall-through."""
+        from unittest.mock import patch
+
+        up = self._make_uploader()
+        with (
+            patch.object(up, "_get_authenticated_user", return_value="Me"),
+            patch.object(up, "_get_first_revision_author", return_value="Me"),
+            patch.object(up, "_user_created_via_contribs", return_value=True),
+            patch.object(up, "_item_exists_on_wikidata_sparql", return_value=None),
+        ):
+            assert up._is_our_item("Q12345") is True
+
+    def test_contribs_api_request_shape(self) -> None:
+        """Regression: make sure _user_created_via_contribs calls the
+        correct API endpoint with ``list=usercontribs&uctype=new``."""
+        from unittest.mock import MagicMock, patch
+
+        up = self._make_uploader()
+        fake_resp = MagicMock()
+        fake_resp.json.return_value = {"query": {"usercontribs": [{}]}}
+        with patch("requests.get", return_value=fake_resp) as mock_get:
+            result = up._user_created_via_contribs("Q12345", "Me")
+        assert result is True
+        params = mock_get.call_args.kwargs["params"]
+        assert params["action"] == "query"
+        assert params["list"] == "usercontribs"
+        assert params["ucuser"] == "Me"
+        assert params["uctitle"] == "Q12345"
+        assert params["uctype"] == "new"
+
+    def test_jwt_bearer_token_routes_through_bearer_header(self) -> None:
+        """Regression: a raw OAuth 2.0 JWT access token (three dot-
+        separated base64url parts, starts with ``eyJ``) is recognised
+        as a bearer token and wrapped in a requests.Session with
+        ``Authorization: Bearer <token>``. It must not trip the
+        bot-password or consumer-pair branches."""
+        from unittest.mock import MagicMock, patch
+
+        fake_jwt = (
+            "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9."
+            "eyJzdWIiOiIxIiwiZXhwIjoxfQ."
+            "ZmFrZXNpZ25hdHVyZQ"
+        )
+        up = self._make_uploader()
+        up._token = fake_jwt
+
+        # Patch every inbound dependency _init_wbi touches: the import
+        # path, the config dict, and the _Login class itself.
+        fake_wbi_cls = MagicMock()
+        fake_wbi_cls.return_value = MagicMock()
+        fake_login_cls = MagicMock()
+        fake_wbi_login_mod = MagicMock()
+        fake_wbi_login_mod._Login = fake_login_cls
+        import importlib, sys
+        wbi_stub = MagicMock()
+        wbi_stub.WikibaseIntegrator = fake_wbi_cls
+        wbi_stub.wbi_login = fake_wbi_login_mod
+        wbi_config_mod = MagicMock()
+        wbi_config_mod.config = {
+            "MEDIAWIKI_API_URL": "",
+            "SPARQL_ENDPOINT_URL": "",
+            "WIKIBASE_URL": "",
+            "MAXLAG": 0,
+            "BACKOFF_MAX_TRIES": 0,
+            "BACKOFF_MAX_VALUE": 0,
+        }
+
+        with patch.dict(sys.modules, {
+            "wikibaseintegrator": wbi_stub,
+            "wikibaseintegrator.wbi_config": wbi_config_mod,
+        }):
+            up._init_wbi()
+
+        # _Login received a requests.Session with Bearer header
+        fake_login_cls.assert_called_once()
+        session = fake_login_cls.call_args.kwargs["session"]
+        assert session.headers["Authorization"] == f"Bearer {fake_jwt}"
+
+    def test_sparql_existence_request_shape(self) -> None:
+        """Regression: make sure _item_exists_on_wikidata_sparql fires
+        an ``ASK`` query against the Wikidata SPARQL endpoint."""
+        from unittest.mock import MagicMock, patch
+
+        up = self._make_uploader()
+        fake_resp = MagicMock()
+        fake_resp.json.return_value = {"boolean": True}
+        with patch("requests.get", return_value=fake_resp) as mock_get:
+            result = up._item_exists_on_wikidata_sparql("Q12345")
+        assert result is True
+        params = mock_get.call_args.kwargs["params"]
+        assert "ASK" in params["query"]
+        assert "wd:Q12345" in params["query"]
+        assert params["format"] == "json"
+        headers = mock_get.call_args.kwargs["headers"]
+        assert "sparql-results+json" in headers["Accept"]
+
+    def test_assert_modifiable_raises_for_other_item(self) -> None:
+        from unittest.mock import patch
+        from converter.wikidata.uploader import UnauthorisedModificationError
+
+        up = self._make_uploader()
+        with patch.object(up, "_is_our_item", return_value=False):
+            with pytest.raises(UnauthorisedModificationError) as exc_info:
+                up._assert_modifiable("Q12345", stage="test_stage")
+            assert exc_info.value.qid == "Q12345"
+            assert exc_info.value.stage == "test_stage"
+
+    def test_assert_modifiable_no_op_for_new_item_creation(self) -> None:
+        """Creating a brand-new item (qid == '') must never trip the guard."""
+        up = self._make_uploader()
+        # No patches needed — empty qid is a no-op path
+        up._assert_modifiable("", stage="test_stage")
+
+    def test_upload_item_skips_other_item_at_entry(self) -> None:
+        """Gate #1: upload_item entry-point check."""
+        from unittest.mock import MagicMock, patch
+        from converter.wikidata.item_builder import WikidataItem
+
+        up = self._make_uploader()
+        up._init_wbi = MagicMock(return_value=MagicMock())
+        item = WikidataItem(
+            labels={"he": "מישהו"}, entity_type="person",
+            existing_qid="Q7886929",  # Pallor's band
+            local_id="_local_1",
+        )
+        with patch.object(up, "_is_our_item", return_value=False):
+            result = up.upload_item(item)
+        assert result.status == "skipped"
+        assert result.qid == "Q7886929"
+
+    def test_build_wbi_item_raises_for_other_item(self) -> None:
+        """Gate #2: _build_wbi_item re-verifies before mutating."""
+        from unittest.mock import MagicMock, patch
+        from converter.wikidata.item_builder import WikidataItem
+        from converter.wikidata.uploader import UnauthorisedModificationError
+
+        up = self._make_uploader()
+        up._init_wbi = MagicMock(return_value=MagicMock())
+        item = WikidataItem(
+            labels={"he": "x"}, entity_type="person",
+            existing_qid="Q999", local_id="_x",
+        )
+        with patch.object(up, "_is_our_item", return_value=False):
+            with pytest.raises(UnauthorisedModificationError):
+                up._build_wbi_item(item)
+
+    def test_upload_item_gate4_fires_if_earlier_guards_bypassed(self) -> None:
+        """Gate #4: if a future refactor ever bypasses gates 1+2+3, the
+        pre-write assertion must still fire. This simulates that by
+        making _is_our_item flip after _build_wbi_item returns (a race
+        an attacker-simulated scenario could exploit)."""
+        from unittest.mock import MagicMock, patch
+        from converter.wikidata.item_builder import WikidataItem
+        from converter.wikidata.uploader import WikidataUploader
+
+        up = self._make_uploader()
+        up._init_wbi = MagicMock(return_value=MagicMock())
+        wbi_item_mock = MagicMock()
+        wbi_item_mock.write = MagicMock()
+        item = WikidataItem(
+            labels={"he": "x"}, entity_type="person",
+            existing_qid="Q999", local_id="_x",
+        )
+
+        # Simulate: the entry gate (call #1) sees the item as "ours" but
+        # between then and the write a concurrent edit changed the first
+        # revision — gate #4 (call #2) catches it and refuses to write.
+        call_count = {"n": 0}
+
+        def flip_after_first(_qid):  # type: ignore[no-untyped-def]
+            call_count["n"] += 1
+            return call_count["n"] <= 1  # True for call 1, False for call 2+
+
+        with (
+            patch.object(up, "_is_our_item", side_effect=flip_after_first),
+            patch.object(up, "_bot_excluded", return_value=False),
+            patch.object(up, "_build_wbi_item", return_value=(wbi_item_mock, 1, ["P31"])),
+            patch.object(up, "_rate_limit"),
+        ):
+            result = up.upload_item(item)
+
+        assert result.status == "skipped"
+        wbi_item_mock.write.assert_not_called()
+
+    def test_only_one_write_call_site_exists_in_uploader(self) -> None:
+        """Structural guard: if someone adds a second ``.write()`` call
+        in uploader.py, this test fails. Any new write path must go
+        through _assert_modifiable beforehand."""
+        import pathlib, re
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        # Count actual wbi write calls (not string/doc mentions)
+        matches = re.findall(r"wbi_item\.write\s*\(", src)
+        assert len(matches) == 1, (
+            f"Expected exactly one wbi_item.write() call site in uploader.py, "
+            f"found {len(matches)}. A new upload path was added — gate it with "
+            "self._assert_modifiable(item.existing_qid or '', stage='pre_write') "
+            "immediately before the new write."
+        )
+
+    def test_pre_write_guard_is_adjacent_to_write_call(self) -> None:
+        """Gate #4 must be literally the last statement before
+        ``wbi_item.write()``. This is enforced textually so a future
+        refactor can't inadvertently move an intervening statement
+        between the guard and the write."""
+        import pathlib
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        write_idx = src.index("wbi_item.write(")
+        # Walk back to the previous non-blank, non-comment line
+        preamble = src[:write_idx]
+        # Expect _assert_modifiable within 400 chars before the write
+        window = src[max(0, write_idx - 400):write_idx]
+        assert "_assert_modifiable" in window, (
+            "Rule 38 gate #4 is missing: _assert_modifiable must appear "
+            "immediately before wbi_item.write() in uploader.py"
+        )
+        del preamble
+
+    def test_no_kludge_fallback_to_p1343_marker(self) -> None:
+        """The P1343=Q_KTIV marker fallback was removed because Ktiv is a
+        legitimate bibliographic source that community-created items cite.
+        If someone re-introduces a marker-based fallback in _is_our_item,
+        this test fails."""
+        import pathlib
+        src = pathlib.Path("converter/wikidata/uploader.py").read_text(encoding="utf-8")
+        # Slice the _is_our_item definition
+        marker = "def _is_our_item"
+        start = src.index(marker)
+        end = src.index("def ", start + len(marker))
+        block = src[start:end]
+        # Legal references to Q118384267 are fine elsewhere in the file,
+        # but inside _is_our_item the creator check must NOT defer to
+        # marker-presence.
+        assert "Q118384267" not in block, (
+            "Rule 38: _is_our_item must not fall back to P1343=Q_KTIV "
+            "marker — community items can cite Ktiv as a source. "
+            "Use the first-revision-author check exclusively."
+        )
 
 
 if __name__ == "__main__":

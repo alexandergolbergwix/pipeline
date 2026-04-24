@@ -1924,3 +1924,859 @@ class TestNerWorkerAllModels:
             f"Sources present: {sources_found}. "
             f"ml_colophon_sentences: {ml_sents[:2]}"
         )
+
+# ── ExtractionEditor feature tests (approval, auto-rules, source-view, dropdowns) ──
+
+
+class TestExtractionEditor:
+    """End-to-end tests for the revamped ExtractionEditor surface.
+
+    Covers:
+      * Model columns (Record · Entity · Type · Role · Conf · Source · Approved · Actions)
+      * Approved column behaviour (checkbox + flag + green wash)
+      * Auto-approve rule builder — single + multi-condition, AND/OR, IN/NOT IN
+      * View-source lookup (offset-correct + substring fallback)
+      * Type + Role delegates return QComboBox editors
+      * Dark-mode type colours are readable (dark bg + light fg)
+    """
+
+    @pytest.fixture
+    def _qapp(self) -> object:
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+
+        return QApplication.instance() or QApplication(sys.argv)
+
+    @pytest.fixture
+    def _sample_records(self) -> list[dict]:
+        """Small synthetic fixture — two records covering all 4 NER sources."""
+        return [
+            {
+                "_control_number": "990000415290205171",
+                "text": 'קובץ גדול של שו"ת חכמים מאיטליה. ר\' שלמה הלוי (דף 47א). '
+                        'כתב יד יצחק בן אהרן. מאת הרופא אליהו מונטאלטו.',
+                "entities": [
+                    {
+                        "person": "שלמה הלוי",
+                        "start": 31,
+                        "end": 41,
+                        "role": "AUTHOR",
+                        "confidence": 0.93,
+                        "source": "person_ner",
+                    },
+                    {
+                        "person": "יצחק בן אהרן",
+                        "start": 60,
+                        "end": 72,
+                        "role": "TRANSCRIBER",
+                        "confidence": 0.62,
+                        "source": "person_ner",
+                    },
+                    {
+                        "text": "אליהו מונטאלטו",
+                        "start": 78,
+                        "end": 92,
+                        "type": "OWNER",
+                        "confidence": 0.85,
+                        "source": "provenance_ner",
+                    },
+                    {
+                        "text": "דף 47",
+                        "start": 43,
+                        "end": 49,
+                        "type": "FOLIO",
+                        "confidence": 0.99,
+                        "source": "contents_ner",
+                    },
+                ],
+                "ml_colophon_sentences": [],
+            },
+            {
+                "_control_number": "990000908210205171",
+                "text": 'ציון בעלים: "שלמה בכ"ר אליא משה" (דף 1א). כתוב על קלף.',
+                "entities": [
+                    {
+                        "text": "שלמה בכ\"ר אליא משה",
+                        "start": 13,
+                        "end": 31,
+                        "type": "OWNER",
+                        "confidence": 0.77,
+                        "source": "provenance_ner",
+                    },
+                ],
+                "ml_colophon_sentences": [],
+            },
+        ]
+
+    def test_editor_loads_and_exposes_new_columns(self, _qapp: object, _sample_records: list[dict]) -> None:
+        """Model should expose all 8 columns and load every entity row."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, COL_APPROVED, COL_ROLE, COL_ACTIONS,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        assert editor._model.columnCount() == 8
+        assert editor._model.rowCount() == 5
+        # Required new columns exist at expected indices
+        assert COL_ROLE == 3
+        assert COL_APPROVED == 6
+        assert COL_ACTIONS == 7
+
+    def test_approved_column_is_user_checkable(self, _qapp: object, _sample_records: list[dict]) -> None:
+        """The Approved column should be a user-checkable cell, not editable text."""
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, COL_APPROVED,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        idx = editor._model.index(0, COL_APPROVED)
+        flags = editor._model.flags(idx)
+        assert flags & Qt.ItemFlag.ItemIsUserCheckable
+        # Toggle via setData + CheckStateRole
+        editor._model.setData(idx, Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        assert editor._model._entities[0]["approved"] is True
+        editor._model.setData(idx, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        assert editor._model._entities[0]["approved"] is False
+
+    def test_auto_approve_single_rule_confidence(self, _qapp: object, _sample_records: list[dict]) -> None:
+        """Rule: confidence >= 0.80 should approve the matching subset."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, evaluate_rules,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        rules = [{"field": "confidence", "op": ">=", "value": 0.80}]
+        matched = [i for i, e in enumerate(editor._model._entities)
+                   if evaluate_rules(e, rules, "AND")]
+        editor._model.set_approved_bulk(matched, True)
+        approved = sum(1 for e in editor._model._entities if e.get("approved"))
+        # 0.93 + 0.85 + 0.99 ≥ 0.80  → 3 matches in our fixture
+        assert approved == 3
+
+    def test_auto_approve_multi_condition_and(self, _qapp: object, _sample_records: list[dict]) -> None:
+        """Rule: confidence > 0.70 AND source = person_ner → only high-conf persons."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, evaluate_rules,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        rules = [
+            {"field": "confidence", "op": ">", "value": 0.70},
+            {"field": "source", "op": "=", "value": "person_ner"},
+        ]
+        matched = [i for i, e in enumerate(editor._model._entities)
+                   if evaluate_rules(e, rules, "AND")]
+        assert len(matched) == 1  # שלמה הלוי (0.93), not יצחק (0.62)
+        ent = editor._model._entities[matched[0]]
+        assert ent["source"] == "person_ner"
+        assert ent["confidence"] > 0.70
+
+    def test_auto_approve_role_not_in_list(self, _qapp: object, _sample_records: list[dict]) -> None:
+        """Rule: role NOT IN [OWNER, AUTHOR] excludes the named roles."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, evaluate_rule,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        rule = {"field": "role", "op": "not in", "value": ["OWNER", "AUTHOR"]}
+        hits = [e for e in editor._model._entities if evaluate_rule(e, rule)]
+        roles = {e.get("role", "") for e in hits}
+        assert "AUTHOR" not in roles
+        assert "OWNER" not in roles
+        assert "TRANSCRIBER" in roles  # יצחק בן אהרן
+
+    def test_auto_approve_or_combinator(self, _qapp: object, _sample_records: list[dict]) -> None:
+        """OR combinator admits any-matching entity."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, evaluate_rules,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        rules = [
+            {"field": "type", "op": "=", "value": "FOLIO"},
+            {"field": "confidence", "op": ">=", "value": 0.90},
+        ]
+        or_matches = [
+            i for i, e in enumerate(editor._model._entities)
+            if evaluate_rules(e, rules, "OR")
+        ]
+        # FOLIO row + any 0.90+ row (שלמה הלוי 0.93, דף 47 0.99)  → at least 2
+        assert len(or_matches) >= 2
+
+    def test_view_source_lookup_returns_full_text_and_offsets(
+        self, _qapp: object, _sample_records: list[dict],
+    ) -> None:
+        """source_text_for() resolves to the record's text + entity offsets."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        full, et, s, e = editor._model.source_text_for(0)  # שלמה הלוי row
+        assert full, "Expected non-empty source text for first row"
+        assert et == "שלמה הלוי"
+        assert 0 <= s < e <= len(full)
+        assert full[s:e] == et, (
+            f"View-source offsets don't extract entity text: "
+            f"full[{s}:{e}]={full[s:e]!r} vs entity={et!r}"
+        )
+
+    def test_view_source_substring_fallback_when_offsets_invalid(
+        self, _qapp: object, _sample_records: list[dict],
+    ) -> None:
+        """If start/end are stale after an edit, fall back to substring search."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        # Corrupt the offsets on row 0 but keep the text intact
+        editor._model._entities[0]["start"] = 9999
+        editor._model._entities[0]["end"] = 99999
+        full, et, s, e = editor._model.source_text_for(0)
+        assert full[s:e] == et, "Substring fallback should recover a valid slice"
+
+    def test_type_and_role_delegates_return_qcombobox(
+        self, _qapp: object, _sample_records: list[dict],
+    ) -> None:
+        """Type and Role cells must edit via QComboBox dropdowns, not QLineEdit."""
+        from PyQt6.QtWidgets import QComboBox  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            COL_ROLE, COL_TYPE, EntityRoleDelegate, EntityTypeDelegate, ExtractionEditor,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        type_del = editor._table.itemDelegateForColumn(COL_TYPE)
+        role_del = editor._table.itemDelegateForColumn(COL_ROLE)
+        assert isinstance(type_del, EntityTypeDelegate)
+        assert isinstance(role_del, EntityRoleDelegate)
+
+        idx = editor._proxy.index(0, COL_TYPE)
+        editor_widget = type_del.createEditor(editor._table, None, idx)
+        assert isinstance(editor_widget, QComboBox), (
+            "Type column editor must be a QComboBox (dropdown), not free text"
+        )
+        idx = editor._proxy.index(0, COL_ROLE)
+        editor_widget = role_del.createEditor(editor._table, None, idx)
+        assert isinstance(editor_widget, QComboBox)
+
+    def test_dark_mode_type_colors_are_readable(self, _qapp: object) -> None:
+        """Dark mode must NOT produce white text on a bright background."""
+        from mhm_pipeline.gui.widgets.extraction_editor import _type_colors  # noqa: PLC0415
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        # Force dark mode via the theme cache
+        theme._dark = True  # type: ignore[attr-defined]
+        try:
+            colors = _type_colors()
+        finally:
+            theme._dark = None  # type: ignore[attr-defined]
+
+        # For every type the background should be DARK and the foreground LIGHT
+        def _luminance(hex_color: str) -> float:
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+
+        for entity_type, (bg, fg) in colors.items():
+            bg_lum = _luminance(bg)
+            fg_lum = _luminance(fg)
+            assert bg_lum < 0.4, (
+                f"[{entity_type}] Dark-mode background '{bg}' has luminance "
+                f"{bg_lum:.2f} — too bright, would cause white-on-bright issue"
+            )
+            assert fg_lum > 0.6, (
+                f"[{entity_type}] Dark-mode foreground '{fg}' has luminance "
+                f"{fg_lum:.2f} — too dark against the dark background"
+            )
+
+    def test_save_preserves_approved_flag(
+        self, _qapp: object, _sample_records: list[dict], tmp_path: object,
+    ) -> None:
+        """to_records() must round-trip the 'approved' flag."""
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor  # noqa: PLC0415
+
+        out_path = _Path(tmp_path) / "edited.json"  # type: ignore[arg-type]
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, out_path)
+        # Approve row 0 manually
+        editor._model._entities[0]["approved"] = True
+        editor._on_save()
+        assert out_path.exists()
+        saved = json.loads(out_path.read_text())
+        # Find the person_ner entity in the saved file and check approval
+        found = False
+        for rec in saved:
+            for ent in rec.get("entities", []):
+                if ent.get("person") == "שלמה הלוי":
+                    assert ent.get("approved") is True
+                    found = True
+        assert found, "Approved entity missing from saved JSON"
+
+    def test_edit_triggers_allow_single_selected_click(
+        self, _qapp: object, _sample_records: list[dict],
+    ) -> None:
+        """Dropdown cells should open on SelectedClicked (not require double-click)."""
+        from PyQt6.QtWidgets import QAbstractItemView  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor  # noqa: PLC0415
+
+        editor = ExtractionEditor()
+        editor.load_records(_sample_records, None)
+        triggers = editor._table.editTriggers()
+        assert triggers & QAbstractItemView.EditTrigger.SelectedClicked, (
+            "Type/Role dropdowns won't open on single-selected click"
+        )
+        assert triggers & QAbstractItemView.EditTrigger.DoubleClicked
+
+
+# ── New-flow tests: dynamic options · save-filters · toggle switches ──────────
+
+
+class TestExtractionEditorFlow:
+    """E2E tests for the approve-before-flow behaviour added later:
+
+      * Auto-approve dropdowns show only types/roles/sources actually
+        present in the loaded session.
+      * Save drops unapproved entities from the output file.
+      * Rule-row value widget swaps between QComboBox and multi-select
+        depending on the operator.
+      * ToggleSwitch replaces QCheckBox in Configure Models flow.
+    """
+
+    @pytest.fixture
+    def _qapp(self) -> object:
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+        return QApplication.instance() or QApplication(sys.argv)
+
+    @pytest.fixture
+    def _records(self) -> list[dict]:
+        return [
+            {
+                "_control_number": "R1",
+                "text": "ר' שלמה הלוי",
+                "entities": [
+                    {"person": "שלמה הלוי", "start": 3, "end": 12, "role": "AUTHOR",
+                     "confidence": 0.95, "source": "person_ner"},
+                    {"text": "אליהו", "start": 3, "end": 8, "type": "OWNER",
+                     "confidence": 0.88, "source": "provenance_ner"},
+                ],
+            },
+            {
+                "_control_number": "R2",
+                "text": "דף 12",
+                "entities": [
+                    {"text": "דף 12", "start": 0, "end": 5, "type": "FOLIO",
+                     "confidence": 0.99, "source": "contents_ner"},
+                ],
+            },
+        ]
+
+    # ── Dynamic options ──────────────────────────────────────────────────
+
+    def test_auto_approve_options_limited_to_loaded_values(
+        self, _qapp: object, _records: list[dict],
+    ) -> None:
+        """AutoApproveDialog should only offer types/roles/sources present in data."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            AutoApproveDialog, ExtractionEditor, _RuleRow,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_records, None)
+        options = {
+            "type": editor.get_all_types(),
+            "role": editor.get_all_roles(),
+            "source": editor.get_all_sources(),
+        }
+        # Only OWNER + FOLIO + (person entities default to PERSON)
+        assert set(options["type"]) == {"PERSON", "OWNER", "FOLIO"}
+        assert set(options["role"]) == {"AUTHOR"}
+        assert set(options["source"]) == {"person_ner", "provenance_ner", "contents_ner"}
+
+        dlg = AutoApproveDialog(options_for=options)
+        # Grab the auto-created rule row and ask it to switch to "type = …"
+        row = dlg._rule_widgets[0]
+        row.field_combo.setCurrentText("type")
+        row.op_combo.setCurrentText("=")
+        row._on_field_or_op_changed()
+        single = row.value_enum_single
+        assert not single.isHidden()
+        items = [single.itemText(i) for i in range(single.count())]
+        assert set(items) == {"PERSON", "OWNER", "FOLIO"}
+        # Must NOT include types that don't appear in the loaded data
+        assert "COLLECTION" not in items
+        assert "WORK_AUTHOR" not in items
+
+    def test_rule_row_switches_widget_for_in_operator(
+        self, _qapp: object, _records: list[dict],
+    ) -> None:
+        """`in`/`not in` should show a multi-select combo, not a free-text field."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, _CheckableMultiCombo, AutoApproveDialog,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_records, None)
+        options = {
+            "type": editor.get_all_types(),
+            "role": editor.get_all_roles(),
+            "source": editor.get_all_sources(),
+        }
+        dlg = AutoApproveDialog(options_for=options)
+        row = dlg._rule_widgets[0]
+        row.field_combo.setCurrentText("source")
+        row.op_combo.setCurrentText("not in")
+        row._on_field_or_op_changed()
+        multi = row.value_enum_multi
+        assert isinstance(multi, _CheckableMultiCombo)
+        assert not multi.isHidden(), "Multi-select must be visible for in/not in"
+        # No free-text fallback when enum options are present
+        assert row.value_text.isHidden()
+        assert row.value_enum_single.isHidden()
+
+    def test_rule_row_switches_to_combobox_for_equality(
+        self, _qapp: object, _records: list[dict],
+    ) -> None:
+        """`=`/`≠` should show a single-value QComboBox."""
+        from PyQt6.QtWidgets import QComboBox  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            ExtractionEditor, AutoApproveDialog,
+        )
+
+        editor = ExtractionEditor()
+        editor.load_records(_records, None)
+        options = {
+            "type": editor.get_all_types(),
+            "role": editor.get_all_roles(),
+            "source": editor.get_all_sources(),
+        }
+        dlg = AutoApproveDialog(options_for=options)
+        row = dlg._rule_widgets[0]
+        row.field_combo.setCurrentText("role")
+        row.op_combo.setCurrentText("=")
+        row._on_field_or_op_changed()
+        assert isinstance(row.value_enum_single, QComboBox)
+        assert not row.value_enum_single.isHidden()
+        assert row.value_enum_multi.isHidden()
+        assert row.value_text.isHidden()
+
+    # ── Save drops unapproved ────────────────────────────────────────────
+
+    def test_save_drops_unapproved_entities(
+        self, _qapp: object, _records: list[dict], tmp_path: object,
+    ) -> None:
+        """to_approved_records() keeps only entities with approved=True."""
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor  # noqa: PLC0415
+
+        out = _Path(tmp_path) / "approved.json"  # type: ignore[arg-type]
+        editor = ExtractionEditor()
+        editor.load_records(_records, out)
+        # Approve only the first entity (שלמה הלוי, person_ner)
+        editor._model._entities[0]["approved"] = True
+        approved_records = editor._model.to_approved_records()
+        # Count approved entities across records
+        total_saved = sum(len(r.get("entities", [])) for r in approved_records)
+        assert total_saved == 1, (
+            f"Expected exactly 1 approved entity saved, got {total_saved}"
+        )
+        # The approved entity is the person one
+        found_person = False
+        for rec in approved_records:
+            for ent in rec.get("entities", []):
+                if ent.get("source") == "person_ner":
+                    assert ent.get("approved") is True
+                    found_person = True
+        assert found_person, "Approved person entity not in output"
+
+    def test_save_empty_when_nothing_approved(
+        self, _qapp: object, _records: list[dict],
+    ) -> None:
+        """With zero approvals, to_approved_records writes empty entity lists."""
+        from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor  # noqa: PLC0415
+
+        editor = ExtractionEditor()
+        editor.load_records(_records, None)
+        approved = editor._model.to_approved_records()
+        # Same number of records (control-number skeletons preserved), empty entities
+        assert all(len(r.get("entities", [])) == 0 for r in approved)
+
+    # ── Toggle switch widget ─────────────────────────────────────────────
+
+    def test_toggle_switch_is_qabstractbutton_with_checkable_api(self, _qapp: object) -> None:
+        """ToggleSwitch must be a drop-in replacement for QCheckBox."""
+        from PyQt6.QtWidgets import QAbstractButton  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.toggle_switch import ToggleSwitch  # noqa: PLC0415
+
+        sw = ToggleSwitch()
+        assert isinstance(sw, QAbstractButton)
+        assert sw.isCheckable()
+        assert sw.isChecked() is False
+        sw.setChecked(True)
+        assert sw.isChecked() is True
+        # Toggle signal fires with the new state
+        states: list[bool] = []
+        sw.toggled.connect(states.append)
+        sw.setChecked(False)
+        assert states == [False]
+
+    def test_toggle_switch_bidirectional_binding_to_checkbox(self, _qapp: object) -> None:
+        """The Configure Models dialog binds switch ↔ hidden QCheckBox both ways."""
+        from PyQt6.QtWidgets import QCheckBox  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.toggle_switch import ToggleSwitch  # noqa: PLC0415
+
+        source = QCheckBox()
+        source.setChecked(False)
+        sw = ToggleSwitch()
+        sw.setChecked(source.isChecked())
+        sw.toggled.connect(lambda c: source.setChecked(c))
+        source.toggled.connect(sw.setChecked)
+
+        # Flip the switch — source should follow
+        sw.setChecked(True)
+        assert source.isChecked() is True
+        # Flip the source — switch should follow
+        source.setChecked(False)
+        assert sw.isChecked() is False
+
+    # ── Auto-open review on Load Results / NER finish ────────────────────
+
+    def test_store_results_auto_review_calls_edit_dialog(
+        self, _qapp: object, _records: list[dict],
+    ) -> None:
+        """With auto_review=True, the panel schedules the edit dialog."""
+        from PyQt6.QtCore import QTimer  # noqa: PLC0415
+
+        from mhm_pipeline.gui.panels.ner_panel import NerPanel  # noqa: PLC0415
+
+        panel = NerPanel()
+        calls: list[bool] = []
+        panel._on_edit_entities_popup = lambda: calls.append(True)  # type: ignore[method-assign]
+        panel._store_results(_records, None, auto_review=True)
+        # The timer is single-shot 100ms — spin the event loop briefly
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+        loop_end = QTimer()
+        loop_end.setSingleShot(True)
+        waited = False
+        def _stop() -> None:
+            nonlocal waited
+            waited = True
+        loop_end.timeout.connect(_stop)
+        loop_end.start(250)
+        while not waited:
+            QApplication.processEvents()
+        assert calls, "auto_review=True should open the edit dialog via QTimer"
+
+
+# ── AuthorityEditor tests (Stage 2 approve-flow) ──────────────────────────
+
+
+class TestAuthorityEditor:
+    """E2E tests for AuthorityEditor — Stage 2 equivalent of the NER editor.
+
+    Covers:
+      * flatten_authority_records handles all 3 shapes (marc_authority_matches,
+        entity-level IDs, kima_places).
+      * unflatten_rows_into_records drops unapproved rows (safe downstream).
+      * Approval CheckStateRole round-trips.
+      * Rule evaluation including confidence_band + has_external_id.
+      * Per-row edit writes back to the model.
+    """
+
+    @pytest.fixture
+    def _qapp(self) -> object:
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+        return QApplication.instance() or QApplication(sys.argv)
+
+    @pytest.fixture
+    def _records(self) -> list[dict]:
+        return [
+            {
+                "_control_number": "R1",
+                "marc_authority_matches": [
+                    {
+                        "name": "Maimonides",
+                        "role": "author",
+                        "field": "marc_100",
+                        "mazal_id": "M001",
+                        "viaf_uri": "",
+                        "confidence": 0.95,
+                        "preferred_name_lat": "Moses ben Maimon",
+                        "dates": "1138-1204",
+                        "gnd_id": "118577166",
+                    },
+                ],
+                "entities": [
+                    {
+                        "person": "שלמה הלוי", "role": "AUTHOR",
+                        "confidence": 0.88, "source": "person_ner",
+                        "viaf_uri": "https://viaf.org/viaf/12345",
+                    },
+                    # This entity should NOT become a row (no auth IDs)
+                    {"person": "anon", "source": "person_ner"},
+                ],
+                "kima_places": {
+                    "Jerusalem": "http://www.wikidata.org/entity/Q1754",
+                },
+            },
+            {
+                "_control_number": "R2",
+                "marc_authority_matches": [
+                    {
+                        "name": "Rashi",
+                        "field": "marc_700",
+                        "mazal_id": "",
+                        "viaf_uri": "https://viaf.org/viaf/99999",
+                        "confidence": 0.70,
+                    },
+                ],
+            },
+        ]
+
+    def test_flatten_produces_one_row_per_match(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        rows = flatten_authority_records(_records)
+        # R1: 1 marc match + 1 entity (with viaf) + 1 KIMA place = 3
+        # R2: 1 marc match = 1
+        assert len(rows) == 4, f"Expected 4 rows, got {len(rows)}: {rows}"
+        kinds = {r["_origin_kind"] for r in rows}
+        assert kinds == {"marc", "entity", "kima"}
+
+    def test_flatten_skips_entities_without_authority_id(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        rows = flatten_authority_records(_records)
+        anon_rows = [r for r in rows if r["entity_text"] == "anon"]
+        assert not anon_rows, "Anonymous entity without VIAF/Mazal should not appear"
+
+    def test_unflatten_drops_unapproved(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records, unflatten_rows_into_records,
+        )
+        rows = flatten_authority_records(_records)
+        # Approve only the marc match in R1
+        for r in rows:
+            if r["_origin_kind"] == "marc" and r["_control_number"] == "R1":
+                r["approved"] = True
+        out = unflatten_rows_into_records(rows, _records)
+        r1 = next(r for r in out if r["_control_number"] == "R1")
+        r2 = next(r for r in out if r["_control_number"] == "R2")
+        assert len(r1["marc_authority_matches"]) == 1
+        assert r1["marc_authority_matches"][0]["mazal_id"] == "M001"
+        assert len(r2["marc_authority_matches"]) == 0, "R2 match was unapproved → dropped"
+        assert r1["kima_places"] == {}, "Kima place was unapproved → dropped"
+
+    def test_approved_checkbox_roundtrip(self, _qapp, _records) -> None:
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            AuthorityEditor, COL_APPROVED,
+        )
+        editor = AuthorityEditor()
+        editor.load_records(_records, None)
+        idx = editor._model.index(0, COL_APPROVED)
+        assert editor._model.flags(idx) & Qt.ItemFlag.ItemIsUserCheckable
+        editor._model.setData(idx, Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        assert editor._model._rows[0]["approved"] is True
+
+    def test_auto_approve_confidence_rule(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            AuthorityEditor, evaluate_auth_rules,
+        )
+        editor = AuthorityEditor()
+        editor.load_records(_records, None)
+        rules = [{"field": "confidence", "op": ">=", "value": 0.85}]
+        matched = [i for i, r in enumerate(editor._model._rows)
+                   if evaluate_auth_rules(r, rules, "AND")]
+        # Maimonides (0.95), שלמה הלוי (0.88), Jerusalem (1.0) — Rashi (0.70) out
+        assert len(matched) >= 2
+
+    def test_auto_approve_confidence_band_rule(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            AuthorityEditor, evaluate_auth_rules,
+        )
+        editor = AuthorityEditor()
+        editor.load_records(_records, None)
+        rules = [{"field": "confidence_band", "op": "=", "value": "high"}]
+        matched = [i for i, r in enumerate(editor._model._rows)
+                   if evaluate_auth_rules(r, rules, "AND")]
+        # "high" band is conf ≥ 0.90 — Maimonides (0.95) + Jerusalem (1.0)
+        assert len(matched) == 2
+
+    def test_auto_approve_has_external_id(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            AuthorityEditor, evaluate_auth_rules,
+        )
+        editor = AuthorityEditor()
+        editor.load_records(_records, None)
+        rules = [{"field": "has_external_id", "op": "=", "value": "true"}]
+        matched = [i for i, r in enumerate(editor._model._rows)
+                   if evaluate_auth_rules(r, rules, "AND")]
+        # Every one of our 4 rows has a matched_id
+        assert len(matched) == 4
+
+    def test_auto_approve_source_not_in(self, _qapp, _records) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            AuthorityEditor, evaluate_auth_rules,
+        )
+        editor = AuthorityEditor()
+        editor.load_records(_records, None)
+        rules = [{"field": "source", "op": "not in", "value": ["kima"]}]
+        matched = [i for i, r in enumerate(editor._model._rows)
+                   if evaluate_auth_rules(r, rules, "AND")]
+        # 4 rows - 1 KIMA = 3
+        assert len(matched) == 3
+
+    def test_save_drops_unapproved_end_to_end(
+        self, _qapp, _records, tmp_path: object,
+    ) -> None:
+        from pathlib import Path as _Path  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.authority_editor import AuthorityEditor  # noqa: PLC0415
+
+        out = _Path(tmp_path) / "authority_approved.json"  # type: ignore[arg-type]
+        editor = AuthorityEditor()
+        editor.load_records(_records, out)
+        # Approve the first row only (Maimonides marc match)
+        editor._model._rows[0]["approved"] = True
+        approved_records = editor._model.to_approved_records()
+        total_matches = sum(
+            len(r.get("marc_authority_matches", [])) for r in approved_records
+        )
+        assert total_matches == 1
+        total_places = sum(len(r.get("kima_places", {})) for r in approved_records)
+        assert total_places == 0, "Unapproved KIMA place was not dropped"
+
+
+# ── Wikidata Studio / QPEntityBrowser tests ─────────────────────────────
+
+
+class TestWikidataStudio:
+    """E2E tests for the merged Wikidata Studio panel + QPEntityBrowser.
+
+    Uses a lightweight fake WikidataItem so tests don't need the full
+    item_builder machinery.
+    """
+
+    @pytest.fixture
+    def _qapp(self) -> object:
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+        return QApplication.instance() or QApplication(sys.argv)
+
+    def _fake_items(self) -> list[object]:
+        from dataclasses import dataclass, field  # noqa: PLC0415
+
+        @dataclass
+        class Stmt:
+            property_id: str
+            value: object
+            value_type: str = "string"
+            qualifiers: list = field(default_factory=list)
+            references: list = field(default_factory=list)
+
+        @dataclass
+        class Item:
+            labels: dict
+            descriptions: dict = field(default_factory=dict)
+            aliases: dict = field(default_factory=dict)
+            statements: list = field(default_factory=list)
+            existing_qid: str = ""
+            entity_type: str = "person"
+            local_id: str = ""
+
+        return [
+            Item(labels={"en": "Maimonides"},
+                 descriptions={"en": "Jewish philosopher"},
+                 statements=[Stmt("P214", "100216431", "external-id")],
+                 entity_type="person",
+                 local_id="PERSON:maimonides"),
+            Item(labels={"en": "Rashi"},
+                 statements=[Stmt("P214", "99999", "external-id")],
+                 entity_type="person",
+                 local_id="PERSON:rashi"),
+            Item(labels={"he": "גינת אגוז", "en": "Tree of Walnut"},
+                 statements=[Stmt("P1476", "Tree of Walnut", "monolingualtext")],
+                 entity_type="work",
+                 local_id="WORK:ginat-egoz"),
+            Item(labels={"he": "כתב יד"},
+                 statements=[Stmt("P217", "Vatican Ms. 101", "string"),
+                             Stmt("P195", "Q999999", "item")],
+                 entity_type="manuscript",
+                 local_id="MS:990001234"),
+        ]
+
+    def test_qp_browser_loads_items(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.qp_entity_browser import QPEntityBrowser  # noqa: PLC0415
+
+        b = QPEntityBrowser()
+        b.load_items(self._fake_items())
+        assert b._model.rowCount() == 4
+        assert set(b.get_all_types()) == {"person", "work", "manuscript"}
+
+    def test_status_blocks_approval_for_existing_other(self, _qapp) -> None:
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (  # noqa: PLC0415
+            COL_APPROVED, QPEntityBrowser, _STATUS_OTHER, _STATUS_NEW,
+        )
+
+        b = QPEntityBrowser()
+        b.load_items(self._fake_items())
+        # Mark row 0 as existing-other → approval must be refused
+        b.update_status(b._model._rows[0]["local_id"], _STATUS_OTHER, qid="Q42",
+                        reason="community item")
+        idx = b._model.index(0, COL_APPROVED)
+        ok = b._model.setData(idx, Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        assert ok is False, "Must refuse approval of existing-other items"
+        assert b._model._rows[0]["approved"] is False
+
+    def test_approved_items_excludes_unapproved_and_other(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (  # noqa: PLC0415
+            QPEntityBrowser, _STATUS_NEW, _STATUS_OTHER,
+        )
+
+        b = QPEntityBrowser()
+        b.load_items(self._fake_items())
+        b.update_status(b._model._rows[0]["local_id"], _STATUS_NEW)
+        b.update_status(b._model._rows[1]["local_id"], _STATUS_OTHER, qid="Q1")
+        # Approve first two; second must remain rejected by safety guard
+        b._model._rows[0]["approved"] = True
+        # Bypass the safety guard in the model for test determinism:
+        # set_approved_bulk does honour the guard, but direct dict write
+        # models a malicious caller — we verify approved_items() still
+        # excludes "existing-other" via the entity_type check.
+        b._model._rows[1]["approved"] = True
+        approved = b.approved_items()
+        assert len(approved) == 1
+        assert approved[0].local_id == "PERSON:maimonides"
+
+    def test_studio_panel_instantiates(self, _qapp) -> None:
+        from mhm_pipeline.gui.panels.wikidata_studio_panel import (  # noqa: PLC0415
+            WikidataStudioPanel,
+        )
+
+        panel = WikidataStudioPanel()
+        assert panel.stage_progress is not None
+        assert panel.log_viewer is not None
+        # The upload_requested signal should be defined
+        assert hasattr(panel, "upload_requested")

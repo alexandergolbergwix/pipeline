@@ -49,6 +49,29 @@ class UploadResult:
     added_properties: list[str] = field(default_factory=list)
 
 
+class UnauthorisedModificationError(RuntimeError):
+    """Raised when the uploader is asked to modify a Wikidata item whose
+    first revision was NOT authored by the authenticated user.
+
+    This is the defense-in-depth tripwire for CLAUDE.md rule 38: the
+    pipeline is only ever allowed to CREATE new entities and to MODIFY
+    entities it created itself. Any attempt to modify another user's
+    item must raise this exception, not merely be skipped silently.
+
+    The *stage* field records WHICH guard caught the violation so the
+    audit log makes it clear that the defense chain worked (entry /
+    build / write / identity-check).
+    """
+
+    def __init__(self, *, qid: str, stage: str) -> None:
+        super().__init__(
+            f"SAFETY: refusing to modify {qid!r} — not authored by the "
+            f"authenticated user (caught at stage {stage!r})."
+        )
+        self.qid = qid
+        self.stage = stage
+
+
 class WikidataUploader:
     """Upload WikidataItem objects to Wikidata.
 
@@ -81,6 +104,7 @@ class WikidataUploader:
         self._last_edit_time: float = 0.0
         self._authenticated_user: str | None = None  # Set after first auth
         self._creator_cache: dict[str, str] = {}  # qid → first revision author
+        self._is_our_item_cache: dict[str, bool] = {}  # qid → creator-check result
         self._enforce_moratorium()
 
     @staticmethod
@@ -163,14 +187,44 @@ class WikidataUploader:
         wbi_config["BACKOFF_MAX_TRIES"] = 3  # Max 3 retries (default 5)
         wbi_config["BACKOFF_MAX_VALUE"] = 30  # Max 30s backoff (default 3600!)
 
-        # Support three authentication methods:
+        # Support four authentication methods:
         # 1. Bot password: "Username@BotName:password"
-        # 2. OAuth 2.0: "consumer_key|consumer_secret"
+        # 2. OAuth 2.0 owner-only: "consumer_key|consumer_secret"
         # 3. OAuth 1.0a: "consumer_key|consumer_secret|access_token|access_secret"
+        # 4. OAuth 2.0 pre-issued JWT bearer token:
+        #    "eyJ0eXAiOiJKV1QiLCJhbGci...<dotted JWT>..."
+        #    (Issued directly by meta.wikimedia.org when the consumer
+        #    registration is owner-only + "Client is confidential". No
+        #    consumer-secret exchange needed — we wrap a requests.Session
+        #    with the Authorization: Bearer header and hand it straight
+        #    to wbi_login._Login.)
         api_url = wbi_config["MEDIAWIKI_API_URL"]
         user_agent = "MHMPipeline/1.0 (shvedbook@gmail.com)"
 
-        if "|" in self._token:
+        # JWT bearer detection: 3 dot-separated base64url parts, starts
+        # with "eyJ" (the typical base64url prefix of a JSON header like
+        # {"typ":"JWT", ...}). No `:` (not a bot password) and no `|`
+        # (not a consumer-key/consumer-secret pair).
+        is_jwt_bearer = (
+            ":" not in self._token
+            and "|" not in self._token
+            and self._token.count(".") == 2
+            and self._token.startswith("eyJ")
+        )
+        if is_jwt_bearer:
+            import requests  # noqa: PLC0415
+
+            session = requests.Session()
+            session.headers.update({
+                "Authorization": f"Bearer {self._token}",
+                "User-Agent": user_agent,
+            })
+            login = wbi_login._Login(  # noqa: SLF001 — upstream exposes no public alternative
+                session=session,
+                mediawiki_api_url=api_url,
+                user_agent=user_agent,
+            )
+        elif "|" in self._token:
             parts = self._token.split("|")
             if len(parts) == 2:
                 # OAuth 2.0: consumer_key|consumer_secret
@@ -208,8 +262,11 @@ class WikidataUploader:
         else:
             raise ValueError(
                 "Invalid authentication format. Use one of:\n"
-                "  Bot password: Username@BotName:password\n"
-                "  OAuth 2.0: consumer_key|consumer_secret"
+                "  Bot password:  Username@BotName:password\n"
+                "  OAuth 2.0:     consumer_key|consumer_secret\n"
+                "  OAuth 1.0a:    consumer_key|consumer_secret|access_token|access_secret\n"
+                "  JWT bearer:    eyJ…  (paste the owner-only access token "
+                "from Special:OAuthConsumerRegistration)"
             )
 
         self._wbi = WikibaseIntegrator(login=login)
@@ -262,6 +319,12 @@ class WikidataUploader:
         """
 
         wbi = self._init_wbi()
+
+        # DEFENSE-IN-DEPTH #2 (rule 38): Even though upload_item already
+        # checks _is_our_item at entry, _build_wbi_item is called from
+        # other code paths too (tests, scripts). Re-assert here so no
+        # mutation can happen on someone else's item.
+        self._assert_modifiable(item.existing_qid or "", stage="_build_wbi_item")
 
         if item.existing_qid:
             wbi_item = wbi.item.get(item.existing_qid)
@@ -574,6 +637,77 @@ class WikidataUploader:
             logger.warning("Could not get first revision author for %s: %s", qid, exc)
         return None
 
+    def _user_created_via_contribs(self, qid: str, user: str) -> bool | None:
+        """Independent cross-check via ``list=usercontribs`` API endpoint.
+
+        Returns:
+            True  — *user* has a ``new``-type contribution on *qid* (i.e.
+                    they created the page).
+            False — *user* has NO ``new``-type contribution on *qid*.
+            None  — the API call failed; caller must fall back.
+
+        This is the second of the two independent creator-verification
+        channels required by rule 38. If this disagrees with the
+        ``prop=revisions`` answer, the item is NOT confirmed as ours.
+        """
+        try:
+            import requests  # noqa: PLC0415
+
+            api_url = _TEST_API if self._is_test else _WIKIDATA_API
+            resp = requests.get(
+                api_url,
+                params={
+                    "action": "query",
+                    "list": "usercontribs",
+                    "ucuser": user,
+                    "uctitle": qid,
+                    "uctype": "new",
+                    "uclimit": "1",
+                    "format": "json",
+                },
+                headers={"User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)"},
+                timeout=10,
+            )
+            contribs = resp.json().get("query", {}).get("usercontribs", [])
+            return bool(contribs)
+        except Exception as exc:
+            logger.warning("usercontribs check failed for %s: %s", qid, exc)
+            return None
+
+    def _item_exists_on_wikidata_sparql(self, qid: str) -> bool | None:
+        """SPARQL existence check — ``ASK WHERE { wd:<qid> ?p ?o }``.
+
+        Returns:
+            True  — item exists and has at least one triple.
+            False — item has no triples (deleted / redirected / not found).
+            None  — SPARQL endpoint failure; caller must fall back.
+
+        A False result means the QID has been deleted or merged into
+        another item since we reconciled it; under rule 38 we refuse to
+        modify such items even if the creator check passes, because the
+        target of any modification would be ambiguous.
+        """
+        try:
+            import requests  # noqa: PLC0415
+
+            endpoint = _TEST_SPARQL if self._is_test else _WIKIDATA_SPARQL
+            resp = requests.get(
+                endpoint,
+                params={
+                    "query": f"ASK WHERE {{ wd:{qid} ?p ?o . }}",
+                    "format": "json",
+                },
+                headers={
+                    "User-Agent": "MHMPipeline/1.0 (shvedbook@gmail.com)",
+                    "Accept": "application/sparql-results+json",
+                },
+                timeout=15,
+            )
+            return bool(resp.json().get("boolean"))
+        except Exception as exc:
+            logger.warning("SPARQL existence check failed for %s: %s", qid, exc)
+            return None
+
     def _bot_excluded(self, qid: str) -> bool:
         """Check the item's talk page for a {{bots|deny=…}} exclusion.
 
@@ -628,42 +762,137 @@ class WikidataUploader:
             return False
 
     def _is_our_item(self, qid: str) -> bool:
-        """Check if an existing Wikidata item was created by the authenticated user.
+        """Return True iff the authenticated user is the first-revision author of *qid*.
 
-        STRICT SAFETY CHECK: Verifies that the FIRST revision author of the item
-        matches the currently authenticated user. This prevents modifying items
-        created by other users, even if they have a P1343=Q_KTIV marker.
+        TRIPLE-VERIFICATION contract (re-hardened 2026-04-24 per user
+        directive "ensure 100 times that we will not modify entities not
+        created by me — check using wikidata api and sparkql queries"):
 
-        Falls back to P1343=Q118384267 (Ktiv) marker check only if the user
-        identity cannot be determined.
+        ========== ========== ========== ========== =========
+        auth_user  rev.user   contribs   sparql     returns
+        ========== ========== ========== ========== =========
+        unknown    *          *          *          False
+        known      unknown    *          *          False
+        known      other      *          *          False
+        known      self       False      *          False   ← cross-check disagrees
+        known      self       None       ok         True    (contribs API down — rev call agreed)
+        known      self       True       False      False   ← SPARQL says QID deleted
+        known      self       True       ok         True
+        ========== ========== ========== ========== =========
+
+        Three INDEPENDENT verification channels:
+
+            1. ``action=query&prop=revisions&rvdir=newer&rvlimit=1``
+               — asks Wikidata's MediaWiki API who wrote the first
+               revision of the item. Authoritative for creator.
+
+            2. ``action=query&list=usercontribs&ucuser=<me>&uctitle=<qid>&uctype=new``
+               — asks the same API whether the authenticated user has
+               a "page creation" entry for this QID. Independent of
+               (1): the two endpoints go through different internal
+               paths, so a corruption on one side would not affect
+               the other.
+
+            3. ``ASK WHERE { wd:<qid> ?p ?o }`` on the Wikidata SPARQL
+               endpoint — confirms the item still exists and has not
+               been deleted, redirected, or blanked since we reconciled
+               it. If the item no longer exists, the *target* of any
+               modification is ambiguous and we must refuse.
+
+        The P1343=Ktiv marker fallback is REMOVED. A community-created
+        item could legitimately cite Ktiv as a source, which made that
+        fallback dangerous: an API hiccup that blanked the
+        revision-author lookup would silently allow modification of the
+        community's item. Ktiv is a bibliographic source, not a creator
+        fingerprint.
+
+        The uploader caches every decision so repeated calls during a
+        single upload are O(1) and cannot race with a concurrent edit
+        that might change the first revision.
         """
-        # Primary check: first revision author must match authenticated user
-        auth_user = self._get_authenticated_user()
-        if auth_user:
-            creator = self._get_first_revision_author(qid)
-            if creator and creator != auth_user:
-                logger.warning(
-                    "SAFETY: Item %s was created by '%s', not '%s' — REFUSING to modify",
-                    qid,
-                    creator,
-                    auth_user,
-                )
-                return False
-            if creator == auth_user:
-                return True
-            # If we couldn't determine creator, fall through to marker check
+        cached = self._is_our_item_cache.get(qid)
+        if cached is not None:
+            return cached
 
-        # Fallback: P1343=Q118384267 (Ktiv) marker
-        try:
-            wbi = self._init_wbi()
-            existing = wbi.item.get(qid)
-            for claim in existing.claims.get("P1343") or []:
-                mainsnak = claim.mainsnak
-                if hasattr(mainsnak, "datavalue") and "Q118384267" in str(mainsnak.datavalue):
-                    return True
+        # ── Channel #1: who is the authenticated user? ─────────────────
+        auth_user = self._get_authenticated_user()
+        if not auth_user:
+            logger.warning(
+                "SAFETY: Could not determine authenticated user — refusing "
+                "any modification of existing item %s (fail-closed).",
+                qid,
+            )
+            self._is_our_item_cache[qid] = False
             return False
-        except Exception:
+
+        # ── Channel #2: who authored the first revision of the QID? ────
+        creator = self._get_first_revision_author(qid)
+        if not creator:
+            logger.warning(
+                "SAFETY: Could not determine first-revision author of %s — "
+                "refusing modification (fail-closed).",
+                qid,
+            )
+            self._is_our_item_cache[qid] = False
             return False
+
+        if creator != auth_user:
+            logger.warning(
+                "SAFETY: Item %s was created by '%s', not '%s' — REFUSING to modify",
+                qid, creator, auth_user,
+            )
+            self._is_our_item_cache[qid] = False
+            return False
+
+        # ── Channel #3: cross-check via list=usercontribs ──────────────
+        #
+        # Independent API endpoint confirming the user has a "new" (page
+        # creation) contribution on the QID. If it disagrees with
+        # channel #2, refuse — the two cannot disagree on a well-formed
+        # page. ``None`` means the contribs call failed (network blip):
+        # we accept that only because channel #2 already agreed.
+        contribs_ok = self._user_created_via_contribs(qid, auth_user)
+        if contribs_ok is False:
+            logger.warning(
+                "SAFETY: Cross-check disagreement on %s — revisions API "
+                "reports '%s' as creator but list=usercontribs shows no "
+                "page-creation edit for that user. Refusing (fail-closed).",
+                qid, auth_user,
+            )
+            self._is_our_item_cache[qid] = False
+            return False
+
+        # ── Channel #4: SPARQL existence check ─────────────────────────
+        #
+        # Confirms the QID is a live, non-redirected, non-blanked entity.
+        # If SPARQL says the item has zero triples, it has been deleted
+        # or merged away — we must not attempt to modify a vanished QID.
+        exists = self._item_exists_on_wikidata_sparql(qid)
+        if exists is False:
+            logger.warning(
+                "SAFETY: SPARQL reports %s has no triples (deleted / "
+                "redirected / blanked) — refusing modification.",
+                qid,
+            )
+            self._is_our_item_cache[qid] = False
+            return False
+
+        self._is_our_item_cache[qid] = True
+        return True
+
+    def _assert_modifiable(self, qid: str, stage: str) -> None:
+        """Defense-in-depth guard: raise if *qid* must not be modified.
+
+        Called from EVERY stage of the modification pipeline so a single
+        missed check at the entry point cannot let an unauthorised edit
+        slip through. Raises :class:`UnauthorisedModificationError` —
+        the uploader catches it and converts to a ``skipped`` result
+        rather than a crash.
+        """
+        if not qid:
+            return  # new-item creation path; no existing item at risk
+        if not self._is_our_item(qid):
+            raise UnauthorisedModificationError(qid=qid, stage=stage)
 
     def upload_item(self, item: WikidataItem) -> UploadResult:
         """Upload a single item to Wikidata with retry logic and smart diffing.
@@ -748,6 +977,15 @@ class WikidataUploader:
                 # blocked at WD:AN. The flag is silently ignored if the
                 # account does not have a bot flag yet, so it is safe to
                 # always pass.
+                #
+                # DEFENSE-IN-DEPTH #4 (rule 38): immediately before the
+                # only .write() call in the codebase, re-assert that the
+                # target QID is ours. This is the last gate — if someone
+                # introduces a new upload path or bypasses the earlier
+                # guards, this one fires. FAIL CLOSED.
+                self._assert_modifiable(
+                    item.existing_qid or "", stage="pre_write",
+                )
                 result = wbi_item.write(summary=edit_summary, bot=True)
                 qid = result.id if result else None
 
@@ -770,6 +1008,24 @@ class WikidataUploader:
                     status="success",
                     message=f"Created {qid} ({new_claims} claims)",
                     added_properties=added_props,
+                )
+            except UnauthorisedModificationError as exc:
+                # Rule 38 tripwire — any defense-in-depth guard fired.
+                # This is not retryable: the item is not ours, period.
+                # Convert to a clean "skipped" result instead of bubbling
+                # up and failing the whole batch.
+                logger.error(
+                    "SAFETY tripwire (%s) for %s → %s: %s",
+                    exc.stage, item.local_id, exc.qid, exc,
+                )
+                return UploadResult(
+                    local_id=item.local_id,
+                    qid=exc.qid,
+                    status="skipped",
+                    message=(
+                        f"Blocked by rule-38 guard at stage {exc.stage!r}: "
+                        f"{exc.qid} was not authored by the authenticated user."
+                    ),
                 )
             except Exception as exc:
                 last_error = str(exc)

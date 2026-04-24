@@ -714,3 +714,119 @@ All GUI colors, spacing, border radii, and font sizes are centralized in `src/mh
 All dark/light variants are resolved at call time via `theme.is_dark()`. Call `theme.invalidate_cache()` after a palette change to refresh the cached dark-mode flag.
 
 **Rule: NEVER hardcode** `#rrggbb` hex colors, spacing in px, border-radius in px, or font-size in px directly in `setStyleSheet()` calls or layout configs. Always reference a `theme.*` token or function.
+
+### 37. Every QDialog must use the liquid-glass backdrop (added 2026-04-24)
+
+Every popup, modal, sheet, or detail view in the MHM Pipeline GUI must render against the same `GraphBackdrop` particle/gradient surface the main window uses. Dialogs rendered on a flat dark fill (Qt default) break visual continuity and feel like a different app — the user explicitly flagged this on 2026-04-24 for both `ClaimsEditDialog` and `AutoApproveDialog`.
+
+**Mandatory pattern** — two equivalent ways, pick whichever fits the dialog:
+
+1. **Inherit `GlassDialog`** (preferred for new dialogs):
+
+   ```python
+   from mhm_pipeline.gui.widgets.glass_dialog import GlassDialog
+
+   class MyDialog(GlassDialog):
+       def __init__(self, parent=None) -> None:
+           super().__init__(parent)
+           layout = QVBoxLayout(self.glass_content)  # NOT self
+           layout.addWidget(QLabel("Hello"))
+   ```
+
+2. **Install backdrop on a bare `QDialog`** (for existing dialogs you do not want to reparent):
+
+   ```python
+   from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop
+
+   class LegacyDialog(QDialog):
+       def __init__(self, parent=None) -> None:
+           super().__init__(parent)
+           content = install_glass_backdrop(self)  # returns translucent content widget
+           layout = QVBoxLayout(content)
+           ...
+   ```
+
+**Companion helpers** also live in `src/mhm_pipeline/gui/widgets/glass_dialog.py`:
+
+| Helper | Purpose |
+|---|---|
+| `install_glass_backdrop(dialog)` | Insert `GraphBackdrop` + translucent content child; idempotent |
+| `GlassDialog` | Base class — subclasses must use `self.glass_content`, never call `setLayout(self)` |
+| `glass_table_style(theme)` | Translucent QTableView QSS so backdrop reads through |
+| `glass_tab_style(theme)` | Translucent QTabWidget QSS |
+| `glass_panel_style(theme)` | Liquid-glass card QSS for grouped sections (use `QFrame#glassPanel`) |
+
+**Rule: NEVER instantiate a bare `QDialog`** without calling `install_glass_backdrop` or inheriting `GlassDialog`. This includes third-party subclasses (`QWizardPage` is exempt because `QWizard` handles the backdrop at the wizard level). The `apply_stylesheet` global rule already covers the window-gradient fallback for dialogs that slip through, but the particle/node lens only appears when the backdrop is explicitly installed.
+
+**Tables and tabs inside dialogs** must apply `glass_table_style()` / `glass_tab_style()` so the backdrop isn't occluded by a solid fill — the default Qt painting is opaque and cancels the effect. Use `widget.viewport().setAutoFillBackground(False)` on QTableView for an extra-clean result.
+
+### 38. Never modify Wikidata items not created by the authenticated user (added 2026-04-24)
+
+> User directive, verbatim (2026-04-24):
+> > "please ensure 100 times that we will not modify entities (pre-existing in wikidata) that are not created by me (by the user using its creds). The app only allowed to create new entities (if they're not duplicates of existing entities) and the app can modify existing entities that created by me (by the user using its creds). we should check those using wikidata api and sparkql queries"
+
+The 2026-04-12 mass-edit incident (Geagea / Pallor / Kolja21 / Epìdosis talk threads) happened because a single-point-of-failure guard let `action=edit` go through to items the pipeline had never created. Rule 38 replaces that single guard with a **four-stage defense chain backed by three independent verification channels**.
+
+**Four in-code gates** (all in `converter/wikidata/uploader.py`):
+
+| # | Location | Method | Fires when |
+|---|---|---|---|
+| 1 | `upload_item()` entry | `_is_our_item()` | Before any work begins on an existing-QID item |
+| 2 | `_build_wbi_item()` entry | `_assert_modifiable(qid, stage='_build_wbi_item')` | Even if called from a test or a new upload path that bypasses `upload_item` |
+| 3 | per-statement loop | `_would_create_identity_conflict()` | Before adding P569/P570/P19/P20/P214/P8189/P213/P244/P227 to an existing item |
+| 4 | immediately before `wbi_item.write(...)` | `_assert_modifiable(qid, stage='pre_write')` | Last-ditch catch — if the item's creator changed between gate 1 and here, this still blocks the write |
+
+`_assert_modifiable` raises `UnauthorisedModificationError`, which `upload_item` catches and converts into a `skipped` result. No silent pass-through.
+
+**Three independent verification channels** inside `_is_our_item()`:
+
+1. **MediaWiki API — `action=query&prop=revisions&rvdir=newer&rvlimit=1&titles=<QID>`.** Authoritative "who authored the first revision" lookup.
+2. **MediaWiki API — `action=query&list=usercontribs&ucuser=<me>&uctitle=<QID>&uctype=new`.** Cross-check: did the authenticated user have a **page-creation** contribution on this QID? Independent from channel 1 — different API path, different internal data store.
+3. **SPARQL endpoint — `ASK WHERE { wd:<QID> ?p ?o . }`.** Confirms the item still exists and has not been deleted / redirected / blanked since we reconciled it; modifying a vanished QID targets ambiguous content.
+
+Decision table:
+
+| auth_user | rev.user | contribs | sparql | returns |
+|:---:|:---:|:---:|:---:|:---:|
+| unknown | * | * | * | **False** |
+| known | unknown | * | * | **False** |
+| known | other | * | * | **False** |
+| known | self | **False** | * | **False** |
+| known | self | None | ok | True |
+| known | self | ok | **False** | **False** |
+| known | self | ok | None / ok | True |
+
+A `None` from a cross-check channel means "network/endpoint failure"; it does not unlock the gate — the primary revisions answer still must agree.
+
+**Removed**: the previous `P1343=Q118384267` (Ktiv) marker fallback. Community-created items can legitimately cite Ktiv as a bibliographic source, which made the fallback dangerous. `_is_our_item` no longer consults any marker.
+
+**Structural regression tests** (`tests/unit/test_safety_guards.py::TestRule38ModificationBlockedForNonOurItems`, 18 tests):
+
+- `test_is_our_item_fails_closed_when_auth_user_unknown`
+- `test_is_our_item_fails_closed_when_creator_unknown`
+- `test_is_our_item_rejects_other_creator`
+- `test_is_our_item_accepts_self`
+- `test_is_our_item_refused_if_contribs_disagrees`
+- `test_is_our_item_accepts_if_contribs_endpoint_down`
+- `test_is_our_item_refused_if_sparql_says_deleted`
+- `test_is_our_item_accepts_if_sparql_endpoint_down`
+- `test_contribs_api_request_shape`
+- `test_sparql_existence_request_shape`
+- `test_assert_modifiable_raises_for_other_item`
+- `test_assert_modifiable_no_op_for_new_item_creation`
+- `test_upload_item_skips_other_item_at_entry`
+- `test_build_wbi_item_raises_for_other_item`
+- `test_upload_item_gate4_fires_if_earlier_guards_bypassed`
+- `test_only_one_write_call_site_exists_in_uploader` *(structural)*
+- `test_pre_write_guard_is_adjacent_to_write_call` *(structural)*
+- `test_no_kludge_fallback_to_p1343_marker` *(structural)*
+
+The three structural tests are the regression barrier: if a future refactor introduces a second `wbi_item.write(...)` call, separates the pre-write guard from the write, or re-introduces marker-based fallback, the test suite fails immediately.
+
+**Related rules** already in force:
+
+- Rule 23 — reconciler cross-identifier verification, uploader identity-conflict guard, pre-merge metadata conflict check, label-overwrite guard.
+- Rule 24 — two-layer creator+latest-editor check for revert scripts.
+- Rule 25 — moratorium gate: live uploads refused unless `MORATORIUM_LIFTED=true`.
+
+Rule 38 is the *creation-path* counterpart of Rule 24 (revert-path). Together they close the loop: the pipeline can only CREATE new items, or MODIFY items whose first revision it authored — never anything in between.

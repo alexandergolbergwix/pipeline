@@ -1710,13 +1710,16 @@ Two upload methods are implemented:
 
 \subsubsection{Live Upload via WikibaseIntegrator}
 
-For programmatic upload, the pipeline uses the \code{wikibaseintegrator} library, which wraps the Wikidata API with proper session management, retry logic, and rate limiting. The \code{WikidataUploader} class supports three authentication methods:
+For programmatic upload, the pipeline uses the \code{wikibaseintegrator} library, which wraps the Wikidata API with proper session management, retry logic, and rate limiting. The \code{WikidataUploader} class supports four authentication methods, auto-detected from the token format:
 
 \begin{description}[style=nextline, leftmargin=2.5cm]
 \item[Bot password] \code{Username@BotName:password} --- uses \code{wbi\_login.Login}.
-\item[OAuth 2.0] \code{consumer\_key|consumer\_secret} (pipe-separated) --- uses \code{wbi\_login.OAuth2}. This is the recommended method for registered Wikidata applications.
+\item[OAuth 2.0 owner-only] \code{consumer\_key|consumer\_secret} (pipe-separated) --- uses \code{wbi\_login.OAuth2}. Recommended for registered owner-only consumers.
 \item[OAuth 1.0a] \code{consumer\_key|consumer\_secret|access\_token|access\_secret} (four pipe-separated parts) --- uses \code{wbi\_login.OAuth1}.
+\item[Pre-issued JWT bearer] \code{eyJ0eXAiOiJKV1QiLCJhbGci...} (three dot-separated base64url parts, starting with \code{eyJ}). Issued directly by \url{meta.wikimedia.org} when the OAuth consumer registration is ``owner-only'' + ``Client is confidential.'' The uploader wraps a \code{requests.Session} with the header \code{Authorization: Bearer <jwt>} and hands it to \code{wbi\_login.\_Login}; no consumer-secret exchange is performed.
 \end{description}
+
+Recommended scopes for a pipeline consumer are exactly four: \emph{basic}, \emph{high-volume (bot) access}, \emph{edit existing pages}, \emph{create/edit/move pages}. Every additional scope expands the blast radius of a token leak without enabling any pipeline feature.
 
 Rate limiting is enforced at two levels:
 \begin{itemize}

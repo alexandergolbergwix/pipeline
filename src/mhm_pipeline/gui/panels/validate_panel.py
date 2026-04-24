@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
+from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 from mhm_pipeline.gui.widgets.validation_result_view import ValidationResultView
@@ -55,6 +56,8 @@ class ValidatePanel(QWidget):
         btn_layout = QHBoxLayout()
         self._run_btn = QPushButton("Validate SHACL")
         self._run_btn.clicked.connect(self._on_run)
+        self._run_btn.setStyleSheet(theme.button_style())
+        self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_layout.addWidget(self._run_btn)
 
         self._fullscreen_btn = QPushButton("Open in Full Window")
@@ -169,6 +172,7 @@ class ValidatePanel(QWidget):
         full_view = ValidationResultView()
         dlg_layout.addWidget(full_view, stretch=1)
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(theme.button_style('ghost'))
         close_btn.clicked.connect(dialog.accept)
         dlg_layout.addWidget(close_btn)
         dialog.exec()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
+from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.knowledge_graph_view import KnowledgeGraphView
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
@@ -55,9 +56,13 @@ class RdfPanel(QWidget):
         btn_layout = QHBoxLayout()
         self._run_btn = QPushButton("Build RDF Graph")
         self._run_btn.clicked.connect(self._on_run)
+        self._run_btn.setStyleSheet(theme.button_style())
+        self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_layout.addWidget(self._run_btn)
 
         self._load_btn = QPushButton("Load Results")
+        self._load_btn.setStyleSheet(theme.button_style('load'))
+        self._load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._load_btn.setToolTip("Load a previously generated TTL file")
         self._load_btn.clicked.connect(self._on_load_results)
         btn_layout.addWidget(self._load_btn)
@@ -167,6 +172,7 @@ class RdfPanel(QWidget):
         dlg_layout.addWidget(full_graph, stretch=1)
 
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(theme.button_style('ghost'))
         close_btn.clicked.connect(dialog.accept)
         dlg_layout.addWidget(close_btn)
 

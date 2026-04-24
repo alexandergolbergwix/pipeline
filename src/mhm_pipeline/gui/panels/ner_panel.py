@@ -56,6 +56,10 @@ class NerPanel(QWidget):
         super().__init__(parent)
         import os  # noqa: PLC0415
 
+        # Where to write approved NER results — set by MainWindow when the
+        # NER worker finishes, used by display_entities + Save.
+        self._last_output_path: Path | None = None
+
         layout = QVBoxLayout(self)
 
         # file selectors
@@ -103,6 +107,7 @@ class NerPanel(QWidget):
         models_row.addWidget(self._models_summary)
         models_row.addStretch()
         cfg_btn = QPushButton("Configure Models…")
+        cfg_btn.setStyleSheet(theme.button_style('config'))
         cfg_btn.setFixedWidth(150)
         cfg_btn.clicked.connect(self._open_models_dialog)
         models_row.addWidget(cfg_btn)
@@ -118,12 +123,16 @@ class NerPanel(QWidget):
         batch_layout.addStretch()
         layout.addLayout(batch_layout)
 
-        # run button
+        # run button (primary — main action on this panel)
         self._run_btn = QPushButton("Extract Named Entities")
+        self._run_btn.setStyleSheet(theme.button_style("primary"))
+        self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._run_btn.clicked.connect(self._on_run)
 
-        # load results button
+        # load results button (cyan — import existing file)
         self._load_btn = QPushButton("Load Results")
+        self._load_btn.setStyleSheet(theme.button_style("load"))
+        self._load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._load_btn.setToolTip("Load previously generated NER results JSON")
         self._load_btn.clicked.connect(self._on_load_results)
 
@@ -138,9 +147,9 @@ class NerPanel(QWidget):
 
         # ── Review banner (hidden until results load) ──────────────────
         self._review_banner = self._build_review_banner(
-            "⚠  AI extraction may contain errors — please review and correct "
-            "entities before continuing to the next stage.",
-            edit_btn_text="Edit Entities →",
+            "⚠  AI extraction may contain errors — review and approve each "
+            "entity before continuing to the next stage.",
+            edit_btn_text="Review & Edit →",
             on_edit=self._on_edit_entities_popup,
         )
         layout.addWidget(self._review_banner)
@@ -178,81 +187,147 @@ class NerPanel(QWidget):
         return "Models: " + "  ·  ".join(active) if active else "No models selected"
 
     def _open_models_dialog(self) -> None:
-        # Use dialog-local checkboxes to avoid Qt re-parenting the instance
-        # attributes to the dialog (which would delete them when the dialog closes).
+        """Open the model-configuration dialog using toggle switches.
+
+        Switches beat checkboxes for binary "enable this model" settings —
+        macOS HIG specifically recommends the switch control for on/off
+        state. Toggles here are bound live (no Done button needed): each
+        flip updates the underlying instance state immediately so the
+        summary strip at the top of the panel reflects changes in real
+        time.
+        """
+        from mhm_pipeline.gui.widgets.toggle_switch import ToggleSwitch  # noqa: PLC0415
+
         dlg = QDialog(self)
         dlg.setWindowTitle("NER Models")
-        dlg.setMinimumWidth(360)
+        dlg.setMinimumWidth(460)
         dlg_layout = QVBoxLayout(dlg)
-        dlg_layout.setSpacing(12)
-        dlg_layout.setContentsMargins(20, 16, 20, 16)
+        dlg_layout.setSpacing(theme.SPACE_MD)
+        dlg_layout.setContentsMargins(
+            theme.SPACE_XL, theme.SPACE_LG, theme.SPACE_XL, theme.SPACE_LG,
+        )
 
         info = QLabel("All models are bundled with the application.")
-        info.setStyleSheet(f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;")
+        info.setStyleSheet(
+            f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;"
+        )
         dlg_layout.addWidget(info)
 
-        # Create dialog-local copies — state is synced back on close
-        person_cb = QCheckBox("Person NER")
-        person_cb.setChecked(self._person_check.isChecked())
-        prov_cb = QCheckBox("Provenance NER")
-        prov_cb.setChecked(self._prov_check.isChecked())
-        cont_cb = QCheckBox("Contents NER")
-        cont_cb.setChecked(self._cont_check.isChecked())
-        marc500_cb = QCheckBox("Colophon ML ⚡")
-        marc500_cb.setChecked(self._marc500_check.isChecked())
-        genre_cb = QCheckBox("Genre ML ⚡")
-        genre_cb.setChecked(self._genre_check.isChecked())
-
-        def _row(check: QCheckBox, desc: str, tooltip: str) -> QHBoxLayout:
-            check.setToolTip(tooltip)
+        def _make_row(
+            title: str,
+            desc: str,
+            tooltip: str,
+            source_check: QCheckBox,
+        ) -> tuple[QHBoxLayout, "ToggleSwitch"]:
+            """Build one switch row bound to *source_check* (QCheckBox).
+            The switch mirrors the checkbox state bidirectionally, so the
+            existing summary / run-button logic keeps working unchanged.
+            """
             h = QHBoxLayout()
-            h.addWidget(check)
-            lbl = QLabel(desc)
-            lbl.setStyleSheet(f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;")
-            h.addWidget(lbl)
-            h.addStretch()
-            return h
+            h.setSpacing(theme.SPACE_MD)
 
-        dlg_layout.addLayout(_row(person_cb, "persons & roles",
-                                  "Extract persons + roles from notes and colophon"))
-        dlg_layout.addLayout(_row(prov_cb, "owners, dates, collections  (F1=95.9%)",
-                                  "Extract OWNER, DATE, COLLECTION from MARC 561"))
-        dlg_layout.addLayout(_row(cont_cb, "works, folios  (F1=99.99%)",
-                                  "Extract WORK, FOLIO, WORK_AUTHOR from MARC 505"))
-        dlg_layout.addLayout(_row(
-            marc500_cb,
-            "colophon detection  (F1=96.4%)" if self._marc500_check.isChecked() else "not found — keyword fallback",
+            # Fixed-width switch on the LEFT so titles + descriptions align
+            sw = ToggleSwitch()
+            sw.setChecked(source_check.isChecked())
+            sw.setToolTip(tooltip)
+            sw.toggled.connect(lambda checked: source_check.setChecked(checked))
+            source_check.toggled.connect(sw.setChecked)
+            h.addWidget(sw)
+
+            label_col = QVBoxLayout()
+            label_col.setSpacing(2)
+            title_lbl = QLabel(title)
+            title_lbl.setStyleSheet(
+                f"color: {theme.ui('text')}; font-size: {theme.FONT_BASE}px;"
+                f" font-weight: {theme.WEIGHT_SEMIBOLD};"
+            )
+            desc_lbl = QLabel(desc)
+            desc_lbl.setStyleSheet(
+                f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;"
+            )
+            desc_lbl.setWordWrap(True)
+            label_col.addWidget(title_lbl)
+            label_col.addWidget(desc_lbl)
+            h.addLayout(label_col, stretch=1)
+            return h, sw
+
+        person_row, _ = _make_row(
+            "Person NER",
+            "Persons & roles — extracted from notes and colophon",
+            "Extract persons + roles from notes and colophon",
+            self._person_check,
+        )
+        dlg_layout.addLayout(person_row)
+
+        prov_row, _ = _make_row(
+            "Provenance NER",
+            "Owners, dates, collections (F1 = 95.9%) — from MARC 561",
+            "Extract OWNER, DATE, COLLECTION from MARC 561",
+            self._prov_check,
+        )
+        dlg_layout.addLayout(prov_row)
+
+        cont_row, _ = _make_row(
+            "Contents NER",
+            "Works, folios (F1 = 99.99%) — from MARC 505",
+            "Extract WORK, FOLIO, WORK_AUTHOR from MARC 505",
+            self._cont_check,
+        )
+        dlg_layout.addLayout(cont_row)
+
+        marc500_desc = (
+            "Colophon sentences (F1 = 96.4%) — routed to P1684"
+            if self._marc500_check.isChecked()
+            else "Not found on disk — keyword fallback active"
+        )
+        m500_row, _ = _make_row(
+            "Colophon ML ⚡",
+            marc500_desc,
             "Detect colophon sentences in MARC 500 notes → P1684",
-        ))
+            self._marc500_check,
+        )
+        dlg_layout.addLayout(m500_row)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {theme.ui('border')};")
+        sep.setStyleSheet(
+            f"background: {theme.ui('border')};"
+            f" max-height: 1px; border: none; margin: {theme.SPACE_SM}px 0;"
+        )
         dlg_layout.addWidget(sep)
 
         stage3_lbl = QLabel("Stage 3 — RDF Building")
-        stage3_lbl.setStyleSheet(
-            f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px; font-weight: bold;"
-        )
+        stage3_lbl.setStyleSheet(theme.minicaps_label_style())
         dlg_layout.addWidget(stage3_lbl)
-        dlg_layout.addLayout(_row(
-            genre_cb,
-            "genre classification  (F1=88%)  — used for P136" if self._genre_check.isChecked() else "not found — MARC 655 only",
+
+        genre_desc = (
+            "Genre classification (F1 = 88%) — used for P136"
+            if self._genre_check.isChecked()
+            else "Not found on disk — MARC 655 only"
+        )
+        genre_row, _ = _make_row(
+            "Genre ML ⚡",
+            genre_desc,
             "Predict manuscript genre (P136) from title + MARC 500 notes",
-        ))
+            self._genre_check,
+        )
+        dlg_layout.addLayout(genre_row)
+
+        dlg_layout.addSpacing(theme.SPACE_MD)
 
         close_btn = QPushButton("Done")
+        close_btn.setStyleSheet(theme.button_style())
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(dlg.accept)
-        dlg_layout.addWidget(close_btn)
+        footer = QHBoxLayout()
+        footer.addStretch()
+        footer.addWidget(close_btn)
+        dlg_layout.addLayout(footer)
 
         dlg.exec()
 
-        # Sync dialog state back to instance attributes
-        self._person_check.setChecked(person_cb.isChecked())
-        self._prov_check.setChecked(prov_cb.isChecked())
-        self._cont_check.setChecked(cont_cb.isChecked())
-        self._marc500_check.setChecked(marc500_cb.isChecked())
-        self._genre_check.setChecked(genre_cb.isChecked())
+        # Switches are live-bound to the instance checkboxes, so nothing to
+        # sync here — just refresh the summary strip to reflect any toggles.
         self._models_summary.setText(self._build_models_summary())
 
     # ── Review banner helper ───────────────────────────────────────────
@@ -302,12 +377,19 @@ class NerPanel(QWidget):
 
     def _build_results_preview(self, parent_layout: QVBoxLayout) -> None:
         """Build the compact entity results preview section."""
-        preview_frame = QFrame()
-        preview_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        preview_frame.setStyleSheet(theme.frame_style())
+        # Physics-based glass panel — frost + specular bloom + Fresnel rim +
+        # cool body tint, painted via custom QPainter (see GlassPanel). The
+        # graph-theory wallpaper behind it gives the specular layer something
+        # to lens, which is what makes the glass read as actual glass rather
+        # than a flat translucent rectangle.
+        from mhm_pipeline.gui.widgets.glass_panel import GlassPanel  # noqa: PLC0415
+        preview_frame = GlassPanel(radius=theme.RADIUS_2XL, variant="regular")
+        theme.apply_drop_shadow(preview_frame, blur=28, offset_y=6)
         preview_layout = QVBoxLayout(preview_frame)
-        preview_layout.setContentsMargins(10, 8, 10, 8)
-        preview_layout.setSpacing(6)
+        preview_layout.setContentsMargins(
+            theme.SPACE_LG, theme.SPACE_MD, theme.SPACE_LG, theme.SPACE_MD,
+        )
+        preview_layout.setSpacing(theme.SPACE_SM)
 
         # Header row: title + "View All" button
         header = QHBoxLayout()
@@ -316,14 +398,11 @@ class NerPanel(QWidget):
         header.addWidget(self._preview_header)
         header.addStretch()
 
-        self._view_full_btn = QPushButton("View Results")
-        self._view_full_btn.setStyleSheet(theme.button_style())
-        self._view_full_btn.setEnabled(False)
-        self._view_full_btn.clicked.connect(self._on_view_full_results)
-        header.addWidget(self._view_full_btn)
-
-        self._edit_entities_btn = QPushButton("Edit Entities")
-        self._edit_entities_btn.setStyleSheet(theme.warning_btn_style())
+        # Edit Entities is now the sole interaction surface for NER results —
+        # the full-screen reader has been retired because the editor itself
+        # offers filtering, viewing source text, and per-row approval.
+        self._edit_entities_btn = QPushButton("Review & Edit Entities")
+        self._edit_entities_btn.setStyleSheet(theme.button_style())
         self._edit_entities_btn.setEnabled(False)
         self._edit_entities_btn.clicked.connect(self._on_edit_entities_popup)
         header.addWidget(self._edit_entities_btn)
@@ -348,7 +427,12 @@ class NerPanel(QWidget):
         self._setup_role_filter()
         preview_layout.addLayout(self._role_filter_layout)
 
-        parent_layout.addWidget(preview_frame)
+        # Wrap the preview frame in a scroll area so the filters + entity
+        # list never get clipped when the panel is narrow or when many
+        # source / type / role chips wrap to additional lines.
+        from mhm_pipeline.gui.widgets.flow_layout import make_scrollable  # noqa: PLC0415
+        scroll = make_scrollable(preview_frame, horizontal=True, vertical=True)
+        parent_layout.addWidget(scroll)
 
         # Hidden full highlighter — only used inside the popup
         self._entity_highlighter = EntityHighlighter()
@@ -363,7 +447,6 @@ class NerPanel(QWidget):
 
         if not entities:
             self._preview_header.setText("No NER results loaded")
-            self._view_full_btn.setEnabled(False)
             self._edit_entities_btn.setEnabled(False)
             self._more_label.hide()
             return
@@ -376,7 +459,6 @@ class NerPanel(QWidget):
             else f"Entities Found ({n_entities} entities)"
         )
         self._preview_header.setText(header)
-        self._view_full_btn.setEnabled(True)
         self._edit_entities_btn.setEnabled(True)
 
         # Show first N entities as preview
@@ -430,20 +512,20 @@ class NerPanel(QWidget):
         """Build a three-row filter panel: Sources, Entity Types, Person Roles."""
         # Free-standing QVBoxLayout — attached to a parent layout by caller
         self._role_filter_layout = QVBoxLayout()
-        self._role_filter_layout.setContentsMargins(0, 0, 0, 0)
-        self._role_filter_layout.setSpacing(4)
+        self._role_filter_layout.setContentsMargins(0, theme.SPACE_SM, 0, 0)
+        self._role_filter_layout.setSpacing(theme.SPACE_SM)
 
         self._source_checkboxes: dict[str, QCheckBox] = {}
         self._type_checkboxes: dict[str, QCheckBox] = {}
         self._role_checkboxes: dict[str, QCheckBox] = {}
 
-        self._source_row = self._build_filter_row("Sources:", self._source_checkboxes,
+        self._source_row = self._build_filter_row("Sources", self._source_checkboxes,
                                                   on_all=self._on_all_sources,
                                                   on_none=self._on_none_sources)
-        self._type_row = self._build_filter_row("Types:", self._type_checkboxes,
+        self._type_row = self._build_filter_row("Types", self._type_checkboxes,
                                                 on_all=self._on_all_types,
                                                 on_none=self._on_none_types)
-        self._role_row = self._build_filter_row("Roles:", self._role_checkboxes,
+        self._role_row = self._build_filter_row("Roles", self._role_checkboxes,
                                                 on_all=self._on_all_roles,
                                                 on_none=self._on_none_roles)
         self._role_filter_layout.addLayout(self._source_row)
@@ -462,31 +544,54 @@ class NerPanel(QWidget):
         on_all: object,
         on_none: object,
     ) -> QHBoxLayout:
-        """Build a single filter row (label + checkboxes area + All/None buttons)."""
+        """Build a single filter row (label + wrapping chip area + All/None).
+
+        The chip area uses ``FlowLayout`` so a long list of filters wraps to
+        the next line instead of overflowing the window width. The outer row
+        uses a top-aligned QHBoxLayout so the mini-label and action buttons
+        stay on the first line even after wrapping.
+        """
+        from mhm_pipeline.gui.widgets.flow_layout import FlowLayout  # noqa: PLC0415
+
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(theme.SPACE_MD)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         lbl = QLabel(label_text)
-        lbl.setFixedWidth(65)
-        lbl.setStyleSheet(f"font-weight: bold; font-size: {theme.FONT_SM}px;")
-        row.addWidget(lbl)
+        lbl.setFixedWidth(64)
+        lbl.setStyleSheet(theme.minicaps_label_style())
+        # Align label with the first chip row
+        lbl.setContentsMargins(0, 4, 0, 0)
+        row.addWidget(lbl, alignment=Qt.AlignmentFlag.AlignTop)
 
-        # Dedicated stretch holder for the dynamic checkboxes
-        boxes_layout = QHBoxLayout()
-        boxes_layout.setSpacing(6)
-        row.addLayout(boxes_layout, stretch=1)
+        # FlowLayout = chips wrap to new lines when the row runs out of width.
+        # Hosted inside a plain QWidget so it participates in QHBoxLayout.
+        from PyQt6.QtWidgets import QWidget as _Widget  # noqa: PLC0415
+        chip_host = _Widget()
+        chip_host.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        flow = FlowLayout(chip_host, margin=0,
+                          h_spacing=theme.SPACE_SM,
+                          v_spacing=theme.SPACE_SM)
+        chip_host.setLayout(flow)
+        row.addWidget(chip_host, stretch=1)
 
-        # Store the layout so we can add checkboxes later
-        boxes_dict["__layout__"] = boxes_layout  # type: ignore[assignment]
+        # Keep the same sentinel so existing callers (setChecked loops,
+        # _collect_selected) still work — expose the FlowLayout here.
+        boxes_dict["__layout__"] = flow  # type: ignore[assignment]
 
+        ghost = theme.ghost_button_style()
         all_btn = QPushButton("All")
-        all_btn.setFixedWidth(44)
+        all_btn.setFixedWidth(46)
+        all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        all_btn.setStyleSheet(ghost)
         all_btn.setToolTip(f"Select all {label_text.lower().rstrip(':')}")
         all_btn.clicked.connect(on_all)  # type: ignore[arg-type]
         row.addWidget(all_btn)
 
         none_btn = QPushButton("None")
-        none_btn.setFixedWidth(54)
+        none_btn.setFixedWidth(56)
+        none_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        none_btn.setStyleSheet(ghost)
         none_btn.setToolTip(f"Clear all {label_text.lower().rstrip(':')}")
         none_btn.clicked.connect(on_none)  # type: ignore[arg-type]
         row.addWidget(none_btn)
@@ -498,7 +603,13 @@ class NerPanel(QWidget):
         values: list[str],
         label_for: dict[str, str] | None = None,
     ) -> None:
-        """Rebuild checkboxes in-place for a filter row based on *values*."""
+        """Rebuild toggle-chip buttons in-place for a filter row.
+
+        Chip pattern (Linear/Notion/Raycast) replaces ``QCheckBox`` to avoid
+        the indicator-to-text spacing glitch in dense rows. Each chip is a
+        pill-shaped ``QPushButton(checkable=True)`` whose ``isChecked()`` API
+        is identical to a ``QCheckBox`` so existing callers work unchanged.
+        """
         layout = boxes_dict.get("__layout__")  # type: ignore[assignment]
         # Remove old (non-layout) entries
         for key in list(boxes_dict.keys()):
@@ -511,13 +622,17 @@ class NerPanel(QWidget):
 
         if layout is None:
             return
+        chip_qss = theme.filter_chip_style()
         for v in values:
             label = (label_for or {}).get(v, v.replace("_", " ").title())
-            cb = QCheckBox(label)
-            cb.setChecked(True)
-            cb.stateChanged.connect(self._on_filter_changed)
-            boxes_dict[v] = cb
-            layout.addWidget(cb)
+            chip = QPushButton(label)
+            chip.setCheckable(True)
+            chip.setChecked(True)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setStyleSheet(chip_qss)
+            chip.toggled.connect(lambda _checked: self._on_filter_changed())
+            boxes_dict[v] = chip  # type: ignore[assignment]
+            layout.addWidget(chip)
 
     def _update_role_filter_checkboxes(self) -> None:
         """Populate all three filter rows from the current entity set."""
@@ -550,15 +665,19 @@ class NerPanel(QWidget):
 
         ``target`` must implement ``get_all_sources()``, ``get_all_types()``,
         ``get_all_roles()`` and ``apply_filters(sources, types, roles)``.
+        Uses the same toggle-chip pattern as the inline preview filter.
         """
         container_layout = QVBoxLayout()
-        container_layout.setSpacing(4)
+        container_layout.setContentsMargins(0, theme.SPACE_SM, 0, 0)
+        container_layout.setSpacing(theme.SPACE_SM)
 
         boxes = {
             "source": {},  # type: ignore[var-annotated]
             "type": {},
             "role": {},
         }
+        chip_qss = theme.filter_chip_style()
+        ghost_qss = theme.ghost_button_style()
 
         def apply() -> None:
             sel = {dim: {k for k, cb in boxes[dim].items() if cb.isChecked()} for dim in boxes}
@@ -566,35 +685,60 @@ class NerPanel(QWidget):
 
         def build_row(label_text: str, values: list[str], dim: str,
                       label_for: dict[str, str] | None = None) -> QHBoxLayout:
+            from mhm_pipeline.gui.widgets.flow_layout import FlowLayout  # noqa: PLC0415
+            from PyQt6.QtWidgets import QWidget as _Widget  # noqa: PLC0415
+
             row = QHBoxLayout()
-            row.setSpacing(6)
+            row.setSpacing(theme.SPACE_MD)
+            row.setAlignment(Qt.AlignmentFlag.AlignTop)
+
             lbl = QLabel(label_text)
-            lbl.setFixedWidth(65)
-            lbl.setStyleSheet(f"font-weight: bold; font-size: {theme.FONT_SM}px;")
-            row.addWidget(lbl)
+            lbl.setFixedWidth(64)
+            lbl.setStyleSheet(theme.minicaps_label_style())
+            lbl.setContentsMargins(0, 4, 0, 0)
+            row.addWidget(lbl, alignment=Qt.AlignmentFlag.AlignTop)
+
+            chip_host = _Widget()
+            chip_host.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            chip_layout = FlowLayout(chip_host, margin=0,
+                                     h_spacing=theme.SPACE_SM,
+                                     v_spacing=theme.SPACE_SM)
+            chip_host.setLayout(chip_layout)
+            row.addWidget(chip_host, stretch=1)
+
             for v in values:
                 display = (label_for or {}).get(v, v.replace("_", " ").title())
-                cb = QCheckBox(display)
-                cb.setChecked(True)
-                cb.stateChanged.connect(apply)
-                boxes[dim][v] = cb
-                row.addWidget(cb)
-            row.addStretch()
+                chip = QPushButton(display)
+                chip.setCheckable(True)
+                chip.setChecked(True)
+                chip.setCursor(Qt.CursorShape.PointingHandCursor)
+                chip.setStyleSheet(chip_qss)
+                chip.toggled.connect(lambda _checked: apply())
+                boxes[dim][v] = chip
+                chip_layout.addWidget(chip)
 
             all_btn = QPushButton("All")
-            all_btn.setFixedWidth(44)
-            all_btn.clicked.connect(lambda: [c.setChecked(True) for c in boxes[dim].values()])
+            all_btn.setFixedWidth(46)
+            all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            all_btn.setStyleSheet(ghost_qss)
+            all_btn.clicked.connect(
+                lambda: [c.setChecked(True) for c in boxes[dim].values()]
+            )
             row.addWidget(all_btn)
             none_btn = QPushButton("None")
-            none_btn.setFixedWidth(54)
-            none_btn.clicked.connect(lambda: [c.setChecked(False) for c in boxes[dim].values()])
+            none_btn.setFixedWidth(56)
+            none_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            none_btn.setStyleSheet(ghost_qss)
+            none_btn.clicked.connect(
+                lambda: [c.setChecked(False) for c in boxes[dim].values()]
+            )
             row.addWidget(none_btn)
             return row
 
-        container_layout.addLayout(build_row("Sources:", target.get_all_sources(),
+        container_layout.addLayout(build_row("Sources", target.get_all_sources(),
                                              "source", self._SOURCE_LABELS))
-        container_layout.addLayout(build_row("Types:", target.get_all_types(), "type"))
-        container_layout.addLayout(build_row("Roles:", target.get_all_roles(), "role"))
+        container_layout.addLayout(build_row("Types", target.get_all_types(), "type"))
+        container_layout.addLayout(build_row("Roles", target.get_all_roles(), "role"))
         return container_layout
 
     def _on_all_sources(self) -> None:
@@ -664,6 +808,10 @@ class NerPanel(QWidget):
             enabled.append("Provenance")
         if self._cont_check.isChecked():
             enabled.append("Contents")
+        if self._marc500_check.isChecked():
+            enabled.append("Colophon ML")
+        if self._genre_check.isChecked():
+            enabled.append("Genre ML (Stage 3)")
         self._log_viewer.append_line(f"Running NER models: {', '.join(enabled)}")
 
         self.run_requested.emit(
@@ -693,7 +841,7 @@ class NerPanel(QWidget):
             with open(path, encoding="utf-8") as f:
                 results = json.load(f)
 
-            self._store_results(results, output_path=path)
+            self._store_results(results, output_path=path, auto_review=True)
             total_entities = len(self._current_entities)
             n_records = len(self._current_records)
             self._log_viewer.append_line(
@@ -704,8 +852,24 @@ class NerPanel(QWidget):
             self._log_viewer.append_line(f"Error loading results: {e}")
             QMessageBox.critical(self, "Load Error", str(e))
 
-    def _store_results(self, results: object, output_path: Path | None = None) -> None:
-        """Parse raw JSON results, store them, and refresh both tabs."""
+    def _store_results(
+        self,
+        results: object,
+        output_path: Path | None = None,
+        *,
+        auto_review: bool = False,
+    ) -> None:
+        """Parse raw JSON results, store them, and refresh both tabs.
+
+        Args:
+            results: The NER result records (list of dicts).
+            output_path: Destination path for Save; retained by the editor.
+            auto_review: If True, open the Review & Edit dialog straight
+                after loading. Used right after NER extraction finishes and
+                after the user clicks "Load Results" — approval is a
+                mandatory step in the pipeline flow, so we nudge the user
+                to it rather than leaving them on the compact preview.
+        """
         if isinstance(results, list):
             records = results
         elif isinstance(results, dict) and "records" in results:
@@ -725,6 +889,12 @@ class NerPanel(QWidget):
         self._update_preview()
         self._update_role_filter_checkboxes()
 
+        if auto_review and self._current_entities:
+            # Open the review dialog after the current event loop tick so
+            # the underlying panel has finished laying out first.
+            from PyQt6.QtCore import QTimer  # noqa: PLC0415
+            QTimer.singleShot(100, self._on_edit_entities_popup)
+
     def display_entities(
         self,
         text: str,
@@ -732,6 +902,10 @@ class NerPanel(QWidget):
         records: list[dict] | None = None,
     ) -> None:
         """Display extracted entities in the preview.
+
+        Called by ``MainWindow`` after the NER worker finishes. Auto-opens
+        the Review & Edit dialog because approval is a mandatory gate
+        before downstream stages.
 
         Args:
             text: The original note text.
@@ -741,6 +915,8 @@ class NerPanel(QWidget):
         if records:
             self._entity_highlighter.display_records(records)
             self._current_entities = self._entity_highlighter.get_entities()
+            # Also hydrate the editable model so a review-dialog open is ready
+            self._extraction_editor.load_records(records, self._last_output_path)
         else:
             self._entity_highlighter.load_entities(text, entities)
             self._current_entities = entities
@@ -749,54 +925,9 @@ class NerPanel(QWidget):
         self._update_preview()
         self._update_role_filter_checkboxes()
 
-    def _on_view_full_results(self) -> None:
-        """Open a full-screen dialog showing all NER results."""
-        if not getattr(self, "_current_entities", None):
-            QMessageBox.information(
-                self,
-                "No Results",
-                "No NER results to display. run NER Extraction or load results first.",
-            )
-            return
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle(
-            f"NER Results — {len(self._current_records)} records, "
-            f"{len(self._current_entities)} entities"
-        )
-
-        # Full-screen dialog
-        screen = self.screen()
-        if screen:
-            geom = screen.availableGeometry()
-            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
-        else:
-            dialog.resize(1200, 800)
-
-        dlg_layout = QVBoxLayout(dialog)
-
-        # Full entity highlighter
-        full_view = EntityHighlighter()
-        if self._current_records:
-            full_view.display_records(self._current_records)
-        else:
-            full_view.load_entities(
-                getattr(self, "_current_text", ""),
-                self._current_entities,
-            )
-        dlg_layout.addWidget(full_view, stretch=1)
-
-        # 3-row filter inside popup (Sources · Types · Roles)
-        filter_panel = self._build_popup_filter_panel(full_view)
-        dlg_layout.addLayout(filter_panel)
-
-        # Close button
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("QPushButton { padding: 6px 24px; font-size: 13px; }")
-        close_btn.clicked.connect(dialog.accept)
-        dlg_layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
-
-        dialog.exec()
+        if self._current_entities:
+            from PyQt6.QtCore import QTimer  # noqa: PLC0415
+            QTimer.singleShot(150, self._on_edit_entities_popup)
 
     def _on_edit_entities_popup(self) -> None:
         """Open the ExtractionEditor in a full-screen dialog."""
@@ -830,13 +961,18 @@ class NerPanel(QWidget):
         self._extraction_editor.show()
         dlg_layout.addWidget(self._extraction_editor, stretch=1)
 
-        # Filter panel bound to the editor
+        # Filter panel bound to the editor, wrapped for overflow safety
+        from mhm_pipeline.gui.widgets.flow_layout import make_scrollable  # noqa: PLC0415
         filter_panel = self._build_popup_filter_panel(self._extraction_editor)
         filter_container = QFrame()
         filter_container.setFrameShape(QFrame.Shape.NoFrame)
         filter_container.setLayout(filter_panel)
-        filter_container.setContentsMargins(12, 8, 12, 8)
-        dlg_layout.addWidget(filter_container)
+        filter_container.setContentsMargins(
+            theme.SPACE_LG, theme.SPACE_SM, theme.SPACE_LG, theme.SPACE_SM,
+        )
+        filter_scroll = make_scrollable(filter_container, horizontal=False, vertical=True)
+        filter_scroll.setMaximumHeight(160)
+        dlg_layout.addWidget(filter_scroll)
 
         close_bar = QHBoxLayout()
         close_bar.setContentsMargins(8, 6, 8, 6)

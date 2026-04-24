@@ -557,14 +557,27 @@ class WikidataItemBuilder:
         """
         self._person_items: dict[str, WikidataItem] = {}
         self._person_qids: dict[str, str] = {}  # person_key -> resolved Wikidata QID
+        # Persons that the notability gate or role-descriptor gate rejected.
+        # Their stub WikidataItems are NOT added to _person_items (so they do
+        # not flow into build_all's output as empty shells) but we still need
+        # to remember the key to avoid re-logging the same warning every time
+        # the same MARC 100/700 entry is referenced.
+        self._skipped_person_keys: set[str] = set()
+        self._skipped_person_stubs: dict[str, WikidataItem] = {}
         self._work_items: dict[str, WikidataItem] = {}
         self._manuscript_items: list[WikidataItem] = []
         self._reconciler = reconciler
 
     def build_manuscript_item(self, record: dict[str, object]) -> WikidataItem:
         """Build a Wikidata item for a single manuscript record."""
-        control_number = str(record.get("_control_number", ""))
-        title = str(record.get("title", "")).strip().rstrip(". ")
+        control_number = str(record.get("_control_number", "") or "")
+        # Explicit ``or ""`` before ``str(...)``: when the record contains an
+        # explicit ``title: None`` (rather than the key being absent),
+        # ``record.get("title", "")`` returns ``None``, and ``str(None)`` is
+        # the four-character string ``"None"`` — which was ending up in the
+        # Hebrew label slot and triggering HE_LABEL_IS_LATIN on the validator.
+        # Discovered 2026-04-24 via six-NER triage (record 990001330520205171).
+        title = str(record.get("title") or "").strip().rstrip(" .,;:/-")
         ref = nli_reference(control_number)
 
         item = WikidataItem(entity_type="manuscript", local_id=control_number)
@@ -623,15 +636,24 @@ class WikidataItemBuilder:
                     references=ref,
                 )
             )
+        # P8189 (NLI J9U ID) is an AUTHORITY-record identifier — only values
+        # with the '9870…' prefix are valid. Manuscript control numbers are
+        # bibliographic (prefix '990…'), which do NOT belong on P8189.
+        # (Rule 25 bug #2, reinforced by 2026-04-24 six-NER triage where 100/100
+        # manuscripts were being blocked by the validator for exactly this.)
         if control_number:
-            item.statements.append(
-                WikidataStatement(
-                    property_id=P_NLI_J9U_ID,
-                    value=nli_j9u_id(control_number),
-                    value_type="external-id",
-                    references=ref,
+            j9u = nli_j9u_id(control_number)
+            if j9u.startswith("9870"):
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_NLI_J9U_ID,
+                        value=j9u,
+                        value_type="external-id",
+                        references=ref,
+                    )
                 )
-            )
+            # Otherwise the bibliographic control number is already captured
+            # in P217 (inventory number, added above with P195 qualifier).
         if title:
             item.statements.append(
                 WikidataStatement(
@@ -1760,20 +1782,27 @@ class WikidataItemBuilder:
         key = _person_key(name, viaf_uri, mazal_id)
         if key in self._person_items:
             return self._person_items[key]
+        if key in self._skipped_person_keys:
+            # Same skip decision already made; return the cached stub so
+            # callers can still inspect .labels==() to route to P2093,
+            # but don't re-emit the warning.
+            return self._skipped_person_stubs[key]
 
         person = WikidataItem(entity_type="person", local_id=key)
 
         # Clean name: strip surrounding quotes and trailing punctuation from MARC
         clean_name = name.strip().strip('"\'').strip().rstrip(",;:")
         if not clean_name or len(clean_name) < 2:
-            # Skip creating items with incomplete/empty names
-            self._person_items[key] = person
+            # Stub, but do NOT add to _person_items — see _skipped_person_keys
+            self._skipped_person_keys.add(key)
+            self._skipped_person_stubs[key] = person
             return person
 
         # Fix 2026-04-15 third audit Fix #5: skip generic anonymous placeholders.
         if _is_anonymous_name(clean_name):
             logger.warning("Skipping anonymous/placeholder person name: %r", clean_name)
-            self._person_items[key] = person
+            self._skipped_person_keys.add(key)
+            self._skipped_person_stubs[key] = person
             return person
 
         # Skip names that are role-descriptors or bare place-names — these are
@@ -1785,7 +1814,8 @@ class WikidataItemBuilder:
                 "Skipping role-descriptor/place-name used as person identifier: %r",
                 clean_name,
             )
-            self._person_items[key] = person
+            self._skipped_person_keys.add(key)
+            self._skipped_person_stubs[key] = person
             return person
 
         # Fix 2026-04-15 third audit Fix #4: Wikidata:Notability requires person
@@ -1816,7 +1846,12 @@ class WikidataItemBuilder:
                 "Callers should use P2093 (author name string) instead.",
                 clean_name,
             )
-            self._person_items[key] = person
+            # Return the stub (so the caller's `if not person_item.labels`
+            # branch fires and routes to P2093) but do NOT persist it in
+            # ``_person_items`` — otherwise 251 empty-label items surface in
+            # build_all's output and get rejected as NO_IDENTIFIER/EMPTY_LABEL.
+            self._skipped_person_keys.add(key)
+            self._skipped_person_stubs[key] = person
             return person
 
         # Label-based deduplication: search Wikidata for an existing human with
@@ -2131,6 +2166,12 @@ class WikidataItemBuilder:
         source_record: dict[str, object],
     ) -> WikidataItem:
         """Get existing or create new work item for a Hebrew manuscript work."""
+        # Strip trailing MARC ISBD punctuation (", ;", " :", " .", " /") BEFORE
+        # the title is used for deduplication keys, labels, and reconciler
+        # queries. Rule 33 handled P1476 and manuscript labels; this extends
+        # the same hygiene to work items. Discovered 2026-04-24 via validator
+        # error on 'פרושי תפלה מלוקטים (קטעים) :'.
+        title = title.strip().rstrip(" .,;:/-")
         key = _work_key(title)
         if key in self._work_items:
             return self._work_items[key]
@@ -2270,6 +2311,8 @@ class WikidataItemBuilder:
         """
         self._person_items.clear()
         self._person_qids.clear()
+        self._skipped_person_keys.clear()
+        self._skipped_person_stubs.clear()
         self._work_items.clear()
         self._manuscript_items.clear()
         total = len(records)

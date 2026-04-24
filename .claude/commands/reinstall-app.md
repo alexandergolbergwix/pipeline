@@ -9,6 +9,7 @@ This should be run after code modifications to ensure the installed app reflects
 - GUI panels (`src/mhm_pipeline/gui/panels/`)
 - Main window or app entry point
 - Any code that affects the user interface
+- `src/mhm_pipeline/gui/theme.py` (design system — color/spacing/font tokens)
 
 **ALSO run after:**
 - Adding new Python files to the project
@@ -71,6 +72,29 @@ PYTHONPATH=src:. .venv/bin/python -m pytest tests/ -q --tb=short \
 ```
 
 If any test fails, a panel's `stage_progress` widget is missing `set_progress()`. This WILL crash the app when any stage runs.
+
+### 4b. **Liquid-glass dialog contract** (CLAUDE.md Rule 37)
+
+Every new or modified dialog must use `GlassDialog` (from `src/mhm_pipeline/gui/widgets/glass_dialog.py`) OR call `install_glass_backdrop(self)` in its `__init__`. If a bare `QDialog` is instantiated without the backdrop, the popup sits on a flat fill and breaks visual continuity with the main window.
+
+Quick audit when modifying a GUI file:
+
+```bash
+PYTHONPATH=src:. .venv/bin/python - <<'EOF'
+import re, pathlib
+bad = []
+for p in pathlib.Path("src/mhm_pipeline/gui").rglob("*.py"):
+    t = p.read_text()
+    # Dialog subclasses that inherit QDialog directly AND never call install_glass_backdrop
+    for m in re.finditer(r"class\s+(\w+)\(QDialog\)", t):
+        cls = m.group(1)
+        if cls == "GlassDialog":
+            continue
+        if "install_glass_backdrop" not in t and "GlassDialog" not in t:
+            bad.append(f"{p}::{cls}")
+print("\n".join(bad) or "All dialogs inherit glass backdrop ✓")
+EOF
+```
 
 ### 5. **Verify KIMA Index Exists** ⚠️ SILENT FAILURE
 

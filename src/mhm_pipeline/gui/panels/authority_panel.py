@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.authority_matcher_view import (
     AuthorityMatch,
     AuthorityMatcherView,
@@ -75,6 +76,8 @@ class AuthorityPanel(QWidget):
         # ── Authority sources button ─────────────────────────────────
         sources_btn_layout = QHBoxLayout()
         self._sources_btn = QPushButton("⚙️ Authority Sources")
+        self._sources_btn.setStyleSheet(theme.button_style("config"))
+        self._sources_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sources_btn.setToolTip("Click to configure authority matching sources")
         self._sources_btn.clicked.connect(self._on_sources_clicked)
         sources_btn_layout.addWidget(self._sources_btn)
@@ -102,6 +105,8 @@ class AuthorityPanel(QWidget):
             self._xml_dir_selector.path = default_xml_dir
 
         self._rebuild_mazal_btn = QPushButton("Rebuild Mazal Index…")
+        self._rebuild_mazal_btn.setStyleSheet(theme.button_style("warning"))
+        self._rebuild_mazal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._rebuild_mazal_btn.setToolTip(
             "Re-parse all NLIAUT*.xml files in the XML Dir and write a fresh SQLite index."
         )
@@ -133,6 +138,8 @@ class AuthorityPanel(QWidget):
             self._kima_tsv_selector.path = default_kima_tsv
 
         self._rebuild_kima_btn = QPushButton("Rebuild KIMA Index…")
+        self._rebuild_kima_btn.setStyleSheet(theme.button_style("warning"))
+        self._rebuild_kima_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._rebuild_kima_btn.setToolTip(
             "Parse the KIMA TSV files and build a fresh SQLite place authority index."
         )
@@ -146,6 +153,8 @@ class AuthorityPanel(QWidget):
         # ── Run button ─────────────────────────────────────────────────
         self._run_btn = QPushButton("Match Authorities")
         self._run_btn.clicked.connect(self._on_run)
+        self._run_btn.setStyleSheet(theme.button_style())
+        self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self._run_btn)
 
         # Progress bar
@@ -159,18 +168,30 @@ class AuthorityPanel(QWidget):
         )
         layout.addWidget(self._review_banner)
 
-        # ── Authority matcher view ────────────────────────────────────
-        # Results header with expand button
+        # ── Authority matcher view + Review & Edit launcher ─────────────
+        # The read-only matcher view stays for the compact in-panel preview,
+        # while the new AuthorityEditor is opened in a full-screen dialog
+        # via "Review & Edit Matches" — same interaction model as NER.
         results_header = QHBoxLayout()
-        results_header.addWidget(QWidget())  # Spacer placeholder
-        self._view_full_btn = QPushButton("View Full Results →")
-        self._view_full_btn.setToolTip("Open results in a larger window")
-        self._view_full_btn.clicked.connect(self._on_view_full_results)
-        results_header.addWidget(self._view_full_btn)
+        results_header.addStretch()
+        self._review_edit_btn = QPushButton("Review & Edit Matches")
+        self._review_edit_btn.setStyleSheet(theme.button_style("primary"))
+        self._review_edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._review_edit_btn.setEnabled(False)
+        self._review_edit_btn.clicked.connect(self._on_review_matches)
+        results_header.addWidget(self._review_edit_btn)
         layout.addLayout(results_header)
 
         self._matcher_view = AuthorityMatcherView()
         layout.addWidget(self._matcher_view, stretch=2)
+
+        # Off-screen editor that the review dialog re-parents temporarily
+        from mhm_pipeline.gui.widgets.authority_editor import AuthorityEditor  # noqa: PLC0415
+        self._authority_editor = AuthorityEditor()
+        self._authority_editor.hide()
+
+        # Remember the output path so the editor can persist approved matches
+        self._last_output_path: Path | None = None
 
         # ── Log viewer ─────────────────────────────────────────────────
         self._log_viewer = LogViewer()
@@ -225,44 +246,98 @@ class AuthorityPanel(QWidget):
     # ── Slots ─────────────────────────────────────────────────────────
 
     def _on_sources_clicked(self) -> None:
-        """Open a dialog to configure authority sources."""
+        """Open a dialog to configure authority sources.
+
+        Uses the shared ``ToggleSwitch`` widget instead of ``QCheckBox``:
+        switches paint a pill-shaped track with an animated knob and
+        reliably reflect their state (the old checkboxes were rendered
+        invisible by a QSS parsing issue with the SVG check glyph). This
+        matches the Configure Models dialog pattern for consistency.
+        """
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.toggle_switch import ToggleSwitch  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Authority Sources")
-        dialog.setMinimumWidth(350)
+        dialog.setMinimumWidth(420)
 
         layout = QVBoxLayout(dialog)
-
-        # Checkboxes
-        viaf_cb = QCheckBox("Enable VIAF (person names)")
-        viaf_cb.setChecked(self._viaf_enabled)
-        viaf_cb.setToolTip("Virtual International Authority File - person names")
-
-        mazal_cb = QCheckBox("Enable Mazal (NLI person names)")
-        mazal_cb.setChecked(self._mazal_enabled)
-        mazal_cb.setToolTip("Mazal — National Library of Israel authority records")
-
-        kima_cb = QCheckBox("Enable KIMA (Hebrew historical place names)")
-        kima_cb.setChecked(self._kima_enabled)
-        kima_cb.setToolTip(
-            "KIMA — an open, attestation-based database of historical place names "
-            "in the Hebrew script."
+        layout.setContentsMargins(
+            theme.SPACE_XL, theme.SPACE_LG, theme.SPACE_XL, theme.SPACE_LG,
         )
+        layout.setSpacing(theme.SPACE_MD)
 
-        layout.addWidget(viaf_cb)
-        layout.addWidget(mazal_cb)
-        layout.addWidget(kima_cb)
-        layout.addSpacing(10)
+        def _make_row(
+            title: str, desc: str, checked: bool, tooltip: str,
+        ) -> tuple[QHBoxLayout, "ToggleSwitch"]:
+            row = QHBoxLayout()
+            row.setSpacing(theme.SPACE_MD)
 
-        # Info label
+            sw = ToggleSwitch()
+            sw.setChecked(checked)
+            sw.setToolTip(tooltip)
+            row.addWidget(sw)
+
+            label_col = QVBoxLayout()
+            label_col.setSpacing(2)
+            title_lbl = QLabel(title)
+            title_lbl.setStyleSheet(
+                f"color: {theme.ui('text')};"
+                f" font-size: {theme.FONT_BASE}px;"
+                f" font-weight: {theme.WEIGHT_SEMIBOLD};"
+            )
+            desc_lbl = QLabel(desc)
+            desc_lbl.setStyleSheet(
+                f"color: {theme.ui('subtext')};"
+                f" font-size: {theme.FONT_SM}px;"
+            )
+            desc_lbl.setWordWrap(True)
+            label_col.addWidget(title_lbl)
+            label_col.addWidget(desc_lbl)
+            row.addLayout(label_col, stretch=1)
+            return row, sw
+
+        viaf_row, viaf_sw = _make_row(
+            "VIAF",
+            "Virtual International Authority File — person names",
+            self._viaf_enabled,
+            "Virtual International Authority File - person names",
+        )
+        layout.addLayout(viaf_row)
+
+        mazal_row, mazal_sw = _make_row(
+            "Mazal (NLI)",
+            "National Library of Israel authority records — person names",
+            self._mazal_enabled,
+            "Mazal — National Library of Israel authority records",
+        )
+        layout.addLayout(mazal_row)
+
+        kima_row, kima_sw = _make_row(
+            "KIMA",
+            "Open, attestation-based database of historical Hebrew-script place names",
+            self._kima_enabled,
+            "KIMA — an open, attestation-based database of historical place "
+            "names in the Hebrew script.",
+        )
+        layout.addLayout(kima_row)
+
+        layout.addSpacing(theme.SPACE_SM)
         info_label = QLabel("Select which authority sources to use for matching.")
-        info_label.setStyleSheet("color: gray; font-size: 11px;")
+        info_label.setStyleSheet(
+            f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;"
+        )
         layout.addWidget(info_label)
 
-        # Buttons
         btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet(theme.ghost_button_style())
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel_btn.clicked.connect(dialog.reject)
         ok_btn = QPushButton("OK")
+        ok_btn.setStyleSheet(theme.button_style())
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         ok_btn.setDefault(True)
         ok_btn.clicked.connect(dialog.accept)
         btn_layout.addWidget(cancel_btn)
@@ -270,9 +345,9 @@ class AuthorityPanel(QWidget):
         layout.addLayout(btn_layout)
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._viaf_enabled = viaf_cb.isChecked()
-            self._mazal_enabled = mazal_cb.isChecked()
-            self._kima_enabled = kima_cb.isChecked()
+            self._viaf_enabled = viaf_sw.isChecked()
+            self._mazal_enabled = mazal_sw.isChecked()
+            self._kima_enabled = kima_sw.isChecked()
             self._sync_group_boxes_with_sources()
 
     def _sync_group_boxes_with_sources(self) -> None:
@@ -389,6 +464,79 @@ class AuthorityPanel(QWidget):
         """
         self._matcher_view.set_match_data(matches)
         self._current_matches = matches
+        self._review_edit_btn.setEnabled(bool(matches))
+
+    def load_authority_output(
+        self,
+        records: list[dict],
+        output_path: Path | None = None,
+        *,
+        auto_review: bool = False,
+    ) -> None:
+        """Hydrate the AuthorityEditor from a full authority_enriched.json.
+
+        Called by MainWindow after the AuthorityWorker finishes and
+        whenever the user clicks Load Results. ``auto_review=True`` opens
+        the Review & Edit Matches dialog automatically — matching NER.
+        """
+        self._last_output_path = output_path
+        self._authority_editor.load_records(records, output_path)
+        self._review_edit_btn.setEnabled(bool(records))
+        if auto_review and records:
+            from PyQt6.QtCore import QTimer  # noqa: PLC0415
+            QTimer.singleShot(150, self._on_review_matches)
+
+    def _on_review_matches(self) -> None:
+        """Open the AuthorityEditor in a full-screen modal dialog."""
+        if (
+            not self._authority_editor._model._rows
+            and not getattr(self, "_current_matches", None)
+        ):
+            QMessageBox.information(
+                self, "No matches",
+                "No authority matches to review. Run matching or load results first.",
+            )
+            return
+
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            f"Review & Edit Authority Matches"
+            f" — {self._authority_editor._model.rowCount()} matches"
+        )
+        screen = self.screen()
+        if screen:
+            geom = screen.availableGeometry()
+            dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
+        else:
+            dialog.resize(1200, 800)
+
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.setContentsMargins(0, 0, 0, 0)
+        dlg_layout.setSpacing(0)
+
+        self._authority_editor.setParent(dialog)
+        self._authority_editor.show()
+        dlg_layout.addWidget(self._authority_editor, stretch=1)
+
+        close_bar = QHBoxLayout()
+        close_bar.setContentsMargins(
+            theme.SPACE_MD, theme.SPACE_SM, theme.SPACE_MD, theme.SPACE_SM,
+        )
+        close_bar.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(theme.button_style())
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.clicked.connect(dialog.accept)
+        close_bar.addWidget(close_btn)
+        dlg_layout.addLayout(close_bar)
+
+        dialog.exec()
+
+        # Re-parent editor back so next open works
+        self._authority_editor.setParent(self)
+        self._authority_editor.hide()
 
     def _on_mazal_group_toggled(self, checked: bool) -> None:
         """Handle Mazal group box toggle - update arrow and stored value."""
@@ -430,6 +578,7 @@ class AuthorityPanel(QWidget):
 
         # Close button
         close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(theme.button_style('ghost'))
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
 

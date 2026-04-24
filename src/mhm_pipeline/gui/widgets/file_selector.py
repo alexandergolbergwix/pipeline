@@ -39,7 +39,14 @@ class FileSelector(QWidget):
         self._edit.setPlaceholderText("No file selected")
         self._edit.textChanged.connect(self._on_text_changed)
 
+        # Browse… shares the "load/import" cyan-teal variant with every
+        # Load Results button — both are "bring data from elsewhere" actions.
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+
         self._browse_btn = QPushButton("Browse…")
+        self._browse_btn.setStyleSheet(theme.button_style("load"))
+        self._browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browse_btn.clicked.connect(self._browse)
 
         layout.addWidget(self._label)

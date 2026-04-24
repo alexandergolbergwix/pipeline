@@ -58,7 +58,7 @@ def _check_existing_items(input_path: Path, token: str) -> dict:
     from converter.wikidata.uploader import WikidataUploader  # noqa: PLC0415
     from converter.wikidata.reconciler import WikidataReconciler  # noqa: PLC0415
 
-    uploader = WikidataUploader(token=token, dry_run=True)
+    uploader = WikidataUploader(token=token)  # read-only use; moratorium gate only fires on write
     reconciler = WikidataReconciler()
     auth_user = uploader._get_authenticated_user() or ""
 
@@ -155,6 +155,8 @@ class WikidataPanel(QWidget):
         config_layout.addStretch()
 
         self._configure_btn = QPushButton("Configure...")
+        self._configure_btn.setStyleSheet(theme.button_style('config'))
+        self._configure_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._configure_btn.clicked.connect(self._on_configure)
         config_layout.addWidget(self._configure_btn)
 
@@ -182,9 +184,13 @@ class WikidataPanel(QWidget):
         btn_layout = QHBoxLayout()
         self._run_btn = QPushButton("Upload to Wikidata")
         self._run_btn.clicked.connect(self._on_run)
+        self._run_btn.setStyleSheet(theme.button_style())
+        self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_layout.addWidget(self._run_btn)
 
         self._check_btn = QPushButton("Check existing items")
+        self._check_btn.setStyleSheet(theme.button_style('primary'))
+        self._check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._check_btn.setToolTip(
             "Search Wikidata for items that already exist.\n"
             "Items you created can be updated; others are skipped."
@@ -193,6 +199,8 @@ class WikidataPanel(QWidget):
         btn_layout.addWidget(self._check_btn)
 
         self._load_btn = QPushButton("Load Results")
+        self._load_btn.setStyleSheet(theme.button_style('load'))
+        self._load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._load_btn.clicked.connect(self._on_load_results)
         btn_layout.addWidget(self._load_btn)
 
@@ -321,7 +329,9 @@ class WikidataPanel(QWidget):
 
         btn_layout = QHBoxLayout()
         ok_btn = QPushButton("OK")
-        ok_btn.clicked.connect(dialog.accept)
+        ok_btn.setStyleSheet(theme.button_style('ghost'))
+        ok_btn.clicked.connect
+        cancel_btn.setStyleSheet(theme.button_style('ghost'))(dialog.accept)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(dialog.reject)
         btn_layout.addWidget(ok_btn)
@@ -561,8 +571,8 @@ class WikidataPanel(QWidget):
         stats_label.setWordWrap(True)
         dlg_layout.addWidget(stats_label)
 
-        # Reuse existing upload view (has all entity widgets)
-        # Temporarily reparent it to the dialog
+        # Reuse existing upload view (has all entity widgets). Temporarily
+        # reparent it to the dialog and restore after close.
         self._upload_view.setParent(dialog)
         dlg_layout.addWidget(self._upload_view, stretch=1)
 

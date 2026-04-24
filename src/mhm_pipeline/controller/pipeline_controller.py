@@ -26,10 +26,9 @@ _STAGE_NAMES: dict[int, str] = {
     0: "MARC Parse",
     1: "NER",
     2: "Authority",
-    3: "Wikidata Preview",   # interactive — no worker
-    4: "RDF Build",
-    5: "SHACL Validate",
-    6: "Wikidata Upload",
+    3: "RDF Build",
+    4: "SHACL Validate",
+    5: "Wikidata Studio (merged preview + upload)",
 }
 
 
@@ -167,21 +166,22 @@ class PipelineController(QObject):
                 mazal_db_path=str(kwargs.get("mazal_db_path", self._settings.mazal_db_path)),
             )
 
-        if stage_index == 4:
+        if stage_index == 3:
+            # Stage 3 (was Stage 4) — RDF build from authority_enriched.json
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
             return RdfBuildWorker(
-                # Stage 3 = authority_enriched_reviewed.json (post-review)
-                input_path=self._resolve_input(3, kwargs),
+                input_path=self._resolve_input(2, kwargs),
                 output_dir=output_dir,
                 rdf_format=str(kwargs.get("rdf_format", "Turtle")),
             )
 
-        if stage_index == 5:
+        if stage_index == 4:
+            # Stage 4 (was Stage 5) — SHACL Validate
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
             return ShaclValidateWorker(
-                ttl_path=self._resolve_input(4, kwargs),
+                ttl_path=self._resolve_input(3, kwargs),
                 shapes_path=Path(
                     str(
                         kwargs.get("shapes_path", Path("ontology/shacl-shapes.ttl")),
@@ -190,12 +190,13 @@ class PipelineController(QObject):
                 output_dir=output_dir,
             )
 
-        if stage_index == 6:
+        if stage_index == 5:
+            # Stage 5 (was Stage 6) — Wikidata upload (studio tab)
             token = str(kwargs.get("token", ""))
             output_dir = Path(str(kwargs.get("output_dir", self._settings.output_dir)))
             return WikidataUploadWorker(
-                # Stage 3 = reviewed authority JSON (same format as stage 2 output)
-                input_path=self._resolve_input(3, kwargs),
+                # Reads authority_enriched.json directly (Stage 2 output)
+                input_path=self._resolve_input(2, kwargs),
                 output_dir=output_dir,
                 token=token,
                 dry_run=bool(kwargs.get("dry_run", True)),
