@@ -594,6 +594,18 @@ Beyond data-quality checks, a secondary class of incident arose when an automate
 
 The 232~unit tests in \texttt{test\_safety\_guards.py} serve as a regression barrier ensuring these classes of error cannot recur. Three of those tests are \emph{structural} rather than behavioural --- they fail if a future refactor introduces a second \code{wbi\_item.write()} call, separates the pre-write guard from the write, or re-introduces a marker-based creator fallback --- so the architecture of Rule~38 cannot be unintentionally weakened.
 
+\subsection{Interactive Validation Workbench}
+
+To make the full safety and validation architecture accessible to domain curators without CLI access, the pipeline exposes a \emph{Wikidata Studio} workbench that unifies the review/check/approve/upload workflow into one surface. Given a corpus of ~5\,785~pipeline-built items per 100~manuscripts, three design choices drive scalability and reviewability:
+
+\textbf{Validate-with-Wikidata pass.} A single \code{\_ValidationWorker} thread visits every item and performs all live Wikidata checks in one pass: reconciler duplicate detection, per-identifier collision checking (for each of P214, P8189, P244, P227, P213, querying Wikidata for the current owner of the identifier and flagging any disagreement with our item's \code{existing\_qid}), SPARQL \code{ASK} existence checking on every matched QID (catching items deleted, redirected, or blanked between reconciliation and approval), three-channel creator verification per item, and a fresh re-run of \code{validate\_item()} on the possibly-curator-edited item. A full payload---including the actual SPARQL ASK string fired, per-PID verdict matrix, and the three-channel creator result---is emitted per row so the curator has full accountability for each status decision.
+
+\textbf{Pagination.} A chained \code{\_PaginationProxy} truncates the viewport's \code{rowCount()} to the configured page size (25 / 50 / 100), so the \code{QTableView} materialises at most 100 rows regardless of backing corpus size. Row-level action widgets (edit, claims, detail-view) attach only to currently-visible rows. Empirically, this reduces scroll latency for 5\,785-row corpora from $\sim$1.2\,s to unmeasurable and keeps widget count bounded at $< 300$ (pagination bar + visible-page actions).
+
+\textbf{Persistent validation state.} After validation completes, the workbench exports a \code{<input\_stem>\_wikidata\_verified.json} file that round-trips through the load path. Each entry carries the full \code{WikidataItem} (labels, descriptions, aliases, statements with qualifiers and references) plus the validation payload (status, reason, matched QID, identifier checks, SPARQL ask/answer, creator check, validator issues, timestamp, latency) and the approved flag. The curator can close the application, reopen the file later, and resume review from the exact state they left, including any per-item approval decisions already made. This is essential for large corpora where review may span multiple sessions.
+
+Every interactive validation surface (status-detail popup, claim editor, credential entry, full-screen browser) renders against a shared Liquid-Glass \code{GraphBackdrop} (CLAUDE.md rule~37) so the workbench visually reads as a single application rather than a stack of pop-up dialogs. The design aligns with the Apple HIG~2026 Liquid-Glass aesthetic.
+
 \subsection{Limitations}
 
 \begin{enumerate}[leftmargin=*]

@@ -1747,6 +1747,7 @@ LAST  P8189  "990000623390205171"
 \begin{enumerate}
 \item \textbf{Authority-based reconciliation:} Instead of SPARQL reconciliation (which proved too slow and unreliable at scale), items with existing QIDs from authority matching (VIAF P214, NLI P8189) are updated; items without authority-linked QIDs are created as new entities.
 \item \textbf{Two-phase pipeline:} Phase~1 builds \code{WikidataItem} objects from authority-enriched JSON via \code{WikidataItemBuilder} (persons first, then manuscripts that reference them). Phase~2 uploads to Wikidata or exports QuickStatements.
+\item \textbf{Interactive validation workbench:} Between Phase~1 (build) and Phase~2 (upload) the \emph{Wikidata Studio} exposes a curator-facing review step: every item is run through the \code{\_ValidationWorker} (reconciler + per-PID collision + SPARQL existence + three-channel creator check + in-process validator re-run), and the curator approves each row individually. A ``💾 Save validation'' action exports \code{<input\_stem>\_wikidata\_verified.json}, which round-trips through the Load field so multi-session review is supported on large corpora. Pagination (25/50/100 per page) keeps the table responsive at 5\,000+ items.
 \item \textbf{Source statements:} Every claim includes a reference (P248 = stated in, P854 = reference URL) pointing to the NLI catalog.
 \item \textbf{Incremental upload:} Start with pilot manuscripts, then expand to the full catalog.
 \item \textbf{Bot approval:} For large-scale upload, obtain a Wikidata bot flag through the community process.

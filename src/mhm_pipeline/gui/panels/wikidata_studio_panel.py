@@ -704,35 +704,122 @@ class WikidataStudioPanel(QWidget):
         path = self._input_selector.path
         if path is None:
             QMessageBox.information(
-                self, "Pick a file", "Select the authority_enriched.json to load.",
+                self, "Pick a file",
+                "Select authority_enriched.json  —  or a previously saved "
+                "*_wikidata_verified.json file to resume validation review.",
             )
             return
         self._input_path = path
         try:
             with open(path, encoding="utf-8") as f:
-                records = json.load(f)
-            if isinstance(records, dict) and "records" in records:
-                records = records["records"]
-            if not isinstance(records, list):
+                raw = json.load(f)
+            if isinstance(raw, dict) and "records" in raw:
+                raw = raw["records"]
+            if not isinstance(raw, list):
                 raise ValueError("JSON must be a list of records")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Load Error", str(exc))
             return
 
-        self._records = records
+        # Heuristic: a file saved by ``_on_save_validation`` has entries
+        # shaped { "item": {...}, "validation": {...}, "local_id": ... }.
+        # An authority_enriched.json has raw MARC records with
+        # ``_control_number`` + no ``item`` key.
+        is_validated = (
+            len(raw) > 0
+            and isinstance(raw[0], dict)
+            and "item" in raw[0]
+            and "validation" in raw[0]
+        )
+        if is_validated:
+            self._load_validated_file(path, raw)
+            return
+
+        # Normal path: authority_enriched → build from scratch
+        self._records = raw
         self._log_viewer.append_line(
-            f"Loaded {len(records)} records from {path.name}. Building Wikidata items…"
+            f"Loaded {len(raw)} records from {path.name}. Building Wikidata items…"
         )
         self._update_stepper(step=2)
         self._progress.set_progress(0)
         self._load_btn.setEnabled(False)
 
         # Build in a background thread so the UI stays responsive
-        self._build_worker = _BuildWorker(records, parent=self)
+        self._build_worker = _BuildWorker(raw, parent=self)
         self._build_worker.progress.connect(self._progress.set_progress)
         self._build_worker.finished_items.connect(self._on_items_built)
         self._build_worker.failed.connect(self._on_build_failed)
         self._build_worker.start()
+
+    def _load_validated_file(self, path: Path, raw: list[dict]) -> None:
+        """Restore items + validation payloads from a previously-saved
+        ``<file>_wikidata_verified.json``. Bypasses the build worker —
+        items are reconstructed directly from the serialised form."""
+        from converter.wikidata.item_builder import (  # noqa: PLC0415
+            WikidataItem, WikidataStatement,
+        )
+
+        self._log_viewer.append_line(
+            f"Detected validated file {path.name} — restoring items + payloads…"
+        )
+
+        items: list[WikidataItem] = []
+        payloads: list[tuple[str, dict, bool]] = []   # (local_id, payload, approved)
+        for entry in raw:
+            it_dict = entry.get("item") or {}
+            stmts = []
+            for s in it_dict.get("statements") or []:
+                stmts.append(WikidataStatement(
+                    property_id=str(s.get("property_id", "")),
+                    value=s.get("value", ""),
+                    value_type=str(s.get("value_type", "")),
+                    qualifiers=list(s.get("qualifiers") or []),
+                    references=list(s.get("references") or []),
+                ))
+            it = WikidataItem(
+                labels=dict(it_dict.get("labels") or {}),
+                descriptions=dict(it_dict.get("descriptions") or {}),
+                aliases={
+                    k: list(v) for k, v in (it_dict.get("aliases") or {}).items()
+                },
+                statements=stmts,
+                existing_qid=it_dict.get("existing_qid") or None,
+                entity_type=str(it_dict.get("entity_type", "") or ""),
+                local_id=str(it_dict.get("local_id", entry.get("local_id", "")) or ""),
+            )
+            items.append(it)
+            payloads.append((
+                it.local_id,
+                entry.get("validation") or {},
+                bool(entry.get("approved", False)),
+            ))
+
+        self._qp_browser.load_items(items)
+        # Re-apply validation payloads + approval flags
+        restored = 0
+        for local_id, payload, approved in payloads:
+            if payload:
+                self._qp_browser.update_validation(local_id, payload)
+                restored += 1
+            if approved:
+                # Flip the approved flag on the matching row
+                for r in self._qp_browser._model._rows:
+                    if r["local_id"] == local_id:
+                        r["approved"] = True
+                        break
+
+        self._log_viewer.append_line(
+            f"Restored {len(items)} items and {restored} validation payloads. "
+            "Ready for review / approve / upload."
+        )
+        self._update_stepper(step=5)
+        self._progress.set_progress(100)
+        self._load_btn.setEnabled(True)
+        self._check_btn.setEnabled(True)
+        self._upload_btn.setEnabled(True)
+        self._save_validation_btn.setEnabled(True)
+        # Refresh statistics on the browser
+        self._qp_browser._update_stats()
 
     def _on_items_built(self, items: list[Any]) -> None:
         self._log_viewer.append_line(f"Built {len(items)} Wikidata items.")
@@ -852,10 +939,19 @@ class WikidataStudioPanel(QWidget):
             QMessageBox.information(self, "Nothing to save", "No items to save.")
             return
 
+        # Default to "<input_stem>_wikidata_verified.json" alongside the
+        # authority_enriched.json that was loaded — so the file reads like
+        # "authority_enriched_wikidata_verified.json" and can be reopened
+        # via the same Browse… field.
+        input_path = self._input_selector.path
         default_dir = self._output_selector.path or (
-            self._input_selector.path.parent if self._input_selector.path else Path.home()
+            input_path.parent if input_path else Path.home()
         )
-        default_path = str(Path(default_dir) / "wikidata_validation_result.json")
+        if input_path is not None:
+            default_name = f"{input_path.stem}_wikidata_verified.json"
+        else:
+            default_name = "wikidata_verified.json"
+        default_path = str(Path(default_dir) / default_name)
         path, _ = QFileDialog.getSaveFileName(
             self, "Save validation results", default_path, "JSON files (*.json)",
         )

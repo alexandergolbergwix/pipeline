@@ -719,7 +719,7 @@ Each of the six pipeline stages has a dedicated panel. All panels share the same
 \hline
 \code{ValidatePanel} & SHACL shapes file selector, severity filter combo, violations table view, ``Validate SHACL'' button & \code{finished} $\to$ populate \code{QTableWidget} with SHACL report \\
 \hline
-\code{WikidataStudioPanel} (supersedes the separate \code{WikidataPreviewPanel} and \code{WikidataUploadPanel} from v1.x) & Six-step stepper (Load $\to$ Build $\to$ Browse $\to$ Check $\to$ Approve $\to$ Upload); liquid-glass ``\emph{Credentials}'' card (token field masked, show/hide toggle, moratorium-status banner) accepting four formats --- bot password \code{User@Bot:pass}, OAuth~2.0 owner-only consumer \code{key|secret}, OAuth~1.0a \code{key|secret|token|secret}, and a pre-issued JWT bearer token \code{eyJ...} (auto-detected by format and routed through a \code{requests.Session} with \code{Authorization: Bearer}); dry-run checkbox; batch mode checkbox (ON by default, 45~items + 30s pause); \code{QTabWidget} with \code{QPEntityBrowser} (editable Q/P entities with validator Issues column, auto-approve, per-row claim-edit dialog) and an RDF-Triples preview; full-screen popup; ``Check Wikidata for duplicates'' and ``Export / Upload approved'' buttons & \code{log\_line} $\to$ log; \code{progress} $\to$ upload bar; \code{entity\_status} $\to$ per-entity progress view; \code{upload\_requested(Path,Path,str,bool,bool,list)} carries only the approved-item subset \\
+\code{WikidataStudioPanel} (supersedes the separate \code{WikidataPreviewPanel} and \code{WikidataUploadPanel} from v1.x) & Six-step stepper (Load $\to$ Build $\to$ Browse $\to$ Validate $\to$ Approve $\to$ Upload); liquid-glass ``\emph{Credentials}'' card (token field masked, show/hide toggle, moratorium-status banner) accepting four formats --- bot password \code{User@Bot:pass}, OAuth~2.0 owner-only consumer \code{key|secret}, OAuth~1.0a \code{key|secret|token|secret}, and a pre-issued JWT bearer token \code{eyJ...} (auto-detected by format and routed through a \code{requests.Session} with \code{Authorization: Bearer}); dry-run checkbox; batch mode checkbox (ON by default, 45~items + 30s pause); \code{QTabWidget} with \code{QPEntityBrowser} (paginated 25/50/100 per page via \code{\_PaginationProxy}; editable Q/P entities with validator Issues column, auto-approve, per-row claim-edit dialog, ℹ~status-info popup on each Status cell) and an RDF-Triples preview; full-screen popup; ``Validate with Wikidata'' (runs \code{\_ValidationWorker}: reconciler + per-PID collisions + SPARQL \code{ASK} existence + 3-channel creator check + re-run in-process validator); ``💾~Save validation'' (writes \code{<stem>\_wikidata\_verified.json} round-trippable via the Load field); ``Export / Upload approved'' & \code{row\_validated(str, dict)} $\to$ model \code{update\_validation}; \code{log\_line} $\to$ log; \code{progress} $\to$ progress bar; \code{finished\_all(dict)} carries per-status counts; \code{upload\_requested(Path,Path,str,bool,bool,list)} carries only the approved-item subset \\
 \hline
 \end{longtable}
 
@@ -766,7 +766,37 @@ The module \filepath{src/mhm\_pipeline/gui/widgets/glass\_dialog.py} provides:
 \item \code{glass\_table\_style(theme)}, \code{glass\_tab\_style(theme)}, \code{glass\_panel\_style(theme)} --- companion QSS helpers so \code{QTableView}, \code{QTabWidget}, and grouped \code{QFrame\#glassPanel} sections render translucent instead of the default opaque Qt fill.
 \end{itemize}
 
-Dialogs that currently use the backdrop: \code{ClaimsEditDialog}, \code{ItemDetailDialog}, \code{ItemEditDialog}, \code{AutoApproveDialog}, plus the full-screen popup of \code{WikidataStudioPanel} and the credentials card on that panel. New dialogs must either inherit \code{GlassDialog} or call \code{install\_glass\_backdrop(self)}; the \code{reinstall-app} skill contains a grep-audit that fails if a \code{QDialog} subclass is added without the backdrop.
+Dialogs that currently use the backdrop: \code{ClaimsEditDialog}, \code{ItemDetailDialog}, \code{ItemEditDialog}, \code{ItemStatusDialog}, \code{AutoApproveDialog}, plus the full-screen popup of \code{WikidataStudioPanel} and the credentials card on that panel. New dialogs must either inherit \code{GlassDialog} or call \code{install\_glass\_backdrop(self)}; the \code{reinstall-app} skill contains a grep-audit that fails if a \code{QDialog} subclass is added without the backdrop.
+
+\subsection{Validation Workbench Architecture}
+\label{sec:validation-workbench}
+
+At corpus scale (5\,785~items per 100~manuscripts) three design elements keep the workbench usable:
+
+\paragraph{Validate worker.}
+\code{\_ValidationWorker} is a \code{QThread} that visits every row in one pass and performs:
+\begin{enumerate}
+\item Reconciler duplicate detection (\code{reconcile\_person}).
+\item Per-identifier collision check: for each of \code{P214}, \code{P8189}, \code{P244}, \code{P227}, \code{P213} the worker queries Wikidata for the current owner of the proposed ID and records \emph{matched}, \emph{conflict}, or \emph{not-found}. Any \emph{conflict} automatically downgrades the row's status to \code{existing-other} so approval is auto-blocked.
+\item \code{ASK WHERE \{\ wd:<qid> ?p ?o\ \}} existence check on every matched QID (catches deleted / redirected / blanked items since reconciliation).
+\item Three-channel creator verification (revisions API + usercontribs API + SPARQL existence) — the same primitive used by the Rule~38 uploader guard.
+\item A re-run of \code{validate\_item()} on the (possibly curator-edited) \code{WikidataItem}.
+\end{enumerate}
+
+The worker emits \code{row\_validated(local\_id, payload)} per item. The payload is a dict carrying \code{identifier\_checks}, \code{sparql\_ask} (the actual ASK string fired), \code{sparql\_answer}, \code{creator\_check}, \code{validator\_issues}, \code{validated\_at} (ISO timestamp), and \code{validation\_latency\_ms}. The model's \code{update\_validation} stores this as the row's \code{validation} field; the Status cell then renders an ℓ ⓘ glyph to signal the cell is clickable.
+
+\paragraph{Pagination proxy.}
+A chained \code{\_PaginationProxy} sits between the existing \code{QPEntityFilterProxy} and the \code{QTableView}:
+\[
+\text{QPEntityModel} \to \text{QPEntityFilterProxy} \to \text{\_PaginationProxy} \to \text{QTableView}
+\]
+The pagination proxy overrides \code{filterAcceptsRow(src\_row)} to return \code{True} only when \code{offset \leq src\_row < offset + page\_size}. Since Qt's view only ever materialises rows that the model reports, \code{rowCount()} truncates to at most \code{page\_size} (25 / 50 / 100 selectable). \code{\_refresh\_actions} — which attaches three action buttons per row — iterates the page proxy's rowCount, so widget count is bounded at $3 \times \text{page\_size} \le 300$ regardless of corpus size. Bulk-approve operates on the filter proxy (all filtered pages), not the visible page.
+
+\paragraph{Status-info popup.}
+Clicking a Status cell opens \code{ItemStatusDialog} (a \code{GlassDialog}) with five tabs: \emph{Summary} (label, matched QID, status reason, timestamp, latency), \emph{Identifiers} (per-PID verdict table), \emph{Creator check} (auth user / first-revision / usercontribs / SPARQL verdict), \emph{SPARQL} (the actual ASK string rendered in a monospace block plus the boolean answer), and \emph{Validator} (the re-run issue list with severity colours). No new per-row widget is attached — the click region is the Status cell itself, so pagination's performance gain is preserved.
+
+\paragraph{Persistent workbench state.}
+The ``💾 Save validation'' button serialises \code{QPEntityBrowser.rows\_snapshot()} via \code{serialize\_validated\_rows()} to \code{<input\_stem>\_wikidata\_verified.json}. Each entry holds the complete round-trippable \code{WikidataItem} (labels, descriptions, aliases, statements with qualifiers + references, \code{existing\_qid}) plus the full validation payload and the \code{approved} flag. The Load path auto-detects the validated format (presence of \code{"item"} and \code{"validation"} keys in the first entry) and restores every row's state exactly, so a curator can close and reopen the app mid-review without losing work.
 
 \subsection{Wikidata Modification Safety Chain (CLAUDE.md Rule 38)}
 \label{sec:rule38}
