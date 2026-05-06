@@ -73,7 +73,7 @@ VALID_ENTITY_TYPES = [
 
 VALID_ROLES = ["", "AUTHOR", "SCRIBE", "OWNER", "CENSOR", "COMMENTATOR", "TRANSCRIBER"]
 
-VALID_SOURCES = ["person_ner", "provenance_ner", "contents_ner", "colophon_ml", "manual"]
+VALID_SOURCES = ["person_ner", "provenance_ner", "contents_ner", "manual"]
 
 
 def _type_colors() -> dict[str, tuple[str, str]]:

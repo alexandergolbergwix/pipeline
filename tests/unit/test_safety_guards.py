@@ -1460,6 +1460,70 @@ class TestTranslatorCommentatorProperties:
         assert ROLE_TO_PID.get("translator") != P_AUTHOR
 
 
+class TestNerEntitySchemaCleanliness:
+    """Stage-2 audit fix A6 (2026-05-06): the per-record ``entities``
+    list must contain ONLY real NER spans (sources person_ner /
+    provenance_ner / contents_ner). Classifier outputs (colophon /
+    genre) live in dedicated channels — ``ml_colophon_sentences`` and
+    ``ml_genres`` — so the Stage 3 reconciler / authority editor
+    cannot accidentally route a classifier prediction through Wikidata
+    matching, which is exactly the failure mode that produced
+    Q139185072 / Q139168371 / Q138940447 (Geagea, 2026-04-14).
+
+    These regression tests are static (source-level) so they survive
+    a refactor that re-imports the worker module without running it.
+    """
+
+    def test_workers_does_not_emit_colophon_ml_source_string(self) -> None:
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        # Allowlist the audit-comment that mentions the legacy string;
+        # the actual emission line must NOT exist.
+        non_comment_lines = [
+            ln for ln in src.splitlines()
+            if "colophon_ml" in ln
+            and not ln.lstrip().startswith("#")
+            and '"colophon_ml"' in ln
+        ]
+        assert not non_comment_lines, (
+            "Stage 2 must not emit entities with source=colophon_ml. "
+            "Use record['ml_colophon_sentences'] (list[str]) instead. "
+            f"Offending lines: {non_comment_lines}"
+        )
+
+    def test_workers_does_not_emit_genre_ml_source_string(self) -> None:
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        non_comment_lines = [
+            ln for ln in src.splitlines()
+            if "genre_ml" in ln
+            and not ln.lstrip().startswith("#")
+            and '"genre_ml"' in ln
+        ]
+        assert not non_comment_lines, (
+            "Stage 2 must not emit entities with source=genre_ml. "
+            "Use record['ml_genres'] (list[{label, confidence}]) instead. "
+            f"Offending lines: {non_comment_lines}"
+        )
+
+    def test_workers_writes_ml_genres_channel(self) -> None:
+        """``NerWorker.run`` must populate ``record['ml_genres']`` per record."""
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        assert '"ml_genres"' in src, (
+            "NerWorker must include 'ml_genres' in the per-record results "
+            "dict (audit fix A6). Stage 4 reads this for P136 fallback."
+        )
+
+    def test_extraction_editor_valid_sources_excludes_classifier_outputs(self) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import VALID_SOURCES
+
+        # ``colophon_ml`` and ``genre_ml`` are NOT real NER sources.
+        assert "colophon_ml" not in VALID_SOURCES
+        assert "genre_ml" not in VALID_SOURCES
+        # The three real sources must still be present.
+        assert "person_ner" in VALID_SOURCES
+        assert "provenance_ner" in VALID_SOURCES
+        assert "contents_ner" in VALID_SOURCES
+
+
 class TestRoleToLabelIncludesTranscriber:
     """Stage-2 audit fix A4 (2026-05-06): the keyword classifier in
     ``ner/inference_pipeline.py`` emits ``TRANSCRIBER`` (not ``SCRIBE``).

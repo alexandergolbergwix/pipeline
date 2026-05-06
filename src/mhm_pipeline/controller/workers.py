@@ -463,10 +463,14 @@ class NerWorker(StageWorker):
                             except Exception as cont_exc:
                                 logger.warning("Contents NER error: %s", cont_exc)
 
-                # MARC 500 colophon sentence detection — each detected
-                # sentence also becomes an entity with source=colophon_ml
-                # so it shows up in the Review & Edit table and in the
-                # Sources filter chip row.
+                # MARC 500 colophon sentence detection. Audit fix A6
+                # (2026-05-06): classifier outputs no longer leak into
+                # ``entities`` as fake spans with ``start=0, end=0`` —
+                # they live in dedicated channels so Stage 3's source
+                # filter (person_ner / provenance_ner / contents_ner)
+                # is never bypassed and the GUI's authority editor
+                # cannot accidentally route a classifier prediction
+                # through Wikidata reconciliation.
                 ml_colophon_sentences: list[str] = []
                 if not marc500_announced:
                     self.substep.emit("Loading MARC 500 colophon classifier")
@@ -479,23 +483,18 @@ class NerWorker(StageWorker):
                                 above_thr, conf = _marc500_clf.is_colophon(sent)
                                 if above_thr:
                                     ml_colophon_sentences.append(sent)
-                                    all_entities.append({
-                                        "text": sent,
-                                        "type": "COLOPHON",
-                                        "source": "colophon_ml",
-                                        "confidence": float(conf),
-                                        "start": 0,
-                                        "end": len(sent),
-                                    })
                             except Exception as _clf_exc:
                                 logger.debug("MARC 500 clf error: %s", _clf_exc)
 
-                # Genre classifier (Stage 3 P136 fallback) — run eagerly so
-                # the predicted genre appears as an entity row that the user
-                # can approve / reject before it becomes a P136 claim.
+                # Genre classifier (Stage 3 P136 fallback). Predictions
+                # land in ``ml_genres`` (audit fix A6), NOT in the
+                # entity list. The Wikidata Preview panel reads them
+                # directly; the GUI editor surfaces them in a separate
+                # read-only section if needed.
                 if not genre_announced:
                     self.substep.emit("Loading genre classifier")
                     genre_announced = True
+                ml_genres: list[dict[str, Any]] = []
                 _genre_clf = _get_genre_classifier()
                 if _genre_clf is not None:
                     try:
@@ -514,13 +513,9 @@ class NerWorker(StageWorker):
                                 continue
                             if not label or label == "other":
                                 continue
-                            all_entities.append({
-                                "text": str(label),
-                                "type": "GENRE",
-                                "source": "genre_ml",
+                            ml_genres.append({
+                                "label": str(label),
                                 "confidence": conf,
-                                "start": 0,
-                                "end": 0,
                             })
                     except Exception as _genre_exc:
                         logger.debug("Genre ML error: %s", _genre_exc)
@@ -531,6 +526,7 @@ class NerWorker(StageWorker):
                         "text": "\n".join(texts),
                         "entities": all_entities,
                         "ml_colophon_sentences": ml_colophon_sentences,
+                        "ml_genres": ml_genres,
                     }
                 )
                 self.progress.emit(int((idx + 1) / total * 100))
@@ -549,13 +545,14 @@ class NerWorker(StageWorker):
             person_count = _count("person_ner")
             prov_count = _count("provenance_ner")
             cont_count = _count("contents_ner")
-            col_count = _count("colophon_ml")
-            genre_count = _count("genre_ml")
+            col_count = sum(len(r.get("ml_colophon_sentences") or []) for r in results)
+            genre_count = sum(len(r.get("ml_genres") or []) for r in results)
             self.log_line.emit(
                 f"NER complete — {total} records, "
                 f"{person_count} person + {prov_count} provenance + "
-                f"{cont_count} contents + {col_count} colophon + "
-                f"{genre_count} genre entities"
+                f"{cont_count} contents entities; "
+                f"{col_count} ml-colophon sentences + "
+                f"{genre_count} ml-genre predictions"
             )
             self.finished.emit(output_path)
         except Exception as exc:
