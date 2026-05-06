@@ -47,6 +47,7 @@ class PipelineController(QObject):
     stage_finished = pyqtSignal(int, Path)
     stage_error = pyqtSignal(int, str)
     stage_progress = pyqtSignal(int, int)
+    stage_substep = pyqtSignal(int, str)  # (stage_index, substep label) — DynamicProgressBar
     entity_status = pyqtSignal(str, str, str, str)  # Wikidata per-entity status
     pipeline_finished = pyqtSignal()
 
@@ -66,6 +67,7 @@ class PipelineController(QObject):
         worker.finished.connect(partial(self._on_worker_finished, stage_index))
         worker.error.connect(partial(self._on_worker_error, stage_index))
         worker.progress.connect(partial(self._on_worker_progress, stage_index))
+        worker.substep.connect(partial(self._on_worker_substep, stage_index))
 
         # Forward entity_status from WikidataUploadWorker
         if hasattr(worker, "entity_status"):
@@ -78,6 +80,9 @@ class PipelineController(QObject):
 
     def _on_worker_progress(self, stage_index: int, pct: int) -> None:
         self.stage_progress.emit(stage_index, pct)
+
+    def _on_worker_substep(self, stage_index: int, label: str) -> None:
+        self.stage_substep.emit(stage_index, label)
 
     def mark_stage_complete(self, stage_index: int, output_path: Path) -> None:
         """Mark an interactive (no-worker) stage as complete and emit finished."""

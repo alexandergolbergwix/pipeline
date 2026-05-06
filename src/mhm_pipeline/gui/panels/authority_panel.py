@@ -25,6 +25,7 @@ from mhm_pipeline.gui.widgets.authority_matcher_view import (
 )
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 
 
@@ -175,8 +176,8 @@ class AuthorityPanel(QWidget):
         self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self._run_btn)
 
-        # Progress bar
-        self._progress = PercentProgressWidget()
+        # Progress bar — DynamicProgressBar (substep label + ETA).
+        self._progress = DynamicProgressBar()
         layout.addWidget(self._progress)
 
         # ── Review banner (hidden until results load) ──────────────────
@@ -257,8 +258,8 @@ class AuthorityPanel(QWidget):
         return self._log_viewer
 
     @property
-    def stage_progress(self) -> PercentProgressWidget:
-        """Return the embedded progress widget."""
+    def stage_progress(self) -> DynamicProgressBar:
+        """Return the embedded dynamic progress bar."""
         return self._progress
 
     # ── Slots ─────────────────────────────────────────────────────────

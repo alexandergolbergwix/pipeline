@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.knowledge_graph_view import KnowledgeGraphView
@@ -74,8 +75,8 @@ class RdfPanel(QWidget):
 
         layout.addLayout(btn_layout)
 
-        # Progress bar
-        self._progress = PercentProgressWidget()
+        # Progress bar — DynamicProgressBar (substep label + ETA).
+        self._progress = DynamicProgressBar()
         layout.addWidget(self._progress)
 
         # Tabbed results: TTL Preview + Interactive Graph
@@ -107,7 +108,7 @@ class RdfPanel(QWidget):
         return self._preview
 
     @property
-    def stage_progress(self) -> PercentProgressWidget:
+    def stage_progress(self) -> DynamicProgressBar:
         return self._progress
 
     # ── Slots ─────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
@@ -66,8 +67,8 @@ class ValidatePanel(QWidget):
         btn_layout.addWidget(self._fullscreen_btn)
         layout.addLayout(btn_layout)
 
-        # Progress bar
-        self._progress = PercentProgressWidget()
+        # Progress bar — DynamicProgressBar (substep label + ETA).
+        self._progress = DynamicProgressBar()
         layout.addWidget(self._progress)
 
         # Validation result view
@@ -96,8 +97,8 @@ class ValidatePanel(QWidget):
         return self._log_viewer
 
     @property
-    def stage_progress(self) -> PercentProgressWidget:
-        """Return the embedded progress widget."""
+    def stage_progress(self) -> DynamicProgressBar:
+        """Return the embedded dynamic progress bar."""
         return self._progress
 
     # ── Public API ────────────────────────────────────────────────────

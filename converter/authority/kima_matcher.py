@@ -122,10 +122,12 @@ class KimaMatcher:
             wd = row.get("wikidata_id")
             if wd:
                 return f"https://www.wikidata.org/entity/{wd}"
-            # Fallback: VIAF URI
-            viaf = row.get("viaf_id")
-            if viaf:
-                return f"https://viaf.org/viaf/{viaf}"
+            # ``kima_places`` value contract: Wikidata URI ONLY. The audit
+            # on 2026-05-06 found 4 records where the VIAF fallback leaked
+            # a viaf.org URI into a slot typed as Wikidata, breaking the
+            # downstream P1071 claim (item_builder skips it silently).
+            # Caller may still consult ``row["viaf_id"]`` separately if a
+            # P214-on-place claim is ever needed.
             return None
         except Exception as exc:
             logger.debug("KIMA lookup failed for %r: %s", name, exc)

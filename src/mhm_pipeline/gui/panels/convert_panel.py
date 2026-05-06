@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
@@ -79,9 +80,12 @@ class ConvertPanel(QWidget):
         btn_layout.addWidget(self._fullscreen_btn)
         layout.addLayout(btn_layout)
 
-        # progress
+        # progress — six-pill stage overview AS-IS for navigation, plus the
+        # detailed dynamic bar below it for per-stage substep + ETA + chunk.
         self._progress = StageProgressWidget()
         layout.addWidget(self._progress)
+        self._dynamic_progress = DynamicProgressBar()
+        layout.addWidget(self._dynamic_progress)
 
         # MARC field visualizer
         self._field_visualizer = MarcFieldVisualizer()
@@ -99,8 +103,20 @@ class ConvertPanel(QWidget):
         return self._log_viewer
 
     @property
-    def stage_progress(self) -> StageProgressWidget:
-        """Return the embedded stage progress widget."""
+    def stage_progress(self) -> DynamicProgressBar:
+        """Return the per-stage detail progress bar.
+
+        Used by ``MainWindow._on_stage_progress`` to push percent updates
+        and substep labels into the dynamic bar. The six-pill
+        ``StageProgressWidget`` overview above it stays bound to
+        ``main_window._update_stage_state`` via the dedicated
+        :pyattr:`stage_overview` accessor.
+        """
+        return self._dynamic_progress
+
+    @property
+    def stage_overview(self) -> StageProgressWidget:
+        """Return the six-pill stage navigation widget."""
         return self._progress
 
     # ── Slots ─────────────────────────────────────────────────────────

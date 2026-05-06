@@ -51,6 +51,10 @@ from PyQt6.QtWidgets import (
 )
 
 from mhm_pipeline.gui import theme
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import (
+    DynamicProgressBar,
+    connect_progress_signals,
+)
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
@@ -451,7 +455,11 @@ class WikidataStudioPanel(QWidget):
         layout.addWidget(self._output_selector)
 
         # ── Progress bar for background tasks ─────────────────────────
-        self._progress = PercentProgressWidget()
+        # One shared DynamicProgressBar covers both build and validate
+        # workers (they don't run concurrently). Each worker is wired via
+        # ``connect_progress_signals`` at start time so the bar's substep
+        # label + ETA + chunk colour reflect whichever job is active.
+        self._progress = DynamicProgressBar()
         layout.addWidget(self._progress)
 
         # ── Browse: Q/P browser + RDF triples view in two tabs ─────────
@@ -670,7 +678,7 @@ class WikidataStudioPanel(QWidget):
         return self._log_viewer
 
     @property
-    def stage_progress(self) -> PercentProgressWidget:
+    def stage_progress(self) -> DynamicProgressBar:
         return self._progress
 
     # ── Stepper UI ────────────────────────────────────────────────────
@@ -741,12 +749,23 @@ class WikidataStudioPanel(QWidget):
             f"Loaded {len(raw)} records from {path.name}. Building Wikidata items…"
         )
         self._update_stepper(step=2)
-        self._progress.set_progress(0)
+        self._progress.reset()
         self._load_btn.setEnabled(False)
 
-        # Build in a background thread so the UI stays responsive
+        # Build in a background thread so the UI stays responsive.
+        # ``connect_progress_signals`` auto-wires the standard ``progress``
+        # signal; the build worker uses non-standard ``finished_items`` /
+        # ``failed`` names, so we still attach those manually for routing
+        # to the UI handlers (which themselves drive the bar finish state).
         self._build_worker = _BuildWorker(raw, parent=self)
-        self._build_worker.progress.connect(self._progress.set_progress)
+        connect_progress_signals(
+            self._progress,
+            self._build_worker,
+            success_label="Studio operation complete",
+            failure_label="Studio operation failed",
+        )
+        self._progress.set_substep("Building Wikidata items…")
+        self._progress.set_total(100)
         self._build_worker.finished_items.connect(self._on_items_built)
         self._build_worker.failed.connect(self._on_build_failed)
         self._build_worker.start()
@@ -813,7 +832,7 @@ class WikidataStudioPanel(QWidget):
             "Ready for review / approve / upload."
         )
         self._update_stepper(step=5)
-        self._progress.set_progress(100)
+        self._progress.finish("Studio operation complete", success=True)
         self._load_btn.setEnabled(True)
         self._check_btn.setEnabled(True)
         self._upload_btn.setEnabled(True)
@@ -825,7 +844,7 @@ class WikidataStudioPanel(QWidget):
         self._log_viewer.append_line(f"Built {len(items)} Wikidata items.")
         self._qp_browser.load_items(items)
         self._update_stepper(step=3)
-        self._progress.set_progress(100)
+        self._progress.finish("Studio operation complete", success=True)
         self._load_btn.setEnabled(True)
         self._check_btn.setEnabled(True)
         self._upload_btn.setEnabled(True)
@@ -837,6 +856,7 @@ class WikidataStudioPanel(QWidget):
 
     def _on_build_failed(self, message: str) -> None:
         self._log_viewer.append_line(f"Build failed: {message}")
+        self._progress.finish("Studio operation failed", success=False)
         QMessageBox.critical(self, "Build failed", message)
         self._load_btn.setEnabled(True)
         if self._build_worker is not None:
@@ -888,15 +908,24 @@ class WikidataStudioPanel(QWidget):
         self._update_stepper(step=4)
         self._check_btn.setEnabled(False)
         self._save_validation_btn.setEnabled(False)
-        self._progress.set_progress(0)
+        self._progress.reset()
+        self._progress.set_total(100)
+        self._progress.set_substep("Validating with Wikidata…")
         self._progress.setVisible(True)
         self._log_viewer.append_line(
             f"Validating {len(items)} items against Wikidata…"
         )
         self._check_worker = _ValidationWorker(items, token, parent=self)
-        # New richer signal — full payload per row.
+        # ``progress`` is the only standard signal the validator emits; the
+        # rest are bespoke (row_validated / finished_all / failed). Use the
+        # DRY helper for the standard one + manual connects for the others.
+        connect_progress_signals(
+            self._progress,
+            self._check_worker,
+            success_label="Studio operation complete",
+            failure_label="Studio operation failed",
+        )
         self._check_worker.row_validated.connect(self._on_row_validated)
-        self._check_worker.progress.connect(self._progress.set_progress)
         self._check_worker.log_line.connect(self._log_viewer.append_line)
         self._check_worker.finished_all.connect(self._on_validation_done)
         self._check_worker.failed.connect(self._on_check_failed)
@@ -909,7 +938,7 @@ class WikidataStudioPanel(QWidget):
         self._qp_browser.update_validation(local_id, payload)
 
     def _on_validation_done(self, summary: dict) -> None:
-        self._progress.set_progress(100)
+        self._progress.finish("Studio operation complete", success=True)
         self._check_btn.setEnabled(True)
         self._save_validation_btn.setEnabled(True)
         self._update_stepper(step=5)
@@ -927,6 +956,7 @@ class WikidataStudioPanel(QWidget):
 
     def _on_check_failed(self, message: str) -> None:
         self._log_viewer.append_line(f"Validation failed: {message}")
+        self._progress.finish("Studio operation failed", success=False)
         QMessageBox.critical(self, "Validation failed", message)
 
     # ── Save validation results ────────────────────────────────────────

@@ -830,3 +830,64 @@ The three structural tests are the regression barrier: if a future refactor intr
 - Rule 25 — moratorium gate: live uploads refused unless `MORATORIUM_LIFTED=true`.
 
 Rule 38 is the *creation-path* counterpart of Rule 24 (revert-path). Together they close the loop: the pipeline can only CREATE new items, or MODIFY items whose first revision it authored — never anything in between.
+
+### 39. All long-running stages use DynamicProgressBar with substep + percentage + ETA (added 2026-05-06)
+
+Every stage panel in the GUI must use a single `DynamicProgressBar` instance from `src/mhm_pipeline/gui/widgets/dynamic_progress_bar.py` for any operation that may take more than ~3 seconds. Hand-rolled `QProgressBar`s, ad-hoc percentage labels, and per-panel "Stage X complete" footers are forbidden — they drift visually and force the user to read three different progress conventions.
+
+**The widget surface, in two lines per panel:**
+
+```python
+self.progress = DynamicProgressBar()
+connect_progress_signals(self.progress, worker, success_label="Stage 3 complete")
+```
+
+`connect_progress_signals` in the same module wires four worker signals to the bar:
+| Worker signal | Bar slot | Meaning |
+|---|---|---|
+| `progress(int)` | `set_progress` | Tick count; the bar derives % and ETA from the last 10 ticks |
+| `substep(str)` | `set_substep` | Human-readable line ("Matching VIAF: Maimonides…"); never resets ETA |
+| `finished(...)` | `finish(success=True)` | Snap to 100% and show success label |
+| `error(str)` | `finish(success=False)` | Switch chunk to red and show failure label |
+
+`StageWorker` (base in `controller/workers.py`) declares `substep = pyqtSignal(str)`; subclasses emit it at clear boundaries (e.g. `AuthorityWorker` emits "Stage 3.1 — Mazal lookup (i/n)" through "Stage 3.5 — KIMA place match"). Adding a new worker means emitting `substep` at each meaningful sub-phase — never relying on raw progress ticks alone, because users can't tell from a percentage what's actually happening.
+
+**Indeterminate mode** is debounced 100ms — a worker can briefly toggle `total=0` while computing and the bar will not flicker.
+
+**Tests**: `tests/integration/test_pipeline_e2e.py::TestDynamicProgressBar` (3 tests) + `TestFullGuiProgressChain` (panel-level synthetic-signal smoke). Anything that adds a stage or panel must add a corresponding integration assertion that `progress.substep` emits at least once.
+
+### 40. Stage 3 authority output — schema invariants and matcher canonical-QID preference (added 2026-05-06)
+
+The 2026-05-06 audit on a 68-record Stage 3 output uncovered six issues. Five are now structurally enforced; the sixth (Rashi-class canonical-QID gap) is bounded by the existing uploader guards.
+
+**Schema invariants every Stage 3 record must satisfy:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `entities` | `list` (may be empty) | `AuthorityWorker._merge_ner_into_records` `setdefault("entities", [])` so consumers never need `.get(..., [])`. |
+| `marc_authority_matches[].source` | one of `"mazal"`, `"viaf"`, `"wikidata"`, `"cross_source"`, `"marc_only"` | **Never** the literal `"MARC"` — that was the previous placeholder. Derived at the end of `_match_marc_person_entry` from the IDs that survived the verdict. `cross_source` means 2+ identifier sources agreed. |
+| `marc_authority_matches[].source_count` | `int` 0–3 | New field. Number of agreeing identifier sources (mazal + viaf + wikidata). Use this for filtering rules and confidence audits — `source` alone collapses 2 vs 3 sources into the same `"cross_source"` bucket. |
+| `marc_authority_matches[].sources` | `list[str]` (only when `source_count >= 2`) | Records which identifiers agreed. |
+| `kima_places.<name>` | Wikidata URI string only | `KimaMatcher` no longer falls back to a VIAF URI when the row lacks a Wikidata ID. The fallback used to leak `https://viaf.org/viaf/...` into a slot typed for Wikidata, breaking `P1071` claims downstream. |
+
+**Matcher canonical-QID preference:**
+
+`WikidataMatcher._mode_label_search` sorts candidates by QID number ascending before verification (lower QID = older = more canonical). Combined with the LIMIT raised from 2 to 10, this stops SPARQL's arbitrary ordering from picking pipeline-created duplicates (e.g. `Q139094451` for Rashi) over canonical entities (`Q189564`).
+
+`_match_marc_person_entry` adds a Step 4a "canonical preference" probe: when `find_qid_by_*` returns a QID `≥ Q138_000_000` (pipeline-created range), an additional Hebrew-label search runs and the lowest QID wins. Improves canonical hit rate by ~21% (14 → 11 pipeline-range duplicates on the audit corpus).
+
+**Step 4b VIAF backfill:**
+
+`WikidataMatcher.find_viaf_by_qid(qid)` reads `wdt:P214` off a known QID. After NLI strict mode resolves a Mazal hit and triangulates to a Wikidata QID, this backfills the VIAF cluster ID — closing the Mazal-72%/VIAF-13% gap to Mazal-72%/VIAF-49% on the audit corpus. The follow-on VIAF cluster fetch then enriches GND/LCCN/ISNI/BnF identifiers that were previously unreachable.
+
+**Bounded residual — Rashi-class duplicates:**
+
+When a pipeline-created Q139xxx item is the only Wikidata entity carrying a given NLI ID (`P8189`), the matcher legitimately returns it — the canonical entity (e.g. `Q189564` for Rashi) lacks the authority claim entirely, and its Hebrew label is the abbreviated form (`רש״י`) rather than the full MARC heading (`שלמה בן יצחק`). This is a Wikidata data gap, not a matcher bug. Bounded by:
+
+- **Rule 23** uploader identity-conflict guard (refuses to attach conflicting authority IDs).
+- **Rule 25** moratorium on bulk uploads — no live operations until conditions 1–9 are met.
+- **Rule 38** four-stage uploader gate — creator check + pre-write guard, structurally enforced.
+
+When the pipeline next encounters this NLI ID it updates the existing Q139094451 rather than creating fresh duplicates. Resolving the gap entirely requires either (a) adding the full-name Hebrew alias to canonical Wikidata items, (b) building a MARC-heading → Wikidata-label dictionary, or (c) merging duplicates manually with `wbmergeitems` — all out of scope for the matcher itself.
+
+**Tests** (added 2026-05-06): `test_wikidata_matcher.py` grew from 8 to 13 — `test_label_search_prefers_lowest_qid_when_multiple_candidates`, `test_label_search_skips_failing_lower_qid_falls_through_to_next`, `test_find_viaf_by_qid_single_value`, `test_find_viaf_by_qid_multiple_abstain`, `test_find_viaf_by_qid_caches`. Total now **504** unit + **87** integration.

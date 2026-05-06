@@ -30,6 +30,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-qt>=4.4",
+    "pytest-timeout>=2.4",
     "mypy>=1.10",
     "ruff>=0.4",
     "pre-commit>=3.7",
@@ -68,7 +69,15 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-addopts = "--cov=src/mhm_pipeline --cov-report=term-missing -q"
+# `-m "not slow_models"` keeps the default suite fast (~5 min, no NER model loads).
+# Run `pytest -m slow_models` (or `--run-slow-models`) to opt in to the heavy
+# model-loading tests that hang in multi-test sessions — see investigator I1
+# write-up.
+addopts = "--cov=src/mhm_pipeline --cov-report=term-missing -q -m 'not slow_models' --timeout-method=thread"
+markers = [
+    "slow_models: tests that load real NER / classifier .pt checkpoints (~700 MB each); known to hang in multi-test pytest sessions on macOS — opt in with `pytest -m slow_models`",
+    "allow_http: allow real HTTP requests in this test (default = blocked by tests/conftest.py)",
+]
 
 [dependency-groups]
 dev = [
@@ -76,5 +85,6 @@ dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "pytest-qt>=4.5.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.15.7",
 ]

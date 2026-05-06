@@ -21,8 +21,38 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
+
+# Pattern for extracting a Wikidata QID from a Wikidata entity URI of the
+# shape ``https://www.wikidata.org/entity/Q123`` (KIMA values often arrive
+# as such URIs). Used by :func:`flatten_authority_records` to surface the
+# QID in its dedicated column.
+_WIKIDATA_QID_RE = re.compile(r"/entity/(Q\d+)/?$")
+
+# Stage-3 hardening (2026-05-02) emits ``confidence`` as a tri-level
+# string ("high"/"medium"/"low") instead of a 0.0–1.0 float. The widget
+# stores everything as a float for sorting/colour coding — this coercer
+# bridges both schemas without breaking older artefacts.
+_CONF_BUCKET_TO_FLOAT = {"high": 0.95, "medium": 0.6, "low": 0.3}
+
+
+def _coerce_confidence(value: object) -> float:
+    """Return a 0.0–1.0 float for any of: float, int, bool, level-string."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in _CONF_BUCKET_TO_FLOAT:
+            return _CONF_BUCKET_TO_FLOAT[s]
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 from PyQt6.QtCore import (
     QAbstractItemModel,
@@ -100,6 +130,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
           "matched_name": str,
           "source": str,          # mazal / viaf / kima / …
           "matched_id": str,
+          "wikidata_qid": str,    # Wikidata QID when known (KIMA URI / harvested)
           "confidence": float,
           "dates": str,
           "gnd_id": str, "lc_id": str, "isni": str, "bnf_id": str,
@@ -116,6 +147,14 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
             viaf = m.get("viaf_uri") or ""
             mazal = m.get("mazal_id") or ""
             source = "mazal" if mazal else ("viaf" if viaf else "marc_field")
+            # When neither Mazal nor VIAF resolved, the match was not
+            # found — show "(no match found)" instead of echoing the
+            # entity name (which previously made the row look like a
+            # successful self-match).
+            if mazal or viaf:
+                matched_name = str(m.get("preferred_name_lat") or m.get("name") or "")
+            else:
+                matched_name = "(no match found)"
             out.append({
                 "_control_number": cn,
                 "_origin_kind": "marc",
@@ -123,10 +162,11 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "entity_text": str(m.get("name") or ""),
                 "match_type": "person",
                 "role": str(m.get("role") or ""),
-                "matched_name": str(m.get("preferred_name_lat") or m.get("name") or ""),
+                "matched_name": matched_name,
                 "source": source,
                 "matched_id": str(mazal or viaf or ""),
-                "confidence": float(m.get("confidence") or 0.0),
+                "wikidata_qid": str(m.get("wikidata_qid") or ""),
+                "confidence": _coerce_confidence(m.get("confidence")),
                 "dates": str(m.get("dates") or ""),
                 "gnd_id": str(m.get("gnd_id") or ""),
                 "lc_id": str(m.get("lc_id") or ""),
@@ -153,7 +193,8 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "matched_name": "",
                 "source": source,
                 "matched_id": str(mazal or viaf),
-                "confidence": float(e.get("confidence") or 0.0),
+                "wikidata_qid": str(e.get("wikidata_qid") or ""),
+                "confidence": _coerce_confidence(e.get("confidence")),
                 "dates": "",
                 "gnd_id": "", "lc_id": "", "isni": "", "bnf_id": "",
                 "field_origin": "ner",
@@ -164,6 +205,12 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
         kima = record.get("kima_places") or {}
         if isinstance(kima, dict):
             for i, (name, uri) in enumerate(kima.items()):
+                # KIMA values are often Wikidata entity URIs of the form
+                # ``https://www.wikidata.org/entity/Q1218``. Extract the
+                # QID so it can be surfaced in its own column without
+                # forcing the reviewer to parse the URI by eye.
+                qid_match = _WIKIDATA_QID_RE.search(str(uri))
+                qid = qid_match.group(1) if qid_match else ""
                 out.append({
                     "_control_number": cn,
                     "_origin_kind": "kima",
@@ -174,6 +221,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                     "matched_name": "",
                     "source": "kima",
                     "matched_id": str(uri),
+                    "wikidata_qid": qid,
                     "confidence": 1.0,          # KIMA is a direct-index lookup
                     "dates": "",
                     "gnd_id": "", "lc_id": "", "isni": "", "bnf_id": "",
@@ -216,7 +264,7 @@ def unflatten_rows_into_records(
             continue
         kind = row.get("_origin_kind")
         if kind == "marc":
-            rec["marc_authority_matches"].append({
+            marc_match: dict[str, Any] = {
                 "name": row.get("entity_text", ""),
                 "role": row.get("role", ""),
                 "field": row.get("field_origin", ""),
@@ -230,7 +278,10 @@ def unflatten_rows_into_records(
                 "isni": row.get("isni", ""),
                 "bnf_id": row.get("bnf_id", ""),
                 "approved": True,
-            })
+            }
+            if row.get("wikidata_qid"):
+                marc_match["wikidata_qid"] = row["wikidata_qid"]
+            rec["marc_authority_matches"].append(marc_match)
         elif kind == "entity":
             idx = int(row.get("_origin_index") or 0)
             entities = rec.get("entities") or []
@@ -240,6 +291,8 @@ def unflatten_rows_into_records(
                     e["mazal_id"] = row.get("matched_id", "")
                 else:
                     e["viaf_uri"] = row.get("matched_id", "")
+                if row.get("wikidata_qid"):
+                    e["wikidata_qid"] = row["wikidata_qid"]
                 e["authority_approved"] = True
         elif kind == "kima":
             name = row.get("entity_text", "")
@@ -301,14 +354,16 @@ COL_SOURCE = 3
 COL_TYPE = 4
 COL_CONF = 5
 COL_APPROVED = 6
-COL_ACTIONS = 7
+COL_WIKIDATA_QID = 7
+COL_ACTIONS = 8
 
 
 class AuthorityMatchModel(QAbstractTableModel):
     """Flat model over authority matches, supporting approval + editing."""
 
     HEADERS = [
-        "Record", "Entity", "Match", "Source", "Type", "Conf.", "Approved", " ",
+        "Record", "Entity", "Match", "Source", "Type", "Conf.", "Approved",
+        "Wikidata QID", " ",
     ]
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -399,6 +454,8 @@ class AuthorityMatchModel(QAbstractTableModel):
             if col == COL_CONF:
                 c = r.get("confidence", 0.0)
                 return f"{c:.2f}" if c else ""
+            if col == COL_WIKIDATA_QID:
+                return r.get("wikidata_qid", "")
 
         if role == Qt.ItemDataRole.UserRole:
             if col == COL_CONF:
@@ -900,6 +957,7 @@ class AuthorityEditor(QWidget):
         h.setSectionResizeMode(COL_TYPE, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_CONF, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_APPROVED, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(COL_WIKIDATA_QID, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(COL_ACTIONS, 78)
 

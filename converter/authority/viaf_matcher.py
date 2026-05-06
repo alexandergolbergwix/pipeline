@@ -10,7 +10,9 @@ Documentation: https://www.oclc.org/developer/api/oclc-apis/viaf/authority-clust
 from __future__ import annotations
 
 import logging
+import re
 import time
+from typing import Any
 
 import requests
 
@@ -19,6 +21,44 @@ logger = logging.getLogger(__name__)
 _VIAF_SEARCH = "https://viaf.org/viaf/search"
 _TIMEOUT = 8  # seconds per request
 _RATE_LIMIT = 0.5  # seconds between requests (2 req/s — VIAF rate limit)
+
+
+def _year_from(value: object) -> int | None:
+    """Extract a 4-digit year from a freeform date string (None-safe)."""
+    if value is None:
+        return None
+    s = str(value)
+    m = re.search(r"\d{3,4}", s)
+    if not m:
+        return None
+    try:
+        yr = int(m.group(0))
+    except ValueError:
+        return None
+    return yr if 100 < yr < 2100 else None
+
+
+def _extract_latin_main_heading(cluster_raw: dict[str, Any]) -> str | None:
+    """Return the Latin-script preferred name from a VIAF cluster blob.
+
+    Looks at ``ns1:mainHeadings.ns1:data[].ns1:text`` for the first
+    string that contains ASCII letters. VIAF clusters often carry
+    multiple language forms; the Latin form is the one we cross-validate
+    against the source MARC name.
+    """
+    headings = cluster_raw.get("ns1:mainHeadings", cluster_raw.get("mainHeadings", {}))
+    if not isinstance(headings, dict):
+        return None
+    data = headings.get("ns1:data", headings.get("data", []))
+    if isinstance(data, dict):
+        data = [data]
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        text = entry.get("ns1:text", entry.get("text", ""))
+        if isinstance(text, str) and re.search(r"[A-Za-z]", text):
+            return text.strip()
+    return None
 
 
 class VIAFMatcher:
@@ -51,6 +91,64 @@ class VIAFMatcher:
         returns via ``local.personalNames``) from being attached to person items.
         """
         return self._search(name, cql_field="local.personalNames", expected_name_type="Personal")
+
+    def match_person_with_metadata(
+        self, name: str, source_dates: str | None = None
+    ) -> dict[str, Any] | None:
+        """Match a personal name and return cluster metadata in one call.
+
+        Wraps :meth:`match_person` + :meth:`get_cluster_identifiers` so
+        the AuthorityWorker can score Stage 3 confidence guards without
+        a second round-trip.
+
+        Returns ``None`` if no cluster matched. Otherwise a dict with::
+
+            {
+                "viaf_uri": str,
+                "viaf_id": str,        # numeric portion only
+                "preferred_name_lat": str | None,
+                "birth_year": int | None,
+                "death_year": int | None,
+                "name_type": str,      # always "Personal" if returned
+                "gnd": str | None,
+                "lc": str | None,
+                "isni": str | None,
+                "bnf": str | None,
+                "j9u": str | None,
+            }
+
+        ``source_dates`` is currently unused (Mazal uses it for
+        disambiguation; VIAF SRU does not expose a date filter) but
+        is accepted so callers don't need to know which matcher
+        consumes it.
+        """
+        del source_dates  # accepted for API symmetry; unused by VIAF SRU
+        viaf_uri = self.match_person(name)
+        if not viaf_uri:
+            return None
+        m = re.search(r"/viaf/(\d+)", viaf_uri)
+        if not m:
+            return None
+        viaf_id = m.group(1)
+        cluster = self.get_cluster_identifiers(viaf_id)
+        # Prefer a Latin "main heading" out of the cluster if present.
+        cluster_raw = self.get_cluster_raw(viaf_id) or {}
+        preferred_lat = _extract_latin_main_heading(cluster_raw)
+
+        out: dict[str, Any] = {
+            "viaf_uri": viaf_uri,
+            "viaf_id": viaf_id,
+            "preferred_name_lat": preferred_lat,
+            "birth_year": _year_from(cluster.get("birth_date")),
+            "death_year": _year_from(cluster.get("death_date")),
+            "name_type": cluster.get("name_type", "Personal"),
+            "gnd": cluster.get("gnd"),
+            "lc": cluster.get("lc"),
+            "isni": cluster.get("isni"),
+            "bnf": cluster.get("bnf"),
+            "j9u": cluster.get("j9u"),
+        }
+        return out
 
     def match_place(self, name: str) -> str | None:
         """Return the VIAF cluster URI for a geographic name, or None."""
@@ -234,6 +332,21 @@ class VIAFMatcher:
         if not viaf_id:
             return None
 
+        # Guard (2026-05-04 audit): reject SRU "ephemeral" search IDs.
+        # Real VIAF cluster identifiers are 8–15-digit decimal strings
+        # (https://www.oclc.org/developer/api/oclc-apis/viaf.en.html).
+        # The SRU response sometimes returns longer composite strings
+        # (e.g. ``9696171732610409080007`` — 22 digits) which do NOT
+        # resolve to a single cluster and produce wrong matches when
+        # used downstream. Refuse them.
+        viaf_id_str = str(viaf_id).strip()
+        if not viaf_id_str.isdigit() or not (8 <= len(viaf_id_str) <= 15):
+            logger.debug(
+                "VIAF: rejecting non-cluster ID %r for %r (len=%d, must be 8-15 digits)",
+                viaf_id_str, name, len(viaf_id_str),
+            )
+            return None
+
         # Guard: reject cross-type matches (e.g. Corporate cluster returned by
         # local.personalNames search). When nameType is absent from the response
         # (older API versions), we accept the result rather than reject on uncertainty.
@@ -242,11 +355,11 @@ class VIAFMatcher:
             if name_type and name_type != expected_name_type:
                 logger.debug(
                     "VIAF: rejecting cluster %s (nameType=%r, expected=%r) for %r",
-                    viaf_id,
+                    viaf_id_str,
                     name_type,
                     expected_name_type,
                     name,
                 )
                 return None
 
-        return f"https://viaf.org/viaf/{viaf_id}"
+        return f"https://viaf.org/viaf/{viaf_id_str}"

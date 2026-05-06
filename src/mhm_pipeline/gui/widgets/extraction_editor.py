@@ -1030,11 +1030,13 @@ def evaluate_rule(entity: dict, rule: dict) -> bool:
     op = rule["op"]
     val = rule["value"]
     ent_val = entity.get(field)
-    # A rule is numeric whenever either side is a numeric operator OR the
-    # stored value is int/float. Legacy callers that only knew about
-    # "confidence" continue to work; new Wikidata fields (n_claims,
-    # label_length_*, etc.) are handled identically.
-    if op in _NUMERIC_OPS:
+    # Strict numeric comparisons (>, >=, <=, <) require both sides to parse
+    # as floats. ``=`` and ``≠`` are polymorphic — numeric when both sides
+    # parse as numbers, otherwise string equality. This keeps confidence
+    # rules numeric while letting string-valued synthetic fields like
+    # ``has_external_id`` and ``confidence_band`` use the same ``=`` op.
+    strict_numeric_ops = {">", ">=", "<=", "<"}
+    if op in strict_numeric_ops:
         try:
             ent_val_num = float(ent_val or 0)
             target = float(val or 0)
@@ -1044,21 +1046,22 @@ def evaluate_rule(entity: dict, rule: dict) -> bool:
             return ent_val_num > target
         if op == ">=":
             return ent_val_num >= target
-        if op == "=":
-            return ent_val_num == target
         if op == "<=":
             return ent_val_num <= target
         if op == "<":
             return ent_val_num < target
-        if op == "≠":
-            return ent_val_num != target
         return False
-    # String/list ops
+    if op in ("=", "≠"):
+        try:
+            ent_val_num = float(ent_val) if ent_val not in (None, "") else None
+            target_num = float(val) if val not in (None, "") else None
+        except (TypeError, ValueError):
+            ent_val_num = target_num = None
+        if ent_val_num is not None and target_num is not None:
+            return (ent_val_num == target_num) if op == "=" else (ent_val_num != target_num)
+        ent_str = str(ent_val or "")
+        return (ent_str == str(val)) if op == "=" else (ent_str != str(val))
     ent_str = str(ent_val or "")
-    if op == "=":
-        return ent_str == str(val)
-    if op == "≠":
-        return ent_str != str(val)
     if op == "in":
         return ent_str in (val if isinstance(val, list) else [val])
     if op == "not in":

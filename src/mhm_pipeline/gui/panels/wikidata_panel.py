@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mhm_pipeline.gui import theme
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
@@ -210,8 +211,8 @@ class WikidataPanel(QWidget):
 
         layout.addLayout(btn_layout)
 
-        # Progress bar
-        self._progress = PercentProgressWidget()
+        # Progress bar — DynamicProgressBar (substep label + ETA).
+        self._progress = DynamicProgressBar()
         layout.addWidget(self._progress)
 
         # Stats preview (compact)
@@ -249,7 +250,7 @@ class WikidataPanel(QWidget):
         return self._upload_view
 
     @property
-    def stage_progress(self) -> PercentProgressWidget:
+    def stage_progress(self) -> DynamicProgressBar:
         return self._progress
 
     def set_total_items(self, total: int) -> None:

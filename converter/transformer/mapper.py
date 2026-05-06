@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from rdflib import Graph
 
@@ -63,7 +63,12 @@ class MarcToRdfMapper:
         self._records_mapped += 1
         return graph
 
-    def map_file(self, file_path: Path, output_path: Path | None = None) -> Graph:
+    def map_file(
+        self,
+        file_path: Path,
+        output_path: Path | None = None,
+        progress_cb: Callable[[int, int, str], None] | None = None,
+    ) -> Graph:
         """Map all records from a file to a single RDF graph.
 
         Supports .mrc, .csv, .tsv, and .json (authority_enriched) formats.
@@ -71,6 +76,9 @@ class MarcToRdfMapper:
         Args:
             file_path: Path to input file (.mrc, .csv, .tsv, or .json)
             output_path: Optional path to save the resulting TTL file
+            progress_cb: Optional callback(i, total, control_number) invoked
+                once per record. ``total`` may be 0 for streaming readers
+                where the count is unknown until end-of-file.
 
         Returns:
             Combined RDF graph for all records
@@ -88,14 +96,14 @@ class MarcToRdfMapper:
             raw = json.loads(file_path.read_text(encoding="utf-8"))
             if not isinstance(raw, list):
                 raise ValueError(f"Expected JSON array, got {type(raw).__name__}")
-            combined_graph = self.map_json_records(raw)
+            combined_graph = self.map_json_records(raw, progress_cb=progress_cb)
             from ..config.namespaces import bind_namespaces
 
             bind_namespaces(combined_graph)
         else:
             # MARC/CSV/TSV input via UnifiedReader
             reader = UnifiedReader(file_path)
-            for record in reader.read_file():
+            for i, record in enumerate(reader.read_file()):
                 try:
                     record_graph = self.map_record(record)
                     for triple in record_graph:
@@ -104,13 +112,19 @@ class MarcToRdfMapper:
                     self._mapping_errors.append(
                         f"Error mapping record {record.control_number}: {e!s}"
                     )
+                if progress_cb is not None:
+                    progress_cb(i + 1, 0, str(record.control_number))
 
         if output_path:
             combined_graph.serialize(destination=str(output_path), format="turtle")
 
         return combined_graph
 
-    def map_json_records(self, records: list[dict]) -> Graph:
+    def map_json_records(
+        self,
+        records: list[dict],
+        progress_cb: Callable[[int, int, str], None] | None = None,
+    ) -> Graph:
         """Map authority-enriched JSON records directly to RDF.
 
         Skips extract_all_data() since JSON records are already extracted.
@@ -121,9 +135,10 @@ class MarcToRdfMapper:
 
         bind_namespaces(combined_graph)
 
-        for rec in records:
+        total = len(records)
+        for i, rec in enumerate(records):
+            cn = str(rec.get("_control_number", f"json_{id(rec)}"))
             try:
-                cn = str(rec.get("_control_number", f"json_{id(rec)}"))
                 # Build ExtractedData from the JSON dict
                 from converter.transformer.field_handlers import ExtractedData
 
@@ -143,6 +158,8 @@ class MarcToRdfMapper:
                 self._mapping_errors.append(
                     f"Error mapping JSON record {rec.get('_control_number', '?')}: {e!s}"
                 )
+            if progress_cb is not None:
+                progress_cb(i + 1, total, cn)
 
         return combined_graph
 

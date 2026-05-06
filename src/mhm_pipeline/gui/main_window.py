@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
         self._controller.stage_finished.connect(self._on_stage_finished)
         self._controller.stage_error.connect(self._on_stage_error)
         self._controller.stage_progress.connect(self._on_stage_progress)
+        # Substep label forwarded into the active panel's DynamicProgressBar
+        self._controller.stage_substep.connect(self._on_stage_substep)
         self._controller.pipeline_finished.connect(self._on_pipeline_finished)
         # entity_status feeds per-item upload progress in the studio panel.
         # The studio panel doesn't currently surface this (it owns its own
@@ -233,19 +235,59 @@ class MainWindow(QMainWindow):
             self._on_run_wikidata_studio,
         )
 
+    # Per-stage success / failure labels for the DynamicProgressBar.
+    # Mirrors Agent C's spec — each stage's bar finishes with the right
+    # text when stage_finished / stage_error fires.
+    _STAGE_PROGRESS_LABELS: tuple[tuple[str, str], ...] = (
+        ("Stage 1 — MARC parsed",            "Stage 1 failed"),
+        ("Stage 2 — NER complete",           "Stage 2 failed"),
+        ("Stage 3 — authority enriched",     "Stage 3 failed"),
+        ("Stage 4 — RDF built",              "Stage 4 failed"),
+        ("Stage 5 — SHACL OK",               "Stage 5 — SHACL failed"),
+        ("Stage 6 — Wikidata upload complete", "Stage 6 — upload failed"),
+    )
+
     def _on_stage_started(self, index: int) -> None:
         self._update_stage_state(index, "running")
         self._shared_log.append_line(f"Stage {index + 1} started…")
+        # Reset the panel's DynamicProgressBar so a fresh ETA history begins.
+        bar = self._panel_progress_bar(index)
+        if bar is not None and hasattr(bar, "reset"):
+            bar.reset()
+            # Percent semantics — total is 100 so ``set_progress(pct)``
+            # works with no extra arg from the controller's existing
+            # ``stage_progress(int, int)`` signal.
+            if hasattr(bar, "set_total"):
+                bar.set_total(100)
 
     def _on_stage_progress(self, index: int, pct: int) -> None:
         """Update progress bar for the given stage."""
+        bar = self._panel_progress_bar(index)
+        if bar is None:
+            return
+        if hasattr(bar, "set_total"):
+            # DynamicProgressBar — percent of 100 with running ETA.
+            bar.set_progress(pct, 100)
+        else:
+            bar.set_progress(pct)
+
+    def _on_stage_substep(self, index: int, label: str) -> None:
+        """Forward substep label from controller to the panel's dynamic bar."""
+        bar = self._panel_progress_bar(index)
+        if bar is not None and hasattr(bar, "set_substep"):
+            bar.set_substep(label)
+
+    def _panel_progress_bar(self, index: int) -> object | None:
+        """Return the panel's progress widget at *index*, or None."""
         panel = self._panels[index] if 0 <= index < len(self._panels) else None
-        if panel and hasattr(panel, "stage_progress"):
-            panel.stage_progress.set_progress(pct)
+        return getattr(panel, "stage_progress", None)
 
     def _on_stage_finished(self, index: int, output: Path) -> None:
         self._update_stage_state(index, "done")
         self._shared_log.append_line(f"Stage {index + 1} finished. Output: {output}")
+        bar = self._panel_progress_bar(index)
+        if bar is not None and hasattr(bar, "finish") and 0 <= index < len(self._STAGE_PROGRESS_LABELS):
+            bar.finish(self._STAGE_PROGRESS_LABELS[index][0], success=True)
         self._load_stage_results(index, output)
         self._autofill_next_stage(index, output)
         if index == 1:
@@ -409,6 +451,9 @@ class MainWindow(QMainWindow):
     def _on_stage_error(self, index: int, message: str) -> None:
         self._update_stage_state(index, "error")
         self._shared_log.append_line(f"Stage {index + 1} ERROR: {message}")
+        bar = self._panel_progress_bar(index)
+        if bar is not None and hasattr(bar, "finish") and 0 <= index < len(self._STAGE_PROGRESS_LABELS):
+            bar.finish(self._STAGE_PROGRESS_LABELS[index][1], success=False)
 
     def _on_pipeline_finished(self) -> None:
         self._shared_log.append_line("Pipeline complete.")
@@ -422,9 +467,10 @@ class MainWindow(QMainWindow):
         if item is not None:
             item.setText(f"{icon}  {_STAGE_LABELS[index]}")
 
-        # also update the convert panel's progress widget if present
-        if hasattr(self._convert_panel, "stage_progress"):
-            self._convert_panel.stage_progress.set_stage_state(index, state)
+        # also update the convert panel's six-pill stage overview if present
+        overview = getattr(self._convert_panel, "stage_overview", None)
+        if overview is not None and hasattr(overview, "set_stage_state"):
+            overview.set_stage_state(index, state)
 
     # ── Slots ─────────────────────────────────────────────────────────
 

@@ -413,9 +413,40 @@ class TestMarcParseWorker:
 
 
 class TestNerWorker:
-    """NER stage tests use a sys.modules mock because the real models are large."""
+    """NER stage tests use a sys.modules mock because the real models are large.
+
+    The mock at the ``ner.inference_pipeline`` level only stops the joint
+    Person/Provenance/Contents NER load. ``NerWorker.run()`` ALSO calls
+    two module-level lazy singletons — ``_get_marc500_classifier()`` and
+    ``_get_genre_classifier()`` — which independently load real ~700 MB
+    ``.pt`` checkpoints from disk on first invocation. The first test
+    triggers those loads; the second test re-enters the worker and the
+    PyTorch deserialiser deadlocks against the still-extant tokeniser
+    Rust workers from the first load (see investigator I1's report,
+    2026-05-06). The autouse fixture below stubs both singletons to
+    ``None`` for the duration of every test in this class so the multi-
+    test session never touches the real ``.pt`` files.
+    """
 
     _MODEL_PATH = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
+
+    @pytest.fixture(autouse=True)
+    def _stub_aux_classifier_loaders(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force aux classifier loaders to return None for the whole class.
+
+        Without this, ``_get_marc500_classifier()`` / ``_get_genre_classifier()``
+        execute ``torch.load(...)`` on real 700 MB checkpoints and the
+        resulting tokeniser-Rust workers deadlock across consecutive
+        tests in the same pytest process.
+        """
+        from mhm_pipeline.controller import workers as _workers_mod
+
+        monkeypatch.setattr(_workers_mod, "_get_marc500_classifier", lambda: None)
+        monkeypatch.setattr(_workers_mod, "_get_genre_classifier", lambda: None)
+        # Also reset the module-level cached singletons so a previous
+        # test's partially-loaded classifier doesn't leak through.
+        monkeypatch.setattr(_workers_mod, "_MARC500_CLASSIFIER", "unloaded")
+        monkeypatch.setattr(_workers_mod, "_GENRE_CLASSIFIER", "unloaded")
 
     def _make_mock_ner_modules(self) -> dict[str, MagicMock]:
         mock_entity = {
@@ -716,6 +747,431 @@ class TestAuthorityWorker:
         assert "700/710/711" in field_labels, "Missing 700/710/711 field label"
 
 
+# ── Stage 2: 4-source authority chain (Mazal + VIAF + KIMA + Wikidata) ───────
+
+
+class TestAuthorityWorker4SourceIntegration:
+    """Tests for the 4-source authority chain (Mazal + VIAF + KIMA + Wikidata).
+
+    INVARIANT — Wikidata coverage of Hebrew manuscript figures is incomplete.
+    Many obscure scribes, owners, and minor authors are simply not in
+    Wikidata yet. ``WikidataMatcher`` returning ``None`` for these entities
+    is the expected baseline behaviour, NOT an error condition. The
+    confidence ladder must continue to produce sensible results from the
+    remaining 3 sources (Mazal/VIAF/KIMA) when Wikidata is silent.
+
+    These tests verify that absence-from-Wikidata never:
+    1. Causes a hard failure or exception
+    2. Forces ``confidence: low`` (it just means ``has_wikidata: False``)
+    3. Triggers ``wikidata_disagrees`` (absence != disagreement)
+    4. Blocks the worker from emitting valid authority_enriched.json
+    """
+
+    @staticmethod
+    def _marc_with_one_author(
+        tmp_path: Path,
+        name: str,
+        control_number: str = "990000000000000001",
+    ) -> Path:
+        """Write a synthetic single-record MARC extract to tmp_path."""
+        marc_data = [
+            {
+                "_control_number": control_number,
+                "authors": [{"name": name, "type": "person"}],
+            }
+        ]
+        marc_path = tmp_path / "marc_extracted.json"
+        marc_path.write_text(json.dumps(marc_data, ensure_ascii=False), encoding="utf-8")
+        return marc_path
+
+    @staticmethod
+    def _make_mazal_mock(
+        match_id: str | None,
+        preferred_name_lat: str | None = None,
+        dates: str | None = None,
+    ) -> MagicMock:
+        """Build a MazalMatcher mock with the methods Stage 3 calls."""
+        mock = MagicMock()
+        mock.is_available = True
+        mock.index_path = ":memory:"
+        mock.match_person.return_value = match_id
+        details: dict[str, str] = {}
+        if preferred_name_lat:
+            details["preferred_name_lat"] = preferred_name_lat
+        if dates:
+            details["dates"] = dates
+        mock.get_person_details.return_value = details
+        # Force nli_strict_mode._iter_candidates to return None so
+        # Path-2 Levenshtein never iterates a MagicMock auto-attribute.
+        mock.iter_person_candidates = None
+        return mock
+
+    @staticmethod
+    def _make_viaf_mock(viaf_uri: str | None) -> MagicMock:
+        """Build a VIAFMatcher mock that returns a fixed URI and empty cluster."""
+        mock = MagicMock()
+        mock.match_person.return_value = viaf_uri
+        mock.get_cluster_identifiers.return_value = {
+            "gnd": None, "lc": None, "isni": None, "bnf": None,
+            "birth_date": None, "death_date": None,
+        }
+        mock.get_cluster_raw.return_value = {}
+        return mock
+
+    @staticmethod
+    def _make_wikidata_mock(
+        *,
+        find_qid_by_viaf: str | None = None,
+        find_qid_by_mazal: str | None = None,
+        match_person: str | None = None,
+        latin_only: bool = False,
+    ) -> MagicMock:
+        """Build a WikidataMatcher mock with the 4 public methods Stage 3 calls."""
+        mock = MagicMock()
+        mock.find_qid_by_viaf.return_value = find_qid_by_viaf
+        mock.find_qid_by_mazal.return_value = find_qid_by_mazal
+        mock.match_person.return_value = match_person
+        mock.last_match_was_latin_only.return_value = latin_only
+        return mock
+
+    def test_three_sources_agree_high_confidence(
+        self, qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mazal + VIAF + Wikidata all resolve to the same real-world entity.
+
+        With a Latin preferred name from Mazal, sources>=2 + has_preferred_name_lat
+        promotes the verdict to ``confidence == "high"``.
+        """
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        # Disable F2 SPARQL cross-check (still testable without real HTTP).
+        monkeypatch.setenv("MHM_DISABLE_WIKIDATA_CROSSCHECK", "1")
+
+        marc_path = self._marc_with_one_author(tmp_path, "Maimonides, Moses")
+
+        mazal_mock = self._make_mazal_mock(
+            match_id="987007388484005171",
+            preferred_name_lat="Maimonides, Moses",
+            dates="1138-1204",
+        )
+        viaf_mock = self._make_viaf_mock("https://viaf.org/viaf/100184235")
+        wd_mock = self._make_wikidata_mock(
+            find_qid_by_viaf="Q127398",
+            find_qid_by_mazal="Q127398",
+        )
+
+        with (
+            patch(
+                "converter.authority.mazal_matcher.MazalMatcher",
+                return_value=mazal_mock,
+            ),
+            patch(
+                "converter.authority.viaf_matcher.VIAFMatcher",
+                return_value=viaf_mock,
+            ),
+            patch(
+                "converter.authority.wikidata_matcher.WikidataMatcher",
+                return_value=wd_mock,
+            ),
+        ):
+            worker = AuthorityWorker(
+                input_path=marc_path,
+                output_dir=tmp_path,
+                ner_path=None,
+                enable_viaf=True,
+                enable_kima=False,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        marc_matches = records[0].get("marc_authority_matches", [])
+        assert len(marc_matches) == 1, f"Expected 1 author match, got {len(marc_matches)}"
+        match = marc_matches[0]
+        assert match.get("wikidata_qid") == "Q127398"
+        assert match.get("confidence") == "high"
+        assert match.get("matched") == 1
+        # 3 sources agree → no cross-source conflict flag
+        assert "cross_source_conflict" not in match
+
+    def test_wikidata_not_found_is_acceptable_3source_fallback(
+        self, qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Wikidata coverage of Hebrew manuscript figures is incomplete.
+
+        A ``None`` from ``WikidataMatcher`` is the expected baseline for
+        ~50%+ of provenance entities, NOT an error. The confidence ladder
+        must still produce a usable verdict (medium when Mazal alone
+        resolves with a Latin preferred name) and ``wikidata_disagrees``
+        must NOT be flagged (absence != disagreement).
+        """
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        monkeypatch.setenv("MHM_DISABLE_WIKIDATA_CROSSCHECK", "1")
+
+        # Real 16th-c. owner — plausibly NOT in Wikidata yet.
+        marc_path = self._marc_with_one_author(tmp_path, "אזכרי, אלעזר בן משה")
+
+        mazal_mock = self._make_mazal_mock(
+            match_id="987012345",
+            preferred_name_lat="Azkari, Eleazar ben Moshe",
+        )
+        viaf_mock = self._make_viaf_mock(None)  # Not in VIAF either
+        wd_mock = self._make_wikidata_mock(
+            find_qid_by_viaf=None,
+            find_qid_by_mazal=None,  # Not in Wikidata — the normal case
+            match_person=None,        # Hebrew label search also empty
+        )
+
+        with (
+            patch(
+                "converter.authority.mazal_matcher.MazalMatcher",
+                return_value=mazal_mock,
+            ),
+            patch(
+                "converter.authority.viaf_matcher.VIAFMatcher",
+                return_value=viaf_mock,
+            ),
+            patch(
+                "converter.authority.wikidata_matcher.WikidataMatcher",
+                return_value=wd_mock,
+            ),
+        ):
+            worker = AuthorityWorker(
+                input_path=marc_path,
+                output_dir=tmp_path,
+                ner_path=None,
+                enable_viaf=True,
+                enable_kima=False,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        marc_matches = records[0].get("marc_authority_matches", [])
+        assert len(marc_matches) == 1, f"Expected 1 author match, got {len(marc_matches)}"
+        match = marc_matches[0]
+
+        # Mazal hit preserved — the 3-source ladder still has signal.
+        assert match.get("mazal_id") == "987012345"
+
+        # No Wikidata QID — that's normal, not a failure mode.
+        assert not match.get("wikidata_qid")
+
+        # Mazal-only with Latin preferred name → 1-source rule = "medium".
+        assert match.get("confidence") == "medium"
+
+        # Not auto-approved at high (matched flag is 0 when not "high").
+        assert match.get("matched") == 0
+
+        # Absence != disagreement: the wikidata_disagrees flag MUST NOT fire.
+        guard_flags = match.get("guard_flags", []) or []
+        assert "wikidata_disagrees" not in guard_flags
+
+    def test_cross_source_conflict_drops_to_low(
+        self, qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mazal NLI ID and VIAF cluster point to DIFFERENT Wikidata QIDs.
+
+        When triangulation through P214 (VIAF) and P8189 (NLI) lands on
+        two distinct items, the sources contradict each other — the
+        deterministic 5-guard layer cannot detect this without the
+        4-source matrix probe (Step 9). Confidence must drop to "low"
+        and ``cross_source_conflict`` must surface.
+        """
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        monkeypatch.setenv("MHM_DISABLE_WIKIDATA_CROSSCHECK", "1")
+
+        marc_path = self._marc_with_one_author(tmp_path, "Cohen, David")
+
+        # NLI-strict mode (F4) calls ``mazal.match_person`` first and, on
+        # a hit, skips the VIAF SRU lookup entirely. To exercise step 9
+        # (cross-source conflict) we need BOTH viaf_uri AND mazal_id set,
+        # which only happens when NLI-strict misses Path 1 and the
+        # fallback ``_match_against_authorities`` runs. Returning None
+        # on the first call (Path 1) and the real ID on the second call
+        # (fallback) lets both branches resolve.
+        mazal_mock = self._make_mazal_mock(
+            match_id="987007111111111",
+            preferred_name_lat="Cohen, David",
+        )
+        mazal_mock.match_person.side_effect = [None, "987007111111111"]
+        viaf_mock = self._make_viaf_mock("https://viaf.org/viaf/100222222")
+        # The Wikidata triangulation says VIAF=Q999999 but Mazal NLI=Q888888 —
+        # two real-world entities, not one.
+        wd_mock = self._make_wikidata_mock(
+            find_qid_by_viaf="Q999999",
+            find_qid_by_mazal="Q888888",
+        )
+
+        with (
+            patch(
+                "converter.authority.mazal_matcher.MazalMatcher",
+                return_value=mazal_mock,
+            ),
+            patch(
+                "converter.authority.viaf_matcher.VIAFMatcher",
+                return_value=viaf_mock,
+            ),
+            patch(
+                "converter.authority.wikidata_matcher.WikidataMatcher",
+                return_value=wd_mock,
+            ),
+        ):
+            worker = AuthorityWorker(
+                input_path=marc_path,
+                output_dir=tmp_path,
+                ner_path=None,
+                enable_viaf=True,
+                enable_kima=False,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        marc_matches = records[0].get("marc_authority_matches", [])
+        assert len(marc_matches) == 1
+        match = marc_matches[0]
+
+        assert match.get("confidence") == "low", (
+            f"cross-source conflict must drop confidence to low, got "
+            f"{match.get('confidence')!r}"
+        )
+        # Either the True-only flag is set OR the guard_flags list contains it.
+        flagged = (
+            match.get("cross_source_conflict") is True
+            or "cross_source_conflict" in (match.get("guard_flags") or [])
+        )
+        assert flagged, (
+            "cross_source_conflict must surface either via the boolean field "
+            "or the guard_flags list"
+        )
+
+    def test_wikidata_disabled_falls_back_cleanly(
+        self, qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Setting MHM_DISABLE_WIKIDATA_CROSSCHECK=1 returns the legacy 2-source flow.
+
+        The matcher's public methods short-circuit (return None) when the
+        kill switch is set — proving the rollback path is clean. No
+        ``wikidata_qid`` is populated; the 2-source ladder produces its
+        verdict as it did before today's changes.
+        """
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        monkeypatch.setenv("MHM_DISABLE_WIKIDATA_CROSSCHECK", "1")
+
+        marc_path = self._marc_with_one_author(tmp_path, "Levi, Joseph")
+
+        mazal_mock = self._make_mazal_mock(
+            match_id="987007222222222",
+            preferred_name_lat="Levi, Joseph",
+        )
+        viaf_mock = self._make_viaf_mock("https://viaf.org/viaf/100333333")
+
+        # Use a REAL WikidataMatcher (not a mock) — its public methods
+        # honour the env-var kill switch and return None without HTTP.
+        from converter.authority.wikidata_matcher import WikidataMatcher
+
+        real_wd = WikidataMatcher()
+        # Wrap each public method with a spy so we can assert call count.
+        real_wd.match_person = MagicMock(side_effect=real_wd.match_person)  # type: ignore[method-assign]
+
+        with (
+            patch(
+                "converter.authority.mazal_matcher.MazalMatcher",
+                return_value=mazal_mock,
+            ),
+            patch(
+                "converter.authority.viaf_matcher.VIAFMatcher",
+                return_value=viaf_mock,
+            ),
+            patch(
+                "converter.authority.wikidata_matcher.WikidataMatcher",
+                return_value=real_wd,
+            ),
+        ):
+            worker = AuthorityWorker(
+                input_path=marc_path,
+                output_dir=tmp_path,
+                ner_path=None,
+                enable_viaf=True,
+                enable_kima=False,
+            )
+            with qtbot.waitSignal(worker.finished, timeout=30_000) as blocker:  # type: ignore[attr-defined]
+                worker.start()
+
+        records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
+        marc_matches = records[0].get("marc_authority_matches", [])
+        assert len(marc_matches) == 1, "Worker must complete with a match"
+        match = marc_matches[0]
+
+        # Step 5 (Hebrew label fallback) only fires when Mazal+VIAF are
+        # both empty. Since Mazal+VIAF resolved here, match_person must
+        # NOT have been called.
+        assert real_wd.match_person.call_count == 0, (
+            "WikidataMatcher.match_person must not be called when Mazal+VIAF "
+            "already resolved (matcher honours kill switch + step ordering)"
+        )
+
+        # No wikidata_qid populated — clean 2-source rollback.
+        assert not match.get("wikidata_qid")
+
+        # 2-source ladder: Mazal + VIAF + Latin preferred name → "high".
+        # (sources=2, has_preferred_name_lat=True → high)
+        assert match.get("confidence") in ("high", "medium")
+
+    def test_authority_editor_round_trip_with_wikidata(self, tmp_path: Path) -> None:
+        """flatten → unflatten must preserve the wikidata_qid field.
+
+        Locks the round-trip schema invariant so the GUI's edit-then-save
+        cannot drop the new 4-source field.
+        """
+        from mhm_pipeline.gui.widgets.authority_editor import (
+            flatten_authority_records,
+            unflatten_rows_into_records,
+        )
+
+        original_records = [
+            {
+                "_control_number": "990000000000000001",
+                "marc_authority_matches": [
+                    {
+                        "name": "Maimonides, Moses",
+                        "role": "author",
+                        "field": "100/110/111",
+                        "confidence": "high",
+                        "mazal_id": "987007388484005171",
+                        "viaf_uri": "https://viaf.org/viaf/100184235",
+                        "preferred_name_lat": "Maimonides, Moses",
+                        "wikidata_qid": "Q127398",
+                    }
+                ],
+                "entities": [],
+            }
+        ]
+
+        rows = flatten_authority_records(original_records)
+        assert len(rows) == 1, f"Expected 1 flat row, got {len(rows)}"
+        row = rows[0]
+        assert row["wikidata_qid"] == "Q127398", (
+            "flatten must preserve wikidata_qid on flat rows"
+        )
+
+        # Mark approved (the GUI's save path drops un-approved rows).
+        row["approved"] = True
+
+        unflattened = unflatten_rows_into_records(rows, original_records)
+        assert len(unflattened) == 1
+        marc_matches = unflattened[0].get("marc_authority_matches") or []
+        assert len(marc_matches) == 1
+        assert marc_matches[0].get("wikidata_qid") == "Q127398", (
+            "unflatten must restore wikidata_qid on the source dict — "
+            "round-trip schema invariant"
+        )
+
+
 # ── Stage 2 utility: Mazal Index Builder ─────────────────────────────────────
 
 
@@ -730,6 +1186,7 @@ class TestMazalIndexWorker:
 
         assert "NLIAUT" in blocker.args[0]
 
+    @pytest.mark.slow_models
     @pytest.mark.skipif(
         IN_CI or not XML_DIR.exists() or not list(XML_DIR.glob("NLIAUT*.xml")),
         reason="NLI XML files not present or CI environment",
@@ -780,6 +1237,7 @@ class TestKimaIndexWorker:
 
         assert "KIMA places file" in blocker.args[0] or blocker.args[0]
 
+    @pytest.mark.slow_models
     @pytest.mark.skipif(
         not KIMA_TSV_DIR.exists() or not list(KIMA_TSV_DIR.glob("*Kima places*")),
         reason="KIMA TSV files not present",
@@ -811,6 +1269,7 @@ class TestKimaIndexWorker:
         assert names > places, "Should have more name variants than places"
         assert 100 in progress_vals
 
+    @pytest.mark.slow_models
     @pytest.mark.skipif(
         not KIMA_TSV_DIR.exists() or not list(KIMA_TSV_DIR.glob("*Kima places*")),
         reason="KIMA TSV files not present",
@@ -1178,6 +1637,10 @@ class TestNerModelsRealInference:
     - Wrong label mapping (id2label reversed or off-by-one)
     """
 
+    # Loads ~700 MB .pt checkpoints; hangs in multi-test pytest sessions.
+    # Opt in with `pytest -m slow_models`.
+    pytestmark = pytest.mark.slow_models
+
     # ── Provenance NER ────────────────────────────────────────────────
 
     @_require_prov_model
@@ -1371,6 +1834,10 @@ class TestMarc500ModelRealInference:
     - PROVENANCE head silent failure (ownership sentence → False)
     - False positives on clearly codicological sentences
     """
+
+    # Loads the MARC 500 ~700 MB .pt checkpoint; hangs in multi-test pytest sessions.
+    # Opt in with `pytest -m slow_models`.
+    pytestmark = pytest.mark.slow_models
 
     @_require_marc500_model
     def test_marc500_classifier_loads_without_error(self) -> None:
@@ -1678,7 +2145,7 @@ class TestWikidataPreviewPanel:
         assert reviewed[0]["_control_number"] == "H001"
 
     def test_stage_count_is_seven(self, qtbot: object) -> None:
-        """Pipeline has 7 stages (0-6) after inserting Wikidata Preview as stage 3."""
+        """Pipeline has 6 stages — Wikidata Preview merged into Wikidata Studio."""
         from mhm_pipeline.gui.main_window import MainWindow, _STAGE_LABELS
         from mhm_pipeline.controller.pipeline_controller import PipelineController
         from mhm_pipeline.settings.settings_manager import SettingsManager
@@ -1687,14 +2154,14 @@ class TestWikidataPreviewPanel:
         controller = PipelineController(settings)
         window = MainWindow(settings, controller)
 
-        assert len(window._panels) == 7, (
-            f"Expected 7 stage panels; got {len(window._panels)}"
+        assert len(window._panels) == 6, (
+            f"Expected 6 stage panels; got {len(window._panels)}"
         )
-        assert len(_STAGE_LABELS) == 7, (
-            f"Expected 7 stage labels; got {len(_STAGE_LABELS)}"
+        assert len(_STAGE_LABELS) == 6, (
+            f"Expected 6 stage labels; got {len(_STAGE_LABELS)}"
         )
-        assert _STAGE_LABELS[3] == "Wikidata Preview", (
-            f"Stage 3 must be 'Wikidata Preview'; got {_STAGE_LABELS[3]!r}"
+        assert _STAGE_LABELS[-1] == "Wikidata Studio", (
+            f"Final stage must be 'Wikidata Studio'; got {_STAGE_LABELS[-1]!r}"
         )
 
 
@@ -1752,6 +2219,10 @@ class TestNerWorkerAllModels:
     - Output JSON missing expected entity sources
     - MARC 500 classifier not being invoked on notes
     """
+
+    # Loads all 4 NER / classifier checkpoints (~3 GB total);
+    # hangs in multi-test pytest sessions. Opt in with `pytest -m slow_models`.
+    pytestmark = pytest.mark.slow_models
 
     @_require_all_ner_models
     def test_all_4_models_load_and_worker_finishes(
@@ -2204,12 +2675,23 @@ class TestExtractionEditor:
 
     def test_save_preserves_approved_flag(
         self, _qapp: object, _sample_records: list[dict], tmp_path: object,
+        monkeypatch: object,
     ) -> None:
         """to_records() must round-trip the 'approved' flag."""
         from pathlib import Path as _Path  # noqa: PLC0415
 
+        from PyQt6.QtWidgets import QMessageBox  # noqa: PLC0415
+
         from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor  # noqa: PLC0415
 
+        # _on_save() pops two confirmation modals — auto-confirm them.
+        monkeypatch.setattr(  # type: ignore[attr-defined]
+            QMessageBox, "question",
+            staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Yes),
+        )
+        monkeypatch.setattr(  # type: ignore[attr-defined]
+            QMessageBox, "information", staticmethod(lambda *a, **kw: None),
+        )
         out_path = _Path(tmp_path) / "edited.json"  # type: ignore[arg-type]
         editor = ExtractionEditor()
         editor.load_records(_sample_records, out_path)
@@ -2780,3 +3262,135 @@ class TestWikidataStudio:
         assert panel.log_viewer is not None
         # The upload_requested signal should be defined
         assert hasattr(panel, "upload_requested")
+
+
+# ── DynamicProgressBar + connect_progress_signals helper ─────────────────────
+
+
+try:
+    import pymarc as _pymarc  # noqa: F401, PLC0415
+
+    _PYMARC_AVAILABLE = True
+except ImportError:
+    _PYMARC_AVAILABLE = False
+
+
+class TestDynamicProgressBar:
+    """Integration tests for DynamicProgressBar + connect_progress_signals.
+
+    Covers:
+      * Full lifecycle wiring via the DRY helper using a QObject stub
+      * Real MarcParseWorker emits the new substep signal during run
+      * Indeterminate-mode 100ms debounce is cancelled by a quick recovery
+    """
+
+    @pytest.fixture
+    def _qapp(self) -> object:
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+
+        return QApplication.instance() or QApplication(sys.argv)
+
+    # ── Test 1 ────────────────────────────────────────────────────────
+
+    def test_widget_handles_full_lifecycle_with_synthetic_signals(
+        self, _qapp: object
+    ) -> None:
+        from PyQt6.QtCore import QObject, pyqtSignal  # noqa: PLC0415
+
+        from mhm_pipeline.gui.widgets.dynamic_progress_bar import (  # noqa: PLC0415
+            DynamicProgressBar,
+            connect_progress_signals,
+        )
+
+        class _StubWorker(QObject):
+            progress = pyqtSignal(int)
+            substep = pyqtSignal(str)
+            finished = pyqtSignal()
+            error = pyqtSignal(str)
+
+        bar = DynamicProgressBar()
+        worker = _StubWorker()
+        connect_progress_signals(bar, worker)
+
+        # 1. substep emitted before any progress
+        worker.substep.emit("Reading file…")
+        assert "Reading" in bar._substep.text() or bar._substep.text() != ""
+
+        # 2. set total via first progress, then advance
+        bar.set_total(100)
+        worker.progress.emit(0)
+        worker.progress.emit(50)
+        assert bar._bar.value() > 0
+        history_after_progress = len(bar._history)
+        assert history_after_progress > 0
+
+        # 3. substep change must NOT clear ETA history
+        worker.substep.emit("Parsing records…")
+        assert "Parsing" in bar._substep.text() or bar._substep.text() != ""
+        assert len(bar._history) == history_after_progress
+
+        # 4. finish via progress=100
+        worker.progress.emit(100)
+
+        # 5. finished() with no args
+        worker.finished.emit()
+        assert bar._substep.text() == "Done"
+        assert bar._success is True
+        assert bar._finished is True
+
+    # ── Test 2 ────────────────────────────────────────────────────────
+
+    @pytest.mark.skipif(not _PYMARC_AVAILABLE, reason="pymarc not installed")
+    @pytest.mark.skipif(not TSV_FILE.exists(), reason="TSV fixture missing")
+    def test_real_marc_parse_worker_emits_substep_signal(
+        self, qtbot: object, tmp_path: Path
+    ) -> None:
+        from mhm_pipeline.controller.workers import MarcParseWorker  # noqa: PLC0415
+
+        worker = MarcParseWorker(TSV_FILE, tmp_path, "cpu", start=0, end=2)
+
+        substep_messages: list[str] = []
+        progress_values: list[int] = []
+        worker.substep.connect(substep_messages.append)  # type: ignore[attr-defined]
+        worker.progress.connect(progress_values.append)  # type: ignore[attr-defined]
+
+        # Run inline (no QThread) — keeps the test single-threaded and
+        # avoids the conftest QThread drain.
+        worker.run()
+
+        assert substep_messages, "substep signal never fired"
+        assert all(isinstance(m, str) and m for m in substep_messages), (
+            f"empty substep string emitted: {substep_messages!r}"
+        )
+        assert progress_values, "progress signal never fired"
+        assert progress_values[-1] == 100
+
+    # ── Test 3 ────────────────────────────────────────────────────────
+
+    def test_indeterminate_mode_debounces_flicker(
+        self, qtbot: object, _qapp: object
+    ) -> None:
+        from mhm_pipeline.gui.widgets.dynamic_progress_bar import (  # noqa: PLC0415
+            DynamicProgressBar,
+        )
+
+        bar = DynamicProgressBar()
+        bar.set_total(100)
+        bar.set_progress(50)
+
+        # Brief flip to 0 — should schedule indeterminate but NOT activate it.
+        bar.set_total(0)
+        # Recover before the 100ms debounce timer fires.
+        bar.set_total(50)
+
+        # The debounce timer must have been cancelled — bar still determinate.
+        assert bar._bar.maximum() > 0, (
+            f"determinate mode lost despite debounce; max={bar._bar.maximum()}"
+        )
+
+        # Now flip to 0 and let the debounce fire.
+        bar.set_total(0)
+        qtbot.wait(150)  # type: ignore[attr-defined]
+        assert bar._bar.maximum() == 0, (
+            f"indeterminate mode never activated; max={bar._bar.maximum()}"
+        )

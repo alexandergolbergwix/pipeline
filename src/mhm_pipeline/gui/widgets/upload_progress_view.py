@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
+
 # Status icons for entity upload states
 _STATUS_ICONS: dict[str, str] = {
     "pending": "⏳",
@@ -294,16 +296,17 @@ class UploadProgressView(QWidget):
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title)
 
-        # Overall progress section
+        # Overall progress section — uses DynamicProgressBar so the upload
+        # job inherits ETA + substep label semantics from every other panel
+        # in the app. Per-entity rows below keep their own individual
+        # ``QProgressBar`` widgets for the small-scale per-row feedback.
         overall_layout = QHBoxLayout()
         overall_layout.setSpacing(8)
 
         overall_label = QLabel("Overall:")
         overall_layout.addWidget(overall_label)
 
-        self._overall_progress = QProgressBar()
-        self._overall_progress.setTextVisible(True)
-        self._overall_progress.setFormat("%p% (%v/%m items)")
+        self._overall_progress = DynamicProgressBar()
         overall_layout.addWidget(self._overall_progress, stretch=1)
 
         self._status_summary = QLabel("0/0 items")
@@ -369,8 +372,18 @@ class UploadProgressView(QWidget):
             total: Total number of entities to upload
 
         """
-        self._overall_progress.setMaximum(max(1, total))
-        self._overall_progress.setValue(completed)
+        # DynamicProgressBar combines (current, total) in a single call —
+        # ETA + substep are computed from the running tick history.
+        self._overall_progress.set_progress(completed, max(1, total))
+        if completed >= total and total > 0:
+            self._overall_progress.finish(
+                "Preview loaded" if total <= 1 else f"{total} items uploaded",
+                success=True,
+            )
+        else:
+            self._overall_progress.set_substep(
+                f"Uploading… {completed}/{total}"
+            )
         self._status_summary.setText(f"{completed}/{total} items")
 
     def _update_summary(self) -> None:

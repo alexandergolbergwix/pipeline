@@ -40,6 +40,7 @@ from mhm_pipeline.gui.widgets.entity_highlighter import (
 from mhm_pipeline.gui.widgets.extraction_editor import ExtractionEditor
 from mhm_pipeline.gui.widgets.file_selector import FileSelector
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
 from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 
 _DEFAULT_MODEL = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
@@ -141,8 +142,10 @@ class NerPanel(QWidget):
         btn_layout.addWidget(self._load_btn)
         layout.addLayout(btn_layout)
 
-        # Progress bar
-        self._progress = PercentProgressWidget()
+        # Progress bar — DynamicProgressBar (substep label + ETA + colored
+        # chunk on success/failure). MainWindow forwards stage_progress /
+        # stage_substep / stage_finished / stage_error from the controller.
+        self._progress = DynamicProgressBar()
         layout.addWidget(self._progress)
 
         # ── Review banner (hidden until results load) ──────────────────
@@ -496,8 +499,8 @@ class NerPanel(QWidget):
         return self._log_viewer
 
     @property
-    def stage_progress(self) -> PercentProgressWidget:
-        """Return the embedded progress widget."""
+    def stage_progress(self) -> DynamicProgressBar:
+        """Return the embedded dynamic progress bar."""
         return self._progress
 
     # ── Filter panel (Sources · Types · Roles) ──────────────────────
