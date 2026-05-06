@@ -23,6 +23,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    # Source-tree layout (PYTHONPATH=src:. or installed package).
+    from ner.entity_normalize import normalize_entity_text
+except ImportError:  # pragma: no cover — bundle layout where ner/ is sys.path[0]
+    from entity_normalize import normalize_entity_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -226,16 +232,26 @@ class NERInferencePipeline:
         search_from: int = 0
 
         def _flush() -> None:
-            if current_tokens:
-                entity_text = " ".join(current_tokens)
-                avg_conf = sum(current_confs) / len(current_confs)
-                entities.append({
-                    "text": entity_text,
-                    "type": current_type,
-                    "start": current_start,
-                    "end": current_start + len(entity_text),
-                    "confidence": round(avg_conf, 4),
-                })
+            if not current_tokens:
+                return
+            raw_text = " ".join(current_tokens)
+            cleaned = normalize_entity_text(raw_text)
+            if not cleaned:
+                return
+            offset_in_raw = raw_text.find(cleaned)
+            if offset_in_raw < 0:
+                # Defensive: normaliser only strips edges, so cleaned is
+                # always a substring of raw_text. Skip otherwise.
+                return
+            new_start = current_start + offset_in_raw
+            avg_conf = sum(current_confs) / len(current_confs)
+            entities.append({
+                "text": cleaned,
+                "type": current_type,
+                "start": new_start,
+                "end": new_start + len(cleaned),
+                "confidence": round(avg_conf, 4),
+            })
 
         for idx, (token, pred, conf) in enumerate(
             zip(tokens, aligned_preds, aligned_confs),

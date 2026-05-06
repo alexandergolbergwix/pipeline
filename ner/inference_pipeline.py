@@ -10,6 +10,12 @@ import argparse
 from typing import List, Dict, Tuple
 import json
 
+try:
+    # Source-tree layout (PYTHONPATH=src:. or installed package).
+    from ner.entity_normalize import normalize_entity_text
+except ImportError:  # pragma: no cover — bundle layout where ner/ is sys.path[0]
+    from entity_normalize import normalize_entity_text
+
 
 class ProductionNERPipeline:
     """
@@ -415,10 +421,32 @@ class JointNERPipeline:
                 'end': current_start + len(entity_text),
             })
 
+        # Edge-normalisation pass: strip trailing punctuation / brackets /
+        # MARC equivalence markers from the entity text, then adjust the
+        # start / end offsets so they still bound the *cleaned* substring
+        # exactly inside ``text``. Stage-2 audit (2026-05-06) found 27 %
+        # of person spans ended with ``,;:.()"=``; the normaliser already
+        # existed at ner/entity_normalize.py but was never wired in.
+        normalised_entities: List[Dict] = []
+        for ent in raw_entities:
+            raw_text = ent['person']
+            cleaned = normalize_entity_text(raw_text)
+            if not cleaned:
+                continue
+            offset_in_raw = raw_text.find(cleaned)
+            if offset_in_raw < 0:
+                # Defensive: should never happen since the normaliser only
+                # strips edges. Skip rather than emit a broken offset.
+                continue
+            ent['person'] = cleaned
+            ent['start'] = ent['start'] + offset_in_raw
+            ent['end'] = ent['start'] + len(cleaned)
+            normalised_entities.append(ent)
+
         # Second pass: classify role per entity using [PERSON: name] text format
         # This is the format the model was trained with for role classification.
         entities: List[Dict] = []
-        for ent in raw_entities:
+        for ent in normalised_entities:
             role, conf = self._classify_role(ent['person'], text, torch)
             ent['role'] = role
             ent['confidence'] = conf
