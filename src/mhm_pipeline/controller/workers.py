@@ -244,6 +244,41 @@ def _process_text_segment(pipeline: Any, text: str, offset: int) -> list[dict[st
     return _adjust_entity_positions(segment_entities, offset)
 
 
+def _rebase_entity_offsets(
+    entities: list[dict[str, Any]],
+    full_text: str,
+) -> list[dict[str, Any]]:
+    """Relocate per-segment NER entity offsets onto ``full_text``.
+
+    Provenance NER (MARC 561) and Contents NER (MARC 505) return
+    offsets local to their input segments — not relative to
+    ``record["text"]``. Audit 2026-05-06 found record 990001801390205171
+    had 92 contents-NER entities whose ``start``/``end`` indexed into a
+    phantom file-prefix string instead of the body text.
+
+    For each entity we search ``full_text`` for the entity payload
+    (``person`` for person_ner, ``text`` for the others). If found,
+    rebase ``start``/``end`` to the global position. If not found
+    (the segment text isn't part of ``full_text``), null the offsets
+    so consumers can render fallback display rather than slice into
+    garbage.
+    """
+    for ent in entities:
+        payload = ent.get("person") or ent.get("text") or ""
+        if not isinstance(payload, str) or not payload:
+            ent["start"] = None
+            ent["end"] = None
+            continue
+        idx = full_text.find(payload)
+        if idx < 0:
+            ent["start"] = None
+            ent["end"] = None
+        else:
+            ent["start"] = idx
+            ent["end"] = idx + len(payload)
+    return entities
+
+
 class NerWorker(StageWorker):
     """Run NER inference on extracted MARC data.
 
@@ -541,10 +576,68 @@ class NerWorker(StageWorker):
                     except Exception as _genre_exc:
                         logger.debug("Genre ML error: %s", _genre_exc)
 
+                # Audit fix A5 (2026-05-06): ``record["text"]`` becomes
+                # the FULL concatenation of every input fed to the NER
+                # models (notes + colophon + provenance + contents),
+                # then provenance and contents entities have their
+                # offsets rebased onto it via substring search. The
+                # audit found 92 contents-NER offsets on record
+                # 990001801390205171 indexed into a phantom file-prefix
+                # because ``text`` only contained notes + colophon.
+                full_text_parts: list[str] = list(texts)
+                provenance_text_full = record.get("provenance") or ""
+                if isinstance(provenance_text_full, str) and provenance_text_full.strip():
+                    full_text_parts.append(str(provenance_text_full).replace('""', '"'))
+                for content in record.get("contents") or []:
+                    if isinstance(content, dict):
+                        c_parts: list[str] = []
+                        if content.get("folio_range"):
+                            c_parts.append(f"דף {content['folio_range']}:")
+                        if content.get("responsibility"):
+                            c_parts.append(f"{content['responsibility']}:")
+                        if content.get("title"):
+                            c_parts.append(str(content["title"]))
+                        if c_parts:
+                            full_text_parts.append(" ".join(c_parts))
+                    elif isinstance(content, str) and content.strip():
+                        full_text_parts.append(content)
+                full_text = "\n".join(full_text_parts)
+                # Re-base offsets for entities that did not come from
+                # the person-NER segment-offset pipeline (which was
+                # already global). We can't tell person from non-person
+                # by source alone here — instead, verify each entity's
+                # current offset is consistent with ``full_text`` and
+                # re-base only those that are not.
+                _verified: list[dict[str, Any]] = []
+                for ent in all_entities:
+                    payload = ent.get("person") or ent.get("text") or ""
+                    if not isinstance(payload, str) or not payload:
+                        continue
+                    s, e = ent.get("start"), ent.get("end")
+                    if (
+                        isinstance(s, int) and isinstance(e, int)
+                        and 0 <= s < e <= len(full_text)
+                        and full_text[s:e] == payload
+                    ):
+                        _verified.append(ent)
+                        continue
+                    # Re-base by substring search. ``find`` returns the
+                    # first occurrence — sufficient for downstream
+                    # display since the entity text is unambiguous.
+                    idx_in_full = full_text.find(payload)
+                    if idx_in_full >= 0:
+                        ent["start"] = idx_in_full
+                        ent["end"] = idx_in_full + len(payload)
+                    else:
+                        ent["start"] = None
+                        ent["end"] = None
+                    _verified.append(ent)
+                all_entities = _verified
+
                 results.append(
                     {
                         "_control_number": record.get("_control_number"),
-                        "text": "\n".join(texts),
+                        "text": full_text,
                         "entities": all_entities,
                         "ml_colophon_sentences": ml_colophon_sentences,
                         "ml_genres": ml_genres,

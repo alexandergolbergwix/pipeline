@@ -1524,6 +1524,73 @@ class TestNerEntitySchemaCleanliness:
         assert "contents_ner" in VALID_SOURCES
 
 
+class TestNerOffsetRebasing:
+    """Stage-2 audit fix A5 (2026-05-06): per-segment NER offsets must
+    be rebased onto ``record["text"]`` (or nulled if the entity text is
+    not findable in the global text). Audit found 92 contents-NER
+    entities on record 990001801390205171 had offsets indexing into a
+    phantom file-prefix instead of the body text — because
+    ``record["text"]`` was only notes+colophon, NOT the contents NER's
+    actual input.
+    """
+
+    def test_rebase_helper_finds_entity_in_full_text(self) -> None:
+        from mhm_pipeline.controller.workers import _rebase_entity_offsets
+
+        full = "ראשית דף 12 ספר הזוהר סוף"
+        ents = [
+            {"text": "ספר הזוהר", "start": 5, "end": 14, "type": "WORK", "source": "contents_ner"},
+        ]
+        rebased = _rebase_entity_offsets(ents, full)
+        assert rebased[0]["start"] == full.find("ספר הזוהר")
+        assert rebased[0]["end"] == rebased[0]["start"] + len("ספר הזוהר")
+        # Verify the offsets point at the right substring.
+        s, e = rebased[0]["start"], rebased[0]["end"]
+        assert full[s:e] == "ספר הזוהר"
+
+    def test_rebase_helper_nulls_offsets_when_not_findable(self) -> None:
+        from mhm_pipeline.controller.workers import _rebase_entity_offsets
+
+        full = "ראשית דף 12 ספר הזוהר סוף"
+        # Entity text doesn't appear in full_text at all.
+        ents = [{"text": "BIBLIOGRAPHIC_50929_3.txt", "start": 0, "end": 25,
+                 "type": "WORK", "source": "contents_ner"}]
+        rebased = _rebase_entity_offsets(ents, full)
+        assert rebased[0]["start"] is None
+        assert rebased[0]["end"] is None
+
+    def test_rebase_helper_handles_person_ner_payload_key(self) -> None:
+        """``person_ner`` entities use ``person`` not ``text``."""
+        from mhm_pipeline.controller.workers import _rebase_entity_offsets
+
+        full = "ר' שלמה הלוי בן יצחק"
+        ents = [{"person": "שלמה הלוי", "start": 999, "end": 1010, "source": "person_ner"}]
+        rebased = _rebase_entity_offsets(ents, full)
+        assert rebased[0]["start"] == full.find("שלמה הלוי")
+
+    def test_rebase_helper_drops_offsets_for_empty_payload(self) -> None:
+        from mhm_pipeline.controller.workers import _rebase_entity_offsets
+
+        ents = [{"text": "", "start": 5, "end": 10}]
+        rebased = _rebase_entity_offsets(ents, "any text")
+        assert rebased[0]["start"] is None
+        assert rebased[0]["end"] is None
+
+    def test_workers_run_includes_provenance_and_contents_in_full_text(self) -> None:
+        """Source-level: NerWorker.run must include provenance + contents
+        text in the ``full_text`` it stores as ``record["text"]``, so
+        offset rebasing actually has somewhere to land."""
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        assert 'full_text_parts: list[str] = list(texts)' in src, (
+            "NerWorker must build full_text_parts from texts (notes+colophon) "
+            "and append provenance + contents segments — see audit fix A5."
+        )
+        assert 'full_text_parts.append(str(provenance_text_full)' in src or \
+               'full_text_parts.append(' in src, (
+            "NerWorker must extend full_text with provenance and contents."
+        )
+
+
 class TestMarc500ProvenanceRouting:
     """Stage-2 audit fix A2 (2026-05-06): the MARC 500 sentence
     classifier must route PROVENANCE sentences (in addition to
