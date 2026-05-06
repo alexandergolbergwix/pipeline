@@ -368,57 +368,76 @@ class JointNERPipeline:
                 input_ids=input_ids, attention_mask=attention_mask
             )
 
+        # Audit fix A3 (2026-05-06): surface the model's real softmax
+        # probabilities so downstream consumers can use a meaningful
+        # ``model_confidence`` signal. The legacy ``confidence`` field
+        # below stays at the keyword-heuristic 0.60/0.85 (Stage 3
+        # guards keyed on those values).
+        ner_probs = torch.softmax(ner_logits[0], dim=-1)
         ner_preds = torch.argmax(ner_logits[0], dim=-1).cpu().tolist()
+        ner_max_probs = ner_probs.max(dim=-1).values.cpu().tolist()
 
         # Align subword predictions to word-level (keep first subtoken per word)
         word_ids = encoding.word_ids(batch_index=0)
         aligned: List[int] = []
+        aligned_probs: List[float] = []
         prev_word_id = None
         for i, word_id in enumerate(word_ids):
             if word_id is None:
                 continue
             if word_id != prev_word_id:
                 aligned.append(ner_preds[i])
+                aligned_probs.append(float(ner_max_probs[i]))
             prev_word_id = word_id
 
         # Build entity spans from BIO tags (without role — assigned in second pass)
         raw_entities: List[Dict] = []
         current: List[str] = []
+        current_probs: List[float] = []
         current_start = 0
         search_from = 0
 
-        for token, pred in zip(tokens, aligned):
+        for token, pred, prob in zip(tokens, aligned, aligned_probs):
             label = self.NER_ID2LABEL.get(pred, 'O')
             if label == 'B-PERSON':
                 if current:
                     entity_text = ' '.join(current)
+                    span_conf = round(sum(current_probs) / len(current_probs), 4)
                     raw_entities.append({
                         'person': entity_text,
                         'start': current_start,
                         'end': current_start + len(entity_text),
+                        'model_confidence': span_conf,
                     })
                     search_from = current_start + len(entity_text)
                 current = [token]
+                current_probs = [prob]
                 current_start = text.find(token, search_from)
             elif label == 'I-PERSON' and current:
                 current.append(token)
+                current_probs.append(prob)
             else:
                 if current:
                     entity_text = ' '.join(current)
+                    span_conf = round(sum(current_probs) / len(current_probs), 4)
                     raw_entities.append({
                         'person': entity_text,
                         'start': current_start,
                         'end': current_start + len(entity_text),
+                        'model_confidence': span_conf,
                     })
                     search_from = current_start + len(entity_text)
                     current = []
+                    current_probs = []
 
         if current:
             entity_text = ' '.join(current)
+            span_conf = round(sum(current_probs) / len(current_probs), 4)
             raw_entities.append({
                 'person': entity_text,
                 'start': current_start,
                 'end': current_start + len(entity_text),
+                'model_confidence': span_conf,
             })
 
         # Edge-normalisation pass: strip trailing punctuation / brackets /

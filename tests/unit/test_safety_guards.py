@@ -1524,6 +1524,47 @@ class TestNerEntitySchemaCleanliness:
         assert "contents_ner" in VALID_SOURCES
 
 
+class TestPersonNerModelConfidence:
+    """Stage-2 audit fix A3 (2026-05-06): person-NER entities must
+    expose the real model softmax probability as ``model_confidence``.
+    The audit found ``confidence`` was bimodal at exactly 0.60 / 0.85
+    — the keyword-heuristic hardcoded values, not real probabilities.
+
+    Stage 3 confidence guards (CLAUDE.md Rule 23) read ``confidence``
+    so we cannot silently change its semantics — the keyword value
+    stays. ``model_confidence`` is the new field carrying the softmax
+    score; downstream consumers can migrate explicitly.
+    """
+
+    def test_person_ner_emits_both_confidence_fields_in_source(self) -> None:
+        """``ner/inference_pipeline.py`` must construct ``model_confidence``
+        from softmax(ner_logits) AND keep the legacy ``confidence`` field
+        from ``_classify_role``."""
+        src = pathlib.Path("ner/inference_pipeline.py").read_text(encoding="utf-8")
+        assert "torch.softmax(ner_logits[0]" in src, (
+            "Person NER must compute torch.softmax over ner_logits to "
+            "expose real model confidence (audit fix A3)."
+        )
+        assert "'model_confidence'" in src, (
+            "Person NER entities must include the 'model_confidence' "
+            "field (audit fix A3)."
+        )
+        # Legacy `confidence` from keyword classifier still emitted.
+        assert "ent['confidence'] = conf" in src, (
+            "Legacy 'confidence' field from _classify_role must remain "
+            "for Stage 3 backwards compatibility (audit fix A3)."
+        )
+
+    def test_keyword_classifier_still_returns_bimodal(self) -> None:
+        """Sanity: the keyword heuristic itself is unchanged — only the
+        new ``model_confidence`` field is added on top."""
+        # We can't import ner.inference_pipeline because of the
+        # postprocessing_rules sibling-import. Read source instead.
+        src = pathlib.Path("ner/inference_pipeline.py").read_text(encoding="utf-8")
+        assert "return role, 0.85" in src
+        assert "return 'AUTHOR', 0.60" in src
+
+
 class TestNerOffsetRebasing:
     """Stage-2 audit fix A5 (2026-05-06): per-segment NER offsets must
     be rebased onto ``record["text"]`` (or nulled if the entity text is
