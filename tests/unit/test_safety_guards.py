@@ -1460,6 +1460,31 @@ class TestTranslatorCommentatorProperties:
         assert ROLE_TO_PID.get("translator") != P_AUTHOR
 
 
+class TestRoleToLabelIncludesTranscriber:
+    """Stage-2 audit fix A4 (2026-05-06): the keyword classifier in
+    ``ner/inference_pipeline.py`` emits ``TRANSCRIBER`` (not ``SCRIBE``).
+    ``_ROLE_TO_LABEL`` must include the alias so person descriptions are
+    not blank for the 14 / 129 audit-corpus entities tagged TRANSCRIBER.
+    """
+
+    def test_transcriber_uppercase_maps_to_scribe(self) -> None:
+        from converter.wikidata.item_builder import _ROLE_TO_LABEL
+
+        assert _ROLE_TO_LABEL.get("TRANSCRIBER") == "scribe"
+
+    def test_transcriber_lowercase_maps_to_scribe(self) -> None:
+        from converter.wikidata.item_builder import _ROLE_TO_LABEL
+
+        assert _ROLE_TO_LABEL.get("transcriber") == "scribe"
+
+    def test_role_to_occupation_already_maps_transcriber(self) -> None:
+        """Sanity: this dict already mapped TRANSCRIBER (audit confirmed),
+        the description label was the only missing piece."""
+        from converter.wikidata.item_builder import _ROLE_TO_OCCUPATION
+
+        assert _ROLE_TO_OCCUPATION.get("TRANSCRIBER") is not None
+
+
 class TestMaxlag:
     """Fix #16: MAXLAG must be at least 10 seconds."""
 
