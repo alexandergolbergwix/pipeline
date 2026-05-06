@@ -24,6 +24,40 @@ logger = logging.getLogger(__name__)
 _BASE_MODEL = "dicta-il/dictabert"
 _LABEL2ID = {"COLOPHON": 0}
 
+# Hebrew ownership / acquisition vocabulary used to detect MARC 500
+# sentences that describe provenance. Lifted verbatim from
+# ``scripts/extract_marc500_sentences.py:_PROVENANCE_KEYWORDS`` —
+# the same set was used to label the training corpus that the
+# (single-head) DictaBERT classifier learned. Acts as a deterministic
+# fallback while the second sigmoid head (Rule 35 §) is being trained.
+_PROVENANCE_KEYWORDS: frozenset[str] = frozenset({
+    # acquisition
+    "קנה", "קניתי", "נרכש", "רכשתי",
+    # ownership
+    "שייך", "שייכת",
+    "בעלות", "בבעלות",
+    # sale
+    "נמכר", "מכרתי", "נמכרה",
+    # signatures / inscriptions of ownership
+    "חתמתי", "חתם",
+    # inheritance
+    "ירשתי", "ירש", "בירושה",
+    "ממורשתי", "מורשה",
+    # marriage / dowry transfers
+    "מוהר", "נדוניה",
+    # gift transfers
+    "מתנה", "כמתנה", "הוענק",
+    # written-for / commissioned-by
+    "נכתב עבור", "נכתב בשביל",
+    "עבור",
+})
+
+# Confidence assigned to a heuristic match. We deliberately set this
+# below the COLOPHON threshold so that callers can distinguish
+# "model said yes (0.6+)" from "keyword fallback said yes (0.55)".
+_PROVENANCE_HEURISTIC_CONF: float = 0.55
+_PROVENANCE_HEURISTIC_THRESHOLD: float = 0.5
+
 
 class Marc500Classifier:
     """Sentence-level binary classifier for MARC 500 colophon detection."""
@@ -97,6 +131,28 @@ class Marc500Classifier:
 
         return (conf >= self.threshold, conf)
 
+    def is_provenance(self, sentence: str) -> tuple[bool, float]:
+        """Return (above_threshold, confidence) for provenance routing.
+
+        The trained checkpoint has a single COLOPHON head — Rule 35's
+        promised PROVENANCE head is not yet trained. Until it is, this
+        method falls back to a deterministic Hebrew-vocabulary check
+        using the SAME keyword set
+        (:data:`_PROVENANCE_KEYWORDS`) that labelled the training
+        corpus. The return shape matches :meth:`is_colophon` so callers
+        (NerWorker MARC 500 router) can treat both heads uniformly.
+        """
+        text = (sentence or "").strip()
+        if not text:
+            return (False, 0.0)
+        haystack = text.lower()
+        if any(kw in haystack for kw in _PROVENANCE_KEYWORDS):
+            return (True, _PROVENANCE_HEURISTIC_CONF)
+        return (False, 0.0)
+
     def classify_sentence(self, sentence: str) -> dict[str, tuple[bool, float]]:
-        """Return {"COLOPHON": (above_threshold, confidence)}."""
-        return {"COLOPHON": self.is_colophon(sentence)}
+        """Return both heads' results in one call."""
+        return {
+            "COLOPHON": self.is_colophon(sentence),
+            "PROVENANCE": self.is_provenance(sentence),
+        }

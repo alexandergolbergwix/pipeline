@@ -1524,6 +1524,83 @@ class TestNerEntitySchemaCleanliness:
         assert "contents_ner" in VALID_SOURCES
 
 
+class TestMarc500ProvenanceRouting:
+    """Stage-2 audit fix A2 (2026-05-06): the MARC 500 sentence
+    classifier must route PROVENANCE sentences (in addition to
+    COLOPHON) through the provenance NER pipeline. The audit found
+    zero entities with ``from_marc500: True`` despite obvious
+    provenance content in 27/68 records — the routing was missing.
+
+    Rule 35 in CLAUDE.md promises the dual-head routing. Until the
+    second sigmoid head is trained, the classifier's
+    :meth:`is_provenance` falls back to the same Hebrew vocabulary
+    used to label the training corpus.
+    """
+
+    def test_classifier_exposes_is_provenance_method(self) -> None:
+        """``Marc500Classifier.is_provenance`` exists with the same
+        ``(bool, float)`` return shape as ``is_colophon``."""
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        assert hasattr(Marc500Classifier, "is_provenance")
+        assert callable(Marc500Classifier.is_provenance)
+
+    def test_is_provenance_keyword_match_returns_true(self) -> None:
+        """Sentence with ownership vocabulary should fire the heuristic."""
+        from converter.authority.marc500_classifier import (
+            _PROVENANCE_HEURISTIC_CONF, Marc500Classifier,
+        )
+
+        # Bypass __init__ since we don't need a loaded model for the
+        # is_provenance heuristic path.
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        above, conf = clf.is_provenance("נכתב עבור משה בן יצחק בשנת תפ\"ט")
+        assert above is True
+        assert conf == _PROVENANCE_HEURISTIC_CONF
+
+    def test_is_provenance_no_keyword_returns_false(self) -> None:
+        """Sentence with no ownership vocabulary returns False / 0.0."""
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        above, conf = clf.is_provenance("כתוב על קלף בכתב אשכנזי שתי עמודות")
+        assert above is False
+        assert conf == 0.0
+
+    def test_is_provenance_empty_returns_false(self) -> None:
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        assert clf.is_provenance("") == (False, 0.0)
+        assert clf.is_provenance("   ") == (False, 0.0)
+
+    def test_classify_sentence_returns_both_heads(self) -> None:
+        """Backwards-compat: ``classify_sentence`` now returns BOTH heads."""
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        # We don't have a loaded model so is_colophon would crash.
+        # Stub it to a known value.
+        clf.is_colophon = lambda s: (False, 0.0)  # type: ignore[method-assign]
+        result = clf.classify_sentence("נכתב עבור משה")
+        assert "COLOPHON" in result
+        assert "PROVENANCE" in result
+        assert result["PROVENANCE"][0] is True
+
+    def test_workers_calls_is_provenance_in_marc500_loop(self) -> None:
+        """Source-level: NerWorker must invoke is_provenance on each
+        MARC 500 sentence and route hits through provenance_pipeline."""
+        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
+        assert "_marc500_clf.is_provenance(" in src, (
+            "NerWorker must call is_provenance on MARC 500 sentences "
+            "(audit fix A2)."
+        )
+        assert '"from_marc500"' in src, (
+            "NerWorker must stamp from_marc500 on routed entities "
+            "(audit fix A2 / Rule 35)."
+        )
+
+
 class TestRoleToLabelIncludesTranscriber:
     """Stage-2 audit fix A4 (2026-05-06): the keyword classifier in
     ``ner/inference_pipeline.py`` emits ``TRANSCRIBER`` (not ``SCRIBE``).

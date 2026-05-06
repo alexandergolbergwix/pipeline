@@ -473,18 +473,39 @@ class NerWorker(StageWorker):
                 # through Wikidata reconciliation.
                 ml_colophon_sentences: list[str] = []
                 if not marc500_announced:
-                    self.substep.emit("Loading MARC 500 colophon classifier")
+                    self.substep.emit("Loading MARC 500 sentence classifier")
                     marc500_announced = True
                 _marc500_clf = _get_marc500_classifier()
                 if _marc500_clf is not None:
                     for note in record.get("notes") or []:
                         for sent in _split_marc500_sentences(str(note)):
+                            # COLOPHON head — sentence becomes a colophon
+                            # source for P1684 (audit fix A6: lives only
+                            # in ml_colophon_sentences, not entities[]).
                             try:
-                                above_thr, conf = _marc500_clf.is_colophon(sent)
-                                if above_thr:
+                                col_above, col_conf = _marc500_clf.is_colophon(sent)
+                                if col_above:
                                     ml_colophon_sentences.append(sent)
-                            except Exception as _clf_exc:
-                                logger.debug("MARC 500 clf error: %s", _clf_exc)
+                            except Exception as _col_exc:
+                                logger.debug("MARC 500 colophon clf error: %s", _col_exc)
+                            # PROVENANCE head — Rule 35 says PROVENANCE
+                            # MARC 500 sentences route through the
+                            # provenance NER pipeline. Audit fix A2
+                            # (2026-05-06): this routing was missing —
+                            # zero entities had ``from_marc500: True``
+                            # despite obvious provenance content in
+                            # 27/68 records of the audit corpus.
+                            try:
+                                prov_above, prov_conf = _marc500_clf.is_provenance(sent)
+                                if prov_above and provenance_pipeline is not None:
+                                    from500_entities = provenance_pipeline.process_text(sent)
+                                    for ent in from500_entities:
+                                        ent["source"] = "provenance_ner"
+                                        ent["from_marc500"] = True
+                                        ent["marc500_confidence"] = float(prov_conf)
+                                    all_entities.extend(from500_entities)
+                            except Exception as _prov_exc:
+                                logger.debug("MARC 500 provenance routing error: %s", _prov_exc)
 
                 # Genre classifier (Stage 3 P136 fallback). Predictions
                 # land in ``ml_genres`` (audit fix A6), NOT in the
