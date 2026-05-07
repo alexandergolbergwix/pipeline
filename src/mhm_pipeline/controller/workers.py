@@ -633,8 +633,10 @@ class NerWorker(StageWorker):
                 # is documented in ner_post_filters.py.
                 from converter.authority.ner_post_filters import (  # noqa: PLC0415
                     filter_collection_citations,
+                    filter_date_shape,
                     filter_owner_length,
                     filter_person_hallucinations,
+                    filter_person_role_dedup,
                     filter_work_author_folio,
                 )
                 all_entities = filter_work_author_folio(all_entities)
@@ -642,7 +644,11 @@ class NerWorker(StageWorker):
                     all_entities, surrounding_text=full_text,
                 )
                 all_entities, prov_inscriptions = filter_owner_length(all_entities)
-                all_entities = filter_person_hallucinations(all_entities)
+                all_entities = filter_person_hallucinations(
+                    all_entities, surrounding_text=full_text,
+                )
+                all_entities = filter_person_role_dedup(all_entities)
+                all_entities = filter_date_shape(all_entities)
 
                 results.append(
                     {

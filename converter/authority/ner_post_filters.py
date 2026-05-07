@@ -43,6 +43,30 @@ from typing import Any
 # letter (א=front, ב=back) immediately following.
 _FOLIO_PREFIX_RE = re.compile(r"^\s*\d+\s*[א-ת]")
 
+# Hebrew tokens that signal a real WORK title rather than a folio ref
+# or a person name. When a WORK_AUTHOR span starts with one of these,
+# it is re-typed to WORK (preserving the entity) instead of being
+# routed to FOLIO. Covers explicit work-headers (ספר, מסכת, הלכות,
+# שו"ת, מאמר, אגרת), genre prefixes (פירוש, ביאור, מהדורת), and known
+# stand-alone work titles (תשב"ץ, יוסיפון, כתובים, נביאים, תורה).
+_WORK_TITLE_PREFIXES: frozenset[str] = frozenset({
+    "ספר", "מסכת", "הלכות", "שו\"ת", "שו״ת",
+    "פירוש", "ביאור", "מהדורת", "מפר'", "מאמר", "אגרת",
+    "תשב\"ץ", "תשב״ץ", "יוסיפון", "כתובים", "נביאים", "תורה",
+})
+
+
+def _has_work_title_prefix(text: str) -> bool:
+    """True iff *text* begins with a WORK morphology marker."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    for prefix in _WORK_TITLE_PREFIXES:
+        if stripped.startswith(prefix):
+            return True
+    first_token = stripped.split()[0] if stripped.split() else ""
+    return first_token in _WORK_TITLE_PREFIXES
+
 
 def filter_work_author_folio(
     entities: list[dict[str, Any]],
@@ -54,11 +78,21 @@ def filter_work_author_folio(
     (digits followed by a Hebrew side letter) is re-tagged as
     ``FOLIO`` and stamped with ``retyped_from`` so callers can tell
     a real WORK_AUTHOR from a recovered one.
+
+    A WORK_AUTHOR span whose text starts with a WORK morphology
+    marker (:data:`_WORK_TITLE_PREFIXES`) is re-typed to ``WORK``
+    instead — these are full work titles (with or without an embedded
+    author) the contents NER mis-classified, and they belong on P1574
+    not on P50.
     """
     for ent in entities:
         if ent.get("type") != "WORK_AUTHOR":
             continue
         text = str(ent.get("text") or "")
+        if _has_work_title_prefix(text):
+            ent["type"] = "WORK"
+            ent["retyped_from"] = "WORK_AUTHOR"
+            continue
         if _FOLIO_PREFIX_RE.match(text):
             ent["type"] = "FOLIO"
             ent["retyped_from"] = "WORK_AUTHOR"
@@ -235,6 +269,42 @@ _HEBREW_TOPIC_DENYLIST: frozenset[str] = frozenset({
     "משיח", "גאולה",
 })
 
+# Hebrew place names and rite designators that surface in MARC subject
+# headings and bibliographic notes. The person NER mis-tags them as
+# author / owner spans because they share the morphology of Hebrew
+# proper nouns. They should never become person items on Wikidata —
+# real names like "משה ממנטובה" remain unaffected because the filter
+# only matches the place token in isolation.
+_HEBREW_PLACE_DENYLIST: frozenset[str] = frozenset({
+    "מנטובה", "קנדיאה", "ויניציאה", "קרפנטרץ", "קארפינטראץ",
+    "אוגיניון", "תרודנט", "מקדם", "פראג", "אמסטרדם", "ליוורנו",
+    "פיזרו", "ורמייזא", "פרנקפורט", "פרנקפורט אם מיין", "פדובה",
+    "סלוניקי", "ירושלים", "חברון", "צפת", "מצרים", "קושטא",
+    "קושטנדינא", "איסטנבול",
+})
+
+# Bible book names (Hebrew + English) the person NER occasionally
+# mis-tags as a person — typically with a TRANSLATOR or COMMENTATOR
+# role on a span like "ישעיהו" picked up from a subject heading.
+_BIBLE_BOOK_DENYLIST: frozenset[str] = frozenset({
+    # Hebrew — 24 books of the Tanakh
+    "בראשית", "שמות", "ויקרא", "במדבר", "דברים",
+    "יהושע", "שופטים", "שמואל", "מלכים",
+    "ישעיהו", "ירמיהו", "יחזקאל",
+    "הושע", "יואל", "עמוס", "עובדיה", "יונה", "מיכה",
+    "נחום", "חבקוק", "צפניה", "חגי", "זכריה", "מלאכי",
+    "תהלים", "משלי", "איוב", "שיר השירים", "רות",
+    "איכה", "קהלת", "אסתר", "דניאל", "עזרא", "נחמיה",
+    "דברי הימים",
+    # English equivalents
+    "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
+    "joshua", "judges", "samuel", "kings",
+    "isaiah", "jeremiah", "ezekiel",
+    "hosea", "joel", "amos", "obadiah", "jonah", "micah",
+    "nahum", "habakkuk", "zephaniah", "haggai", "zechariah", "malachi",
+    "psalms", "proverbs", "job", "ecclesiastes", "esther", "daniel",
+})
+
 # English / Latin topic words and acronyms commonly mis-tagged as
 # persons. Extend when a new false-positive class surfaces.
 _LATIN_TOPIC_DENYLIST: frozenset[str] = frozenset({
@@ -243,6 +313,13 @@ _LATIN_TOPIC_DENYLIST: frozenset[str] = frozenset({
     "TPP", "NASH PAPYRUS", "PAPYRUS",
     "Idra Raba",
 })
+
+# Hebrew subject-heading marker. MARC subject headings prefixed by
+# "נושא נוסף:" feed the person NER topic words like "פורים", "סוס",
+# "פולמוס" that the tagger then emits as AUTHOR spans. Detected via
+# the preceding ≤30-char window of the surrounding text.
+_SUBJECT_HEADING_MARKER: str = "נושא נוסף"
+_SUBJECT_HEADING_WINDOW: int = 30
 
 # Uncertainty markers that almost always indicate a non-person span
 # (cataloguer's note about an unclear reading).
@@ -257,12 +334,19 @@ _HEBREW_LETTER_RE = re.compile(r"[\u05d0-\u05ea]")
 
 def filter_person_hallucinations(
     entities: list[dict[str, Any]],
+    *,
+    surrounding_text: str = "",
 ) -> list[dict[str, Any]]:
     """Drop person_ner entities that are almost certainly not persons.
 
     Conservative — only drops entities matching one of:
 
+    * Preceded in *surrounding_text* (within 30 chars) by the MARC
+      subject-heading marker ``נושא נוסף`` — the span is a topic
+      keyword harvested from a subject line, never a person.
     * A Hebrew topic keyword (קבלה, ספרד, אוטוגרף, …).
+    * A Hebrew place / rite token (מנטובה, ויניציאה, ירושלים, …).
+    * A Bible book name in Hebrew or English (בראשית, Genesis, …).
     * A Latin topic keyword or ALL-CAPS ASCII fragment (NASH PAPYRUS,
       TPP) — never plausible as a personal name.
     * An MARC uncertainty marker (``?`` / ``[`` / ``]``) — the
@@ -271,6 +355,10 @@ def filter_person_hallucinations(
     * Fewer than :data:`_MIN_HEBREW_LETTERS` Hebrew letters AND no
       Latin word characters — single Hebrew tokens are unreliable
       as authority keys.
+
+    *surrounding_text* (when supplied) is the full record-level text
+    used for the subject-heading window check; an empty string
+    disables that one check defensively without affecting the others.
     """
     kept: list[dict[str, Any]] = []
     for ent in entities:
@@ -279,6 +367,12 @@ def filter_person_hallucinations(
             continue
         name = str(ent.get("person") or "").strip()
         reason = _hallucination_reason(name)
+        if reason is None and surrounding_text:
+            start = ent.get("start")
+            if isinstance(start, int) and start >= 0:
+                window = surrounding_text[max(0, start - _SUBJECT_HEADING_WINDOW):start]
+                if _SUBJECT_HEADING_MARKER in window:
+                    reason = "subject_heading_marker"
         if reason is None:
             kept.append(ent)
         else:
@@ -294,18 +388,24 @@ def _hallucination_reason(name: str) -> str | None:
     """Return a short reason string if *name* is a hallucination, else None."""
     if not name:
         return "empty"
-    # 1. Hebrew topic denylist (case-insensitive on the Latin half)
+    # 1. Hebrew topic denylist
     if name in _HEBREW_TOPIC_DENYLIST:
         return "hebrew_topic_denylist"
-    # 2. Latin topic denylist (case-insensitive comparison)
+    # 2. Hebrew place / rite denylist
+    if name in _HEBREW_PLACE_DENYLIST:
+        return "hebrew_place_denylist"
+    # 3. Bible book denylist (case-insensitive for the English half)
     name_lower = name.lower()
+    if name in _BIBLE_BOOK_DENYLIST or name_lower in _BIBLE_BOOK_DENYLIST:
+        return "bible_book_denylist"
+    # 4. Latin topic denylist (case-insensitive comparison)
     for topic in _LATIN_TOPIC_DENYLIST:
         if topic.lower() == name_lower:
             return "latin_topic_denylist"
-    # 3. Uncertainty markers
+    # 5. Uncertainty markers
     if _UNCERTAINTY_MARKER_RE.search(name):
         return "uncertainty_marker"
-    # 4. ALL-CAPS ASCII fragments (no Hebrew, no lowercase, no spaces
+    # 6. ALL-CAPS ASCII fragments (no Hebrew, no lowercase, no spaces
     #    of any plausible name shape: ``"NASH PAPYRUS"``, ``"TPP"``).
     is_all_ascii = name.isascii()
     has_hebrew = bool(_HEBREW_LETTER_RE.search(name))
@@ -313,7 +413,7 @@ def _hallucination_reason(name: str) -> str | None:
         # All-uppercase ASCII (allow underscores/digits but no lowercase)
         if name == name.upper() and any(c.isalpha() for c in name):
             return "all_caps_ascii"
-    # 5. Insufficient Hebrew letter count AND no Latin name pattern
+    # 7. Insufficient Hebrew letter count AND no Latin name pattern
     hebrew_letter_count = len(_HEBREW_LETTER_RE.findall(name))
     has_latin_word = any(c.isalpha() and c.isascii() for c in name)
     if hebrew_letter_count < _MIN_HEBREW_LETTERS and not has_latin_word:
@@ -321,10 +421,122 @@ def _hallucination_reason(name: str) -> str | None:
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────
+# F6 — Per-record same-name role dedup
+# ─────────────────────────────────────────────────────────────────────
+
+# Role priority — when the same person is tagged with multiple roles
+# in one record, keep the highest-priority role.
+_ROLE_PRIORITY: dict[str, int] = {
+    "AUTHOR": 5,
+    "TRANSCRIBER": 4,
+    "COMMENTATOR": 3,
+    "TRANSLATOR": 2,
+    "OWNER": 1,
+}
+
+
+def filter_person_role_dedup(
+    entities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse same-name multi-role person entries to a single canonical row.
+
+    The keyword classifier in ``ner/inference_pipeline.py`` runs once
+    per text segment, so a person mentioned in multiple segments of the
+    same record gets a fresh role classification each time. The
+    surrounding context can drift (one segment says "the scribe Eleazar
+    wrote", another says "Eleazar's commentary on") and the same person
+    ends up with three different roles. Stage 3 would then create three
+    separate authority candidates.
+
+    Group ``person_ner`` entities by their normalised ``person`` text
+    and keep only one row per group: the row whose role has the
+    highest :data:`_ROLE_PRIORITY`. Ties are broken by the first row
+    encountered (stable input order). Other-source entities pass
+    through untouched.
+
+    Operates per call — the caller MUST pass entities for one record
+    at a time. ``NerWorker`` already has the per-record entity list in
+    scope before it joins them into ``all_entities``.
+    """
+    out: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}  # normalised name → index in `out`
+    for ent in entities:
+        if ent.get("source") != "person_ner":
+            out.append(ent)
+            continue
+        name = str(ent.get("person") or "").strip()
+        if not name:
+            out.append(ent)
+            continue
+        key = name.lower()
+        if key not in seen:
+            seen[key] = len(out)
+            out.append(ent)
+            continue
+        # Collide — compare role priority.
+        existing = out[seen[key]]
+        existing_pri = _ROLE_PRIORITY.get(str(existing.get("role") or ""), 0)
+        new_pri = _ROLE_PRIORITY.get(str(ent.get("role") or ""), 0)
+        if new_pri > existing_pri:
+            out[seen[key]] = ent
+        # else: drop the colliding entity
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# F7 — DATE shape filter
+# ─────────────────────────────────────────────────────────────────────
+
+# Shapes a real Hebrew-manuscript date can take. The provenance NER
+# occasionally tags shelfmark suffixes / catalog item numbers / narrative
+# verbs as DATE; this regex screens for the four shapes that are
+# actually parseable downstream.
+_DATE_SHAPE_RE = re.compile(
+    r"""
+    \b\d{3,4}\b          # 3-4 digit Gregorian year (e.g. 1654, 1826, 982)
+    | [\u05d0-\u05ea]['\u05F3]?[\u05d0-\u05ea]{1,4}["\u05F4][\u05d0-\u05ea]
+                         # Hebrew gershayim form (e.g. תפ"ט, רמ"ב, ב'קל"ז)
+    | \[\s*=\s*\d{3,4}\s*\]
+                         # MARC Gregorian-equivalent bracket (e.g. [=1826])
+    | \bca\.\s*\d{3,4}\b
+                         # circa-form (e.g. ca. 1500)
+    """,
+    re.VERBOSE,
+)
+
+
+def filter_date_shape(
+    entities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop ``provenance_ner`` DATE entities whose text doesn't match
+    a parseable date shape.
+
+    Keeps four canonical Hebrew-manuscript date forms — Gregorian
+    years, Hebrew gershayim chronograms, MARC ``[=YYYY]`` equivalence
+    brackets, and ``ca.`` circa-forms. Anything else (shelfmark
+    suffixes, catalog item numbers, narrative verbs) is dropped.
+
+    Other-source / other-type entities pass through untouched.
+    """
+    out: list[dict[str, Any]] = []
+    for ent in entities:
+        if ent.get("source") != "provenance_ner" or ent.get("type") != "DATE":
+            out.append(ent)
+            continue
+        text = str(ent.get("text") or "")
+        if _DATE_SHAPE_RE.search(text):
+            out.append(ent)
+        # else: drop silently — not a real date
+    return out
+
+
 __all__ = [
     "filter_collection_citations",
+    "filter_date_shape",
     "filter_owner_length",
     "filter_person_hallucinations",
+    "filter_person_role_dedup",
     "filter_work_author_folio",
     "OWNER_MAX_LENGTH",
 ]

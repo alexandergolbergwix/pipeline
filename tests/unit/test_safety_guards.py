@@ -1872,6 +1872,174 @@ class TestNerPostFilters:
         assert len(out) == 2
 
 
+class TestNerPostFiltersPrecision:
+    """Audit-driven precision tightening for Stage 2 post-filters:
+
+    * F1 — drop person spans harvested from MARC ``נושא נוסף`` subject
+      headings (detected via the preceding 30-char window).
+    * F2 — extend the Hebrew denylist with place / rite tokens
+      (Mantua, Venice, Candia, Carpentras, Avignon, …).
+    * F3 — drop Bible book names (Hebrew + English) tagged as
+      authors / commentators.
+    * F4 — when ``WORK_AUTHOR`` text starts with a known WORK
+      morphology marker (ספר, תשב"ץ, יוסיפון, …), re-type to
+      ``WORK`` instead of ``FOLIO``.
+    """
+
+    # ── F1 — subject-heading marker ───────────────────────────────────
+
+    def test_f1_subject_heading_marker_drops_author(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        text = "title prefix\nנושא נוסף: פורים"
+        start = text.find("פורים")
+        ents = [
+            {
+                "person": "פורים", "role": "AUTHOR", "source": "person_ner",
+                "start": start, "end": start + len("פורים"),
+            },
+        ]
+        out = filter_person_hallucinations(ents, surrounding_text=text)
+        assert out == []
+
+    def test_f1_no_marker_in_window_passes_through(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        text = "ההיסטוריון משה ממנטובה כותב"
+        name = "משה ממנטובה"
+        start = text.find(name)
+        ents = [
+            {
+                "person": name, "role": "AUTHOR", "source": "person_ner",
+                "start": start, "end": start + len(name),
+            },
+        ]
+        out = filter_person_hallucinations(ents, surrounding_text=text)
+        assert len(out) == 1
+
+    def test_f1_empty_surrounding_text_skips_check(self) -> None:
+        """Defensive — without context we cannot run the F1 check, so
+        the entity passes through (other denylists still apply)."""
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {
+                "person": "משה הכהן", "role": "AUTHOR", "source": "person_ner",
+                "start": 0, "end": 8,
+            },
+        ]
+        out = filter_person_hallucinations(ents, surrounding_text="")
+        assert len(out) == 1
+
+    def test_f1_null_start_skips_check(self) -> None:
+        """If offset rebasing nulled ``start``, F1 cannot read the
+        window; entity still passes other checks."""
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {
+                "person": "משה הכהן", "role": "AUTHOR", "source": "person_ner",
+                "start": None, "end": None,
+            },
+        ]
+        out = filter_person_hallucinations(
+            ents, surrounding_text="נושא נוסף: משה הכהן",
+        )
+        assert len(out) == 1
+
+    # ── F2 — Hebrew place / rite denylist ─────────────────────────────
+
+    def test_f2_hebrew_place_token_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "מנטובה", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "קנדיאה", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "ויניציאה", "role": "OWNER", "source": "person_ner"},
+            {"person": "קרפנטרץ", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "אוגיניון", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "תרודנט", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_f2_real_name_with_embedded_place_passes(self) -> None:
+        """``משה ממנטובה`` ("Moses of Mantua") is a real composite name
+        — the place denylist must not match the multi-token span."""
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "משה ממנטובה", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert len(out) == 1
+
+    # ── F3 — Bible book denylist ──────────────────────────────────────
+
+    def test_f3_hebrew_bible_book_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "ישעיהו", "role": "COMMENTATOR", "source": "person_ner"},
+            {"person": "בראשית", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "תהלים", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "דניאל", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_f3_english_bible_book_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "Genesis", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "isaiah", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "PSALMS", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    # ── F4 — WORK morphology before folio re-route ────────────────────
+
+    def test_f4_work_prefix_retypes_to_WORK_not_FOLIO(self) -> None:
+        from converter.authority.ner_post_filters import filter_work_author_folio
+
+        ents = [
+            {"text": "תשב\"ץ לשמשון בן צדוק", "type": "WORK_AUTHOR", "source": "contents_ner"},
+            {"text": "יוסיפון", "type": "WORK_AUTHOR", "source": "contents_ner"},
+            {"text": "כתובים (אמ\"ת) עם פירוש", "type": "WORK_AUTHOR", "source": "contents_ner"},
+            {"text": "ספר הזוהר", "type": "WORK_AUTHOR", "source": "contents_ner"},
+        ]
+        out = filter_work_author_folio(ents)
+        assert all(e["type"] == "WORK" for e in out)
+        assert all(e.get("retyped_from") == "WORK_AUTHOR" for e in out)
+
+    def test_f4_folio_still_retyped_to_FOLIO(self) -> None:
+        """A pure folio reference without a WORK prefix still routes
+        to ``FOLIO`` (B1 behaviour preserved)."""
+        from converter.authority.ner_post_filters import filter_work_author_folio
+
+        ents = [
+            {"text": "133ב :", "type": "WORK_AUTHOR", "source": "contents_ner"},
+            {"text": "5א", "type": "WORK_AUTHOR", "source": "contents_ner"},
+        ]
+        out = filter_work_author_folio(ents)
+        assert all(e["type"] == "FOLIO" for e in out)
+        assert all(e.get("retyped_from") == "WORK_AUTHOR" for e in out)
+
+    def test_f4_real_author_unchanged(self) -> None:
+        """A WORK_AUTHOR span that's neither a folio nor a WORK title
+        stays unchanged (no false re-routing)."""
+        from converter.authority.ner_post_filters import filter_work_author_folio
+
+        ents = [
+            {"text": "שמשון בן צדוק", "type": "WORK_AUTHOR", "source": "contents_ner"},
+        ]
+        out = filter_work_author_folio(ents)
+        assert out[0]["type"] == "WORK_AUTHOR"
+        assert "retyped_from" not in out[0]
+
+
 class TestPersonNerModelConfidence:
     """Person-NER entities expose the real model softmax probability
     as ``model_confidence`` while ``confidence`` keeps the keyword-
@@ -2046,6 +2214,74 @@ class TestMarc500ProvenanceRouting:
             "Routed entities must be stamped with ``from_marc500`` so "
             "downstream code can tell them from MARC-561 emissions."
         )
+
+    def test_is_provenance_dropped_keyword_matana_no_fire(self) -> None:
+        """``מתנה`` alone is too weak — a "gift" can be spiritual /
+        non-transfer. Sentences with only this keyword should not fire.
+        """
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        above, conf = clf.is_provenance("התורה היא מתנה גדולה לעם ישראל")
+        assert above is False
+        assert conf == 0.0
+
+    def test_is_provenance_dropped_keyword_avur_no_fire(self) -> None:
+        """The lone preposition ``עבור`` ("for") fires on any work-
+        title rationale. Without the explicit ``נכתב`` prefix the
+        sentence should not fire.
+        """
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        above, conf = clf.is_provenance("ספר זה עבור לימוד התלמיד הצעיר")
+        assert above is False
+        assert conf == 0.0
+
+    def test_is_provenance_dropped_keyword_chatam_no_fire(self) -> None:
+        """Bare third-person ``חתם`` ("signed") can describe many
+        actions. Only the first-person ``חתמתי`` is kept as a strong
+        owner-signature signal.
+        """
+        from converter.authority.marc500_classifier import Marc500Classifier
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        above, conf = clf.is_provenance("הרב חתם על ההסכמה לספר")
+        assert above is False
+        assert conf == 0.0
+
+    def test_is_provenance_strong_keyword_still_fires(self) -> None:
+        """Strong ownership / acquisition / sale verbs must still fire
+        with the raised :data:`_PROVENANCE_HEURISTIC_CONF`.
+        """
+        from converter.authority.marc500_classifier import (
+            _PROVENANCE_HEURISTIC_CONF, Marc500Classifier,
+        )
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        for sentence in (
+            "קנה את הספר בשנת תק\"ה",
+            "הספר שייך למשפחת לוי",
+            "נמכר בשוק הספרים בליוורנו",
+            "נכתב עבור הרב יצחק לוריא",
+        ):
+            above, conf = clf.is_provenance(sentence)
+            assert above is True, f"strong keyword sentence should fire: {sentence!r}"
+            assert conf == _PROVENANCE_HEURISTIC_CONF
+        assert _PROVENANCE_HEURISTIC_CONF == 0.65
+
+    def test_is_provenance_explicit_marc_marker_still_fires(self) -> None:
+        """Explicit MARC ownership markers (``ציון בעלים``) are
+        unambiguous and must continue to fire the heuristic.
+        """
+        from converter.authority.marc500_classifier import (
+            _PROVENANCE_HEURISTIC_CONF, Marc500Classifier,
+        )
+
+        clf = Marc500Classifier.__new__(Marc500Classifier)
+        above, conf = clf.is_provenance("ציון בעלים: משה בן יצחק לוי")
+        assert above is True
+        assert conf == _PROVENANCE_HEURISTIC_CONF
 
 
 class TestRoleToLabelIncludesTranscriber:
@@ -5805,6 +6041,138 @@ class TestAuthorityWorkerWikidataIntegration:
         assert result.get("wikidata_qid") == "Q127398"
         # No cross-source conflict on a fully-consistent 3-source match.
         assert "cross_source_conflict" not in (result.get("guard_flags") or [])
+
+
+class TestPersonRoleDedup:
+    """Same-name multi-role person spans within one record collapse to
+    a single canonical row (highest-priority role survives).
+    """
+
+    def test_dedup_same_name_different_roles(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_role_dedup
+
+        ents = [
+            {"person": "אלעזר", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "אלעזר", "role": "TRANSCRIBER", "source": "person_ner"},
+        ]
+        out = filter_person_role_dedup(ents)
+        assert len(out) == 1
+        assert out[0]["role"] == "AUTHOR"
+
+    def test_dedup_keeps_highest_priority(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_role_dedup
+
+        ents = [
+            {"person": "אלעזר", "role": "OWNER", "source": "person_ner"},
+            {"person": "אלעזר", "role": "TRANSLATOR", "source": "person_ner"},
+            {"person": "אלעזר", "role": "COMMENTATOR", "source": "person_ner"},
+            {"person": "אלעזר", "role": "TRANSCRIBER", "source": "person_ner"},
+        ]
+        out = filter_person_role_dedup(ents)
+        assert len(out) == 1
+        assert out[0]["role"] == "TRANSCRIBER"
+
+    def test_dedup_preserves_other_sources(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_role_dedup
+
+        ents = [
+            {"person": "אלעזר", "role": "AUTHOR", "source": "person_ner"},
+            {"text": "ירושלים", "type": "OWNER", "source": "provenance_ner"},
+            {"text": "תורה", "type": "WORK", "source": "contents_ner"},
+            {"person": "אלעזר", "role": "TRANSCRIBER", "source": "person_ner"},
+        ]
+        out = filter_person_role_dedup(ents)
+        # 1 person (deduped) + 2 other-source entities
+        assert len(out) == 3
+        srcs = [e.get("source") for e in out]
+        assert srcs.count("provenance_ner") == 1
+        assert srcs.count("contents_ner") == 1
+        assert srcs.count("person_ner") == 1
+
+    def test_dedup_preserves_distinct_names(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_role_dedup
+
+        ents = [
+            {"person": "אלעזר", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "אלעזר אזכרי", "role": "TRANSCRIBER", "source": "person_ner"},
+        ]
+        out = filter_person_role_dedup(ents)
+        assert len(out) == 2
+
+    def test_dedup_empty_name_passes_through(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_role_dedup
+
+        ents = [
+            {"person": "", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "", "role": "TRANSCRIBER", "source": "person_ner"},
+        ]
+        out = filter_person_role_dedup(ents)
+        # Defensive — empty-name entries are not deduped (no key to group by)
+        assert len(out) == 2
+
+
+class TestDateShape:
+    """``provenance_ner`` DATE entities are screened against a regex
+    of parseable Hebrew-manuscript date shapes (Gregorian year, Hebrew
+    gershayim chronogram, ``[=YYYY]`` equivalence, ``ca. YYYY``).
+    """
+
+    def test_gregorian_year_kept(self) -> None:
+        from converter.authority.ner_post_filters import filter_date_shape
+
+        ents = [
+            {"text": "1654", "type": "DATE", "source": "provenance_ner"},
+            {"text": "1826", "type": "DATE", "source": "provenance_ner"},
+            {"text": "982", "type": "DATE", "source": "provenance_ner"},
+        ]
+        out = filter_date_shape(ents)
+        assert len(out) == 3
+
+    def test_gershayim_kept(self) -> None:
+        from converter.authority.ner_post_filters import filter_date_shape
+
+        ents = [
+            {"text": "תפ\"ט", "type": "DATE", "source": "provenance_ner"},
+            {"text": "ב'קל\"ז", "type": "DATE", "source": "provenance_ner"},
+        ]
+        out = filter_date_shape(ents)
+        assert len(out) == 2
+
+    def test_marc_equivalent_bracket_kept(self) -> None:
+        from converter.authority.ner_post_filters import filter_date_shape
+
+        ents = [{"text": "[=1826]", "type": "DATE", "source": "provenance_ner"}]
+        out = filter_date_shape(ents)
+        assert len(out) == 1
+
+    def test_lone_two_digit_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_date_shape
+
+        ents = [
+            {"text": "15", "type": "DATE", "source": "provenance_ner"},
+            {"text": "12921", "type": "DATE", "source": "provenance_ner"},
+        ]
+        out = filter_date_shape(ents)
+        assert out == []
+
+    def test_pure_verb_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_date_shape
+
+        ents = [{"text": "כשנתבקש", "type": "DATE", "source": "provenance_ner"}]
+        out = filter_date_shape(ents)
+        assert out == []
+
+    def test_non_provenance_DATE_passes_through(self) -> None:
+        from converter.authority.ner_post_filters import filter_date_shape
+
+        ents = [
+            {"text": "15", "type": "DATE", "source": "contents_ner"},
+            {"text": "כשנתבקש", "type": "DATE", "source": "person_ner"},
+        ]
+        out = filter_date_shape(ents)
+        # Filter only screens provenance_ner DATE entities; everything
+        # else passes through untouched.
+        assert len(out) == 2
 
 
 if __name__ == "__main__":

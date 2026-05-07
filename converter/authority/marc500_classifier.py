@@ -30,32 +30,45 @@ _LABEL2ID = {"COLOPHON": 0}
 # labels for the training corpus). The trained checkpoint is
 # single-head (COLOPHON only); this set drives the deterministic
 # fallback used by :meth:`Marc500Classifier.is_provenance`.
+#
+# The set is intentionally narrow: only strong, unambiguous markers of
+# physical ownership transfer or explicit MARC ownership-note
+# conventions are kept. Bare verbs like ``חתם`` ("signed", which can
+# describe many actions), ``ירש`` ("inherited", but also used in
+# narrative prose), gift verbs like ``מתנה`` / ``כמתנה`` / ``הוענק``
+# (a "gift" can be spiritual), and the lone preposition ``עבור``
+# ("for", which appears in any work-title rationale) were dropped
+# because they fired on narrative content rather than ownership notes.
+# First-person forms (``חתמתי``, ``ירשתי``) and the explicit MARC
+# convention markers (``נכתב עבור``, ``נכתב בשביל``, ``ציון בעלים``,
+# ``לבעלים``) remain because they are unambiguous ownership signals.
 _PROVENANCE_KEYWORDS: frozenset[str] = frozenset({
     # acquisition
     "קנה", "קניתי", "נרכש", "רכשתי",
     # ownership
     "שייך", "שייכת",
     "בעלות", "בבעלות",
+    "ציון בעלים", "לבעלים",
     # sale
     "נמכר", "מכרתי", "נמכרה",
-    # signatures / inscriptions of ownership
-    "חתמתי", "חתם",
-    # inheritance
-    "ירשתי", "ירש", "בירושה",
+    # signatures / inscriptions of ownership (first-person only)
+    "חתמתי",
+    # inheritance (first-person and explicit derivatives only)
+    "ירשתי", "בירושה",
     "ממורשתי", "מורשה",
     # marriage / dowry transfers
     "מוהר", "נדוניה",
-    # gift transfers
-    "מתנה", "כמתנה", "הוענק",
-    # written-for / commissioned-by
+    # written-for / commissioned-by (explicit MARC convention only)
     "נכתב עבור", "נכתב בשביל",
-    "עבור",
 })
 
-# Confidence assigned to a heuristic match. We deliberately set this
-# below the COLOPHON threshold so that callers can distinguish
-# "model said yes (0.6+)" from "keyword fallback said yes (0.55)".
-_PROVENANCE_HEURISTIC_CONF: float = 0.55
+# Confidence assigned to a heuristic match. Set above the colophon
+# model's typical threshold band so heuristic hits are not over-
+# eagerly demoted, but still distinguishable from a learned-model
+# decision. Raised after audit showed weak-keyword false positives in
+# narrative prose; the higher value reflects that the remaining
+# keyword set is high-precision.
+_PROVENANCE_HEURISTIC_CONF: float = 0.65
 _PROVENANCE_HEURISTIC_THRESHOLD: float = 0.5
 
 
@@ -138,9 +151,22 @@ class Marc500Classifier:
         both heads uniformly. The current checkpoint is single-head
         (COLOPHON only); this method runs a deterministic Hebrew-
         vocabulary check (:data:`_PROVENANCE_KEYWORDS`) and reports
-        :data:`_PROVENANCE_HEURISTIC_CONF` on a hit. The heuristic
-        confidence is below the COLOPHON model's threshold so callers
-        can distinguish "model fired" from "keyword fired".
+        :data:`_PROVENANCE_HEURISTIC_CONF` on a hit.
+
+        The keyword set has been narrowed to strong markers only —
+        explicit MARC ownership conventions (``ציון בעלים``,
+        ``לבעלים``, ``נכתב עבור``, ``נכתב בשביל``), unambiguous
+        acquisition / sale verbs (``קנה``, ``נמכר``, ``נרכש``),
+        first-person ownership signatures (``חתמתי``, ``ירשתי``),
+        and dowry / inheritance terms. Weak markers that fire on
+        narrative prose were removed: gift verbs (``מתנה``,
+        ``כמתנה``, ``הוענק``) since "gift" can be spiritual, the
+        lone preposition ``עבור`` (anything written for someone),
+        and the bare third-person verbs ``חתם`` / ``ירש`` (which
+        can describe many actions outside ownership notes).
+        Sentences containing only these dropped tokens no longer
+        fire to avoid the narrative-prose false positives observed
+        on the audit corpus.
         """
         text = (sentence or "").strip()
         if not text:
