@@ -97,6 +97,7 @@ rsync -a --delete \
 find "$PIPELINE/ner" -name "*.py" ! -name "inference_pipeline.py" \
     ! -name "ner_inference_pipeline.py" \
     ! -name "postprocessing_rules.py" \
+    ! -name "entity_normalize.py" \
     ! -name "train_joint_entity_role_model_kfold.py" \
     ! -name "train_ner_model_kfold.py" \
     ! -name "genre_classifier_model.py" \

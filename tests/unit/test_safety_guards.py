@@ -1522,6 +1522,41 @@ class TestNerEntitySchemaCleanliness:
         assert "contents_ner" in VALID_SOURCES
 
 
+class TestBuildAppKeepsNerRuntimeFiles:
+    """The macOS build script trims ``ner/`` to the runtime files via a
+    ``find ... ! -name X ! -name Y -delete`` allowlist. Every Python
+    module imported by the inference pipelines must be listed there or
+    the bundle ships incomplete and the app crashes on Stage 2 with
+    ``No module named …``.
+    """
+
+    def test_build_script_keeps_entity_normalize(self) -> None:
+        """``ner/entity_normalize.py`` is imported by both inference
+        pipelines; it must survive the build-script trim."""
+        src = pathlib.Path("installer/macos/build_app.sh").read_text(encoding="utf-8")
+        assert '! -name "entity_normalize.py"' in src, (
+            "installer/macos/build_app.sh must keep ner/entity_normalize.py "
+            "(it is imported by ner/inference_pipeline.py and "
+            "ner/ner_inference_pipeline.py at module top)."
+        )
+
+    def test_build_script_keeps_inference_runtime_modules(self) -> None:
+        """Every NER module imported by the worker is in the keep-list."""
+        src = pathlib.Path("installer/macos/build_app.sh").read_text(encoding="utf-8")
+        for mod in (
+            "inference_pipeline.py",
+            "ner_inference_pipeline.py",
+            "postprocessing_rules.py",
+            "entity_normalize.py",
+            "genre_classifier_model.py",
+            "marc500_sentence_model.py",
+        ):
+            assert f'! -name "{mod}"' in src, (
+                f"installer/macos/build_app.sh must keep ner/{mod} in the "
+                f"runtime allowlist."
+            )
+
+
 class TestNerPostFilters:
     """Four deterministic post-filters cover NER mis-typing that would
     otherwise produce wrong Wikidata claims:
