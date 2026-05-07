@@ -1635,6 +1635,21 @@ class TestEditorClassifierVirtualRows:
         assert out["provenance_inscriptions"] == ["נכתב עבור משה ..."]
 
 
+class TestLauncherDisablesPycCache:
+    """The macOS launcher sets ``PYTHONDONTWRITEBYTECODE=1`` so that a
+    post-install hot-fix copied into the bundle's source tree cannot be
+    masked by an older ``.pyc`` whose embedded mtime happens to equal
+    the patched ``.py``'s mtime second-for-second.
+    """
+
+    def test_launcher_sets_pythondontwritebytecode(self) -> None:
+        src = pathlib.Path("installer/macos/launcher.m").read_text(encoding="utf-8")
+        assert '"PYTHONDONTWRITEBYTECODE"' in src, (
+            "installer/macos/launcher.m must set PYTHONDONTWRITEBYTECODE=1 "
+            "in the env passed to the bundled Python."
+        )
+
+
 class TestBuildAppKeepsNerRuntimeFiles:
     """The macOS build script trims ``ner/`` to the runtime files via a
     ``find ... ! -name X ! -name Y -delete`` allowlist. Every Python

@@ -68,6 +68,15 @@ int main(int argc, char *argv[]) {
         NSString *pythonpath = [NSString stringWithFormat:@"%@:%@", srcDir, pipelineDir];
         [env setObject:pythonpath forKey:@"PYTHONPATH"];
 
+        /* Suppress .pyc generation. The bundle ships pre-compiled
+         * source; without this flag a post-install file patch (e.g. a
+         * hot-fix copied into Contents/Resources/pipeline/) can be
+         * masked by an older .pyc whose embedded mtime equals the
+         * patched .py's mtime second-for-second, which makes Python
+         * keep using the stale bytecode. Trade ~100 ms of startup
+         * import time for cache-stalemate immunity. */
+        [env setObject:@"1" forKey:@"PYTHONDONTWRITEBYTECODE"];
+
         /* Bundled NER model */
         NSString *nerModel = [modelsDir stringByAppendingPathComponent:
                               @"hebrew-manuscript-joint-ner-v2"];
