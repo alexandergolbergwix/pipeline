@@ -477,3 +477,52 @@ falls through to the legacy 3-source flow exactly. All 22 existing
 **Bounded residual** — Rashi-class duplicates (where a pipeline-created Q139xxx is the only Wikidata item carrying our NLI ID and the canonical entry's Hebrew label is an abbreviation our MARC heading doesn't match): unfixable in the matcher alone, but bounded by Rules 23/25/38 — the uploader's four-stage gate detects the pipeline as the item creator and updates the duplicate rather than creating fresh ones.
 
 **Test counts after**: **504 unit + 87 integration** — 5 new tests in `test_wikidata_matcher.py`.
+
+## 2026-05-07 — Stage 2 NER audit + 8 wiring/code fixes
+
+**Drift type 18**: Stage 2 (`NerWorker`) had eight latent wiring/code defects that produced 17 distinct entity-quality issues found by a 4-agent parallel audit on the same 68-record corpus used for the Stage-3 audit one day earlier.
+
+**Issues found**:
+1. `entity_normalize.normalize_entity_text` was dead code — every NER pipeline emitted boundary garbage (27% of person spans ended with `,;:.()"=`).
+2. `record["entities"]` mixed real NER spans with classifier outputs (`colophon_ml`, `genre_ml`) carrying invalid `start=0, end=0` offsets — Stage 3 silently ignored them while the GUI editor surfaced them as fake entities.
+3. MARC 500 PROVENANCE routing (Rule 35) was missing — `is_colophon` was called but `is_provenance` did not exist on the classifier; 0 entities had `from_marc500: True`.
+4. `_ROLE_TO_LABEL` in `item_builder.py` lacked `"TRANSCRIBER"` even though the keyword classifier emits it; person descriptions were silently blank.
+5. Per-segment NER offsets were never rebased onto `record["text"]`. One audit record had 92 contents-NER offsets indexing into a phantom file-prefix string.
+6. Person NER `confidence` was bimodal at exactly 0.60 / 0.85 (the keyword-heuristic hardcoded values); the model's real softmax probabilities were thrown away.
+7. WORK_AUTHOR was contaminated 18/22 (82%) with folio refs (`"133ב :"`); COLLECTION was 6/6 catalog citations (`"מ' גסטר."`); OWNER carried full bill-of-sale paragraphs in 5/13 cases. Person NER hallucinated topic keywords (`kabbalah`, `messiah`, `NASH PAPYRUS`, `ספרד`, `קולופון`) as person entities.
+
+**Resolved by** eight commits in implementation order:
+- `600e8e5` — `_ROLE_TO_LABEL` includes TRANSCRIBER alias.
+- `3f2ffb2` — wire `normalize_entity_text` into both BIO decoders with offset rebasing inside the cleaned span.
+- `0a8d072` — drop classifier-output entity emission; introduce `ml_genres` channel; trim `VALID_SOURCES`.
+- `7346296` — add `Marc500Classifier.is_provenance` (Hebrew-vocabulary fallback) and route MARC-500 PROVENANCE sentences through provenance NER with `from_marc500: True`.
+- `837011f` — `record["text"]` becomes the full concatenation of every NER input; non-person entity offsets are rebased onto it (or nulled when the payload is not findable).
+- `58ab647` — emit `model_confidence` (real softmax mean) alongside legacy `confidence` (preserves Rule-23-keyed thresholds).
+- `fd4ee28` — four post-filters in `converter/authority/ner_post_filters.py`: WORK_AUTHOR folio-prefix re-route, COLLECTION catalog-citation filter (two-layer curated allowlists), OWNER length cap, person hallucination filter.
+- `ca9ead3` — comment cleanup: drop audit-fix labels and dates from in-code comments per a feedback memory; the change history lives in commit messages and DRIFT_LOG, the code stays evergreen.
+
+**Verified at runtime** (re-running NER on the same 68 records, all-fixes build):
+
+| Metric | Before | After |
+|---|---|---|
+| Boundary garbage (entities ending in punct) | 130 | 0 |
+| Classifier outputs in `entities[]` (zero-offset fakes) | 80 | 0 |
+| `ml_genres` channel populated | 0 | 30 predictions |
+| `from_marc500: True` flag | 0 | 5 entities |
+| `model_confidence` field | 0 | 113 (every person_ner entity) |
+| WORK_AUTHOR contaminated by folio refs | 22 (82% bad) | 4 |
+| COLLECTION catalog-citation false positives | 6 | 1 (5 routed to `catalog_references`) |
+| OWNER bill-of-sale paragraphs in P127 path | 5 | 0 (5 routed to `provenance_inscriptions`) |
+| Person NER hallucinations dropped | — | 16 |
+| Person legacy `confidence` (preserved per Rule 23) | bimodal 0.60/0.85 | bimodal 0.60/0.85 |
+
+**Test counts after**: **545 unit + 87 integration** — was 526 unit + 87 integration before today.
+
+**Bounded residuals** (Phase C, deferred to retraining):
+- Person NER hallucinated names not on the curated denylist.
+- Contents NER coverage degeneracy (97% of corpus produces zero entities).
+- MARC 500 classifier weak COLOPHON precision.
+- Person NER role-distribution skew (79% AUTHOR vs 1.6% OWNER).
+- Person NER missing labels (SCRIBE / EDITOR / RECIPIENT / DEDICATEE / PATRON never appear).
+
+These need data work, not code; they are tracked here for the next training cycle.

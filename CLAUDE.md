@@ -891,3 +891,35 @@ When a pipeline-created Q139xxx item is the only Wikidata entity carrying a give
 When the pipeline next encounters this NLI ID it updates the existing Q139094451 rather than creating fresh duplicates. Resolving the gap entirely requires either (a) adding the full-name Hebrew alias to canonical Wikidata items, (b) building a MARC-heading → Wikidata-label dictionary, or (c) merging duplicates manually with `wbmergeitems` — all out of scope for the matcher itself.
 
 **Tests** (added 2026-05-06): `test_wikidata_matcher.py` grew from 8 to 13 — `test_label_search_prefers_lowest_qid_when_multiple_candidates`, `test_label_search_skips_failing_lower_qid_falls_through_to_next`, `test_find_viaf_by_qid_single_value`, `test_find_viaf_by_qid_multiple_abstain`, `test_find_viaf_by_qid_caches`. Total now **504** unit + **87** integration.
+
+### 41. Stage 2 NER schema invariants and post-filters (added 2026-05-07)
+
+Stage 2 (`NerWorker`) emits a per-record JSON with the following invariants. Each consumer (`AuthorityWorker._merge_ner_into_records`, `WikidataItemBuilder`, the GUI editors) relies on them.
+
+**Channels:**
+
+| Channel | Type | Carries |
+|---|---|---|
+| `record["entities"]` | `list[dict]` | Real NER spans only — `source` ∈ {`person_ner`, `provenance_ner`, `contents_ner`}. Classifier outputs MUST NOT appear here. |
+| `record["ml_colophon_sentences"]` | `list[str]` | MARC-500 sentences classified as colophons. Feeds P1684 (inscription). |
+| `record["ml_genres"]` | `list[{"label": str, "confidence": float}]` | Genre classifier predictions for the P136 fallback. |
+| `record["catalog_references"]` | `list[str]` | Catalog citations (`"מ' גסטר."`) routed out of COLLECTION; lands in P7535 notes, never in P195. |
+| `record["provenance_inscriptions"]` | `list[str]` | OWNER spans longer than 80 characters (full bills of sale); land in P7535, never in P127 / P2093. |
+
+**Entity-shape rules:**
+
+* Every entity has `source` set to one of the three real NER sources. `colophon_ml` / `genre_ml` source values are forbidden.
+* `start` and `end` are integers indexing into `record["text"]` (the global concatenation of every NER input) such that `record["text"][start:end] == entity_payload`, OR they are `None` when the entity payload was not locatable in the global text. Never `start=0, end=0` as a placeholder.
+* Person entities carry `confidence` (the keyword-classifier 0.60 / 0.85 signal that Stage 3 guards key on per Rule 23) AND `model_confidence` (the real softmax probability averaged across the entity's tokens). Do not collapse the two — they have different semantics and different consumers.
+* Provenance entities flagged `from_marc500: True` came from MARC 500 sentences that the sentence classifier routed through the provenance NER pipeline (rather than from MARC 561). They also carry `marc500_confidence`.
+
+**Post-filters** (`converter/authority/ner_post_filters.py`). Applied once per record after every NER model emits its spans. Adding a new NER mistake-class to filter goes here — never in the worker inline:
+
+* `filter_work_author_folio` — re-types folio-shaped strings (digits + Hebrew side letter) from WORK_AUTHOR to FOLIO; stamps `retyped_from`.
+* `filter_collection_citations` — disambiguates COLLECTION strings via two curated frozensets of surnames. Catalog citations land in `catalog_references`; institution-eligible surnames need an institution marker (`אוסף`, `Library`, `ms`, …) in the surrounding text to stay as COLLECTION.
+* `filter_owner_length` — caps OWNER text at `OWNER_MAX_LENGTH = 80` characters; longer text moves to `provenance_inscriptions`.
+* `filter_person_hallucinations` — drops person spans matching topic-keyword denylists, ALL-CAPS ASCII fragments, MARC uncertainty markers, or insufficient Hebrew letter count.
+
+Adding a new false-positive class is a one-line denylist extension followed by a unit test. The two surname allowlists in B2 and the two topic denylists in B4 are documented inline in `ner_post_filters.py` with rationale + how to add an entry.
+
+**Tests**: `tests/unit/test_safety_guards.py::TestNerPostFilters` (17 tests), `TestNerEntitySchemaCleanliness` (4), `TestMarc500ProvenanceRouting` (6), `TestNerOffsetRebasing` (5), `TestPersonNerModelConfidence` (2), `TestRoleToLabelIncludesTranscriber` (3). The wiring tests in `test_entity_normalize.py` (4) guard the normaliser invocation. Total: **545 unit tests passing**.
