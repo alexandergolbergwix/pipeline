@@ -2403,7 +2403,7 @@ class TestExtractionEditor:
     """End-to-end tests for the revamped ExtractionEditor surface.
 
     Covers:
-      * Model columns (Record · Entity · Type · Role · Conf · Source · Approved · Actions)
+      * Model columns (Record · Entity · Type · Role · Conf · Model Conf · Source · Approved · Actions)
       * Approved column behaviour (checkbox + flag + green wash)
       * Auto-approve rule builder — single + multi-condition, AND/OR, IN/NOT IN
       * View-source lookup (offset-correct + substring fallback)
@@ -2479,19 +2479,20 @@ class TestExtractionEditor:
         ]
 
     def test_editor_loads_and_exposes_new_columns(self, _qapp: object, _sample_records: list[dict]) -> None:
-        """Model should expose all 8 columns and load every entity row."""
+        """Model should expose all 9 columns and load every entity row."""
         from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
-            ExtractionEditor, COL_APPROVED, COL_ROLE, COL_ACTIONS,
+            ExtractionEditor, COL_APPROVED, COL_ROLE, COL_ACTIONS, MODEL_CONF,
         )
 
         editor = ExtractionEditor()
         editor.load_records(_sample_records, None)
-        assert editor._model.columnCount() == 8
+        assert editor._model.columnCount() == 9
         assert editor._model.rowCount() == 5
         # Required new columns exist at expected indices
         assert COL_ROLE == 3
-        assert COL_APPROVED == 6
-        assert COL_ACTIONS == 7
+        assert MODEL_CONF == 5
+        assert COL_APPROVED == 7
+        assert COL_ACTIONS == 8
 
     def test_approved_column_is_user_checkable(self, _qapp: object, _sample_records: list[dict]) -> None:
         """The Approved column should be a user-checkable cell, not editable text."""

@@ -6175,5 +6175,83 @@ class TestDateShape:
         assert len(out) == 2
 
 
+class TestEditorModelConfidenceColumn:
+    """The auto-approve UI surfaces both legacy ``confidence`` (keyword
+    classifier signal Stage 3 guards key on) and ``model_confidence``
+    (real softmax probability) so reviewers can write rules against
+    either signal."""
+
+    def _qapp(self):  # noqa: ANN001
+        from PyQt6.QtCore import QCoreApplication
+        return QCoreApplication.instance() or QCoreApplication([])
+
+    def test_model_conf_column_present_in_headers(self) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
+        assert "Model Conf." in EditableEntityModel.HEADERS
+
+    def test_model_conf_loaded_from_record(self) -> None:
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [{
+                "person": "Maimonides", "role": "AUTHOR",
+                "confidence": 0.6, "model_confidence": 0.93,
+                "source": "person_ner", "start": 0, "end": 10,
+            }],
+        }])
+        assert m._entities[0].get("model_confidence") == 0.93
+
+    def test_model_conf_in_AUTO_FIELDS(self) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import _AUTO_FIELDS
+        assert "model_confidence" in _AUTO_FIELDS
+
+    def test_auto_approve_rule_on_model_conf_filters_correctly(self) -> None:
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel, evaluate_rule
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [
+                {"person": "A", "role": "AUTHOR", "confidence": 0.6,
+                 "model_confidence": 0.92, "source": "person_ner", "start": 0, "end": 1},
+                {"person": "B", "role": "AUTHOR", "confidence": 0.6,
+                 "model_confidence": 0.55, "source": "person_ner", "start": 0, "end": 1},
+            ],
+        }])
+        rule = {"field": "model_confidence", "op": ">=", "value": 0.8}
+        results = [evaluate_rule(r, rule) for r in m._entities]
+        assert results == [True, False]
+
+    def test_legacy_confidence_unchanged(self) -> None:
+        """Existing rule on legacy ``confidence`` keeps evaluating correctly."""
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel, evaluate_rule
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [{"person": "A", "role": "AUTHOR", "confidence": 0.85,
+                          "model_confidence": 0.99, "source": "person_ner",
+                          "start": 0, "end": 1}],
+        }])
+        rule = {"field": "confidence", "op": ">=", "value": 0.85}
+        assert evaluate_rule(m._entities[0], rule) is True
+
+    def test_model_conf_column_is_read_only(self) -> None:
+        self._qapp()
+        from PyQt6.QtCore import Qt
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel, MODEL_CONF
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [{"person": "A", "role": "AUTHOR", "confidence": 0.6,
+                          "model_confidence": 0.92, "source": "person_ner",
+                          "start": 0, "end": 1}],
+        }])
+        idx = m.index(0, MODEL_CONF)
+        assert not (m.flags(idx) & Qt.ItemFlag.ItemIsEditable)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

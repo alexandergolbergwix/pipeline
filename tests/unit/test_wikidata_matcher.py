@@ -309,17 +309,99 @@ def test_find_viaf_by_qid_caches() -> None:
 
     payload = {
         "head": {"vars": ["viaf"]},
-        "results": {"bindings": [{"viaf": {"type": "literal", "value": "55"}}]},
+        "results": {"bindings": [{"viaf": {"type": "literal", "value": "55512345"}}]},
     }
 
     with patch.object(requests.Session, "get", return_value=_ok(payload)) as mock_get_1:
         first = WikidataMatcher().find_viaf_by_qid("Q7")
-    assert first == "55"
+    assert first == "55512345"
     assert mock_get_1.call_count == 1
 
     with patch.object(requests.Session, "get") as mock_get_2:
         second = WikidataMatcher().find_viaf_by_qid("Q7")
-    assert second == "55"
+    assert second == "55512345"
+    assert mock_get_2.call_count == 0
+
+
+# ── Cluster-ID length guard (Rule 11: 8–15 digits, digits-only) ──────
+
+
+def _viaf_payload(viaf_id: str) -> dict[str, Any]:
+    """Build a single-row P214 SPARQL response for ``find_viaf_by_qid``."""
+    return {
+        "head": {"vars": ["viaf"]},
+        "results": {
+            "bindings": [{"viaf": {"type": "literal", "value": viaf_id}}],
+        },
+    }
+
+
+def test_find_viaf_by_qid_15_digit_accepted() -> None:
+    """Boundary: a 15-digit cluster ID is the upper edge of the valid range."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _viaf_payload("123456789012345")  # exactly 15 digits
+
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_viaf_by_qid("Q42")
+
+    assert result == "123456789012345"
+
+
+def test_find_viaf_by_qid_16_digit_rejected() -> None:
+    """Boundary: a 16-digit value is one over the legal cluster-ID length."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _viaf_payload("1234567890123456")  # 16 digits
+
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_viaf_by_qid("Q42")
+
+    assert result is None
+
+
+def test_find_viaf_by_qid_22_digit_rejected_as_ephemeral() -> None:
+    """The audit case: SRU ephemeral / composite recordIdentifier strings
+    are 20–22 digits and do not dereference to a single VIAF cluster."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _viaf_payload("1345154381060230292432")  # 22 digits, real audit value
+
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_viaf_by_qid("Q42")
+
+    assert result is None
+
+
+def test_find_viaf_by_qid_non_digit_rejected() -> None:
+    """Cluster IDs must be digits-only: alphanumeric strings are bad data."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _viaf_payload("abc12345")  # 8 chars but contains letters
+
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_viaf_by_qid("Q42")
+
+    assert result is None
+
+
+def test_find_viaf_by_qid_caches_rejection_as_none() -> None:
+    """A rejected lookup is cached so the SPARQL hop does not repeat on the
+    next call for the same QID."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _viaf_payload("1345154381060230292432")  # 22 digits, will be rejected
+
+    # First call — SPARQL is hit once and the matcher rejects the value.
+    with patch.object(requests.Session, "get", return_value=_ok(payload)) as mock_get_1:
+        first = WikidataMatcher().find_viaf_by_qid("Q9001")
+    assert first is None
+    assert mock_get_1.call_count == 1
+
+    # Second call — must NOT hit SPARQL; the rejection is cached as None.
+    with patch.object(requests.Session, "get") as mock_get_2:
+        second = WikidataMatcher().find_viaf_by_qid("Q9001")
+    assert second is None
     assert mock_get_2.call_count == 0
 
 

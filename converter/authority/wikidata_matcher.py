@@ -443,6 +443,17 @@ class WikidataMatcher:
         rows (conflicting IDs on one item is itself a data-quality
         flag, so we abstain). Cached on disk like the other identifier
         lookups.
+
+        Cluster-ID length guard: real VIAF cluster identifiers are
+        digits-only and 8–15 characters long (per the OCLC VIAF API
+        contract — same rule enforced by ``viaf_matcher.py``). Wikidata's
+        P214 has no length constraint of its own, so community-edited
+        items occasionally carry SRU ``recordIdentifier`` strings or
+        composite ephemeral IDs (16–22 digits) that do NOT dereference
+        to a single cluster. Such values are rejected at source so the
+        downstream cluster-fetch (``get_cluster_identifiers``) and the
+        P214 upload path never see a malformed ID. The rejected lookup
+        is cached as ``None`` to avoid repeating the SPARQL hop.
         """
         if not is_enabled() or not qid:
             return None
@@ -458,6 +469,12 @@ class WikidataMatcher:
         payload = _http_sparql(query)
         viafs = _extract_literal_values(payload, "viaf")
         chosen = viafs[0] if len(viafs) == 1 else None
+        if chosen is not None and (not chosen.isdigit() or not (8 <= len(chosen) <= 15)):
+            logger.debug(
+                "VIAF P214 lookup for %s returned non-cluster ID %r (len=%d, must be 8-15 digits); rejecting",
+                qid, chosen, len(chosen),
+            )
+            chosen = None
         self._cache_put(cache_key, {"viaf_id": chosen})
         return chosen
 

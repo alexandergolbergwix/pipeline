@@ -175,21 +175,32 @@ COL_TEXT = 1
 COL_TYPE = 2
 COL_ROLE = 3
 COL_CONF = 4
-COL_SOURCE = 5
-COL_APPROVED = 6
-COL_ACTIONS = 7
+MODEL_CONF = 5
+COL_SOURCE = 6
+COL_APPROVED = 7
+COL_ACTIONS = 8
 
 
 class EditableEntityModel(QAbstractTableModel):
     """Table model for editable NER entity data.
 
-    Columns: Record · Entity · Type · Role · Conf. · Source · Approved · View.
+    Columns: Record · Entity · Type · Role · Conf. · Model Conf. · Source · Approved · View.
+    ``Conf.`` is the keyword-classifier signal (hardcoded 0.60 / 0.85 ceilings)
+    that Stage 3 guards key on. ``Model Conf.`` is the real softmax probability
+    from the BIO classifier — surfacing it lets reviewers write auto-approve
+    rules against the actual model score rather than the keyword bucket. The
+    column is read-only at the table layer because the value is computed by
+    the model, not user-set.
+
     The ``_records_by_cn`` dict keeps a reference to the original NER result
     record for each control number so the "View source" action can pull the
     full note text for highlighting.
     """
 
-    HEADERS = ["Record", "Entity", "Type", "Role", "Conf.", "Source", "Approved", " "]
+    HEADERS = [
+        "Record", "Entity", "Type", "Role", "Conf.", "Model Conf.",
+        "Source", "Approved", " ",
+    ]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -222,6 +233,9 @@ class EditableEntityModel(QAbstractTableModel):
                     "text": entity.get("person", entity.get("text", "")),
                     "type": entity.get("type", "PERSON"),
                     "confidence": float(entity.get("confidence", 0.0) or 0.0),
+                    "model_confidence": float(
+                        entity.get("model_confidence", 0.0) or 0.0
+                    ),
                     "source": entity.get("source", "person_ner"),
                     "role": entity.get("role", "") or "",
                     "start": int(entity.get("start", 0) or 0),
@@ -235,6 +249,7 @@ class EditableEntityModel(QAbstractTableModel):
                     "text": str(sentence),
                     "type": "COLOPHON",
                     "confidence": 0.0,
+                    "model_confidence": 0.0,
                     "source": "colophon_ml",
                     "role": "",
                     "start": 0,
@@ -249,6 +264,7 @@ class EditableEntityModel(QAbstractTableModel):
                     "text": str(prediction.get("label") or ""),
                     "type": "GENRE",
                     "confidence": float(prediction.get("confidence") or 0.0),
+                    "model_confidence": 0.0,
                     "source": "genre_ml",
                     "role": "",
                     "start": 0,
@@ -320,6 +336,9 @@ class EditableEntityModel(QAbstractTableModel):
             if col == COL_CONF:
                 c = ent.get("confidence", 0.0)
                 return f"{c:.2f}" if c else ""
+            if col == MODEL_CONF:
+                m = ent.get("model_confidence", 0.0)
+                return f"{m:.2f}" if m else ""
             if col == COL_SOURCE:
                 return ent.get("source", "")
 
@@ -328,6 +347,8 @@ class EditableEntityModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.UserRole:
             if col == COL_CONF:
                 return ent.get("confidence", 0.0)
+            if col == MODEL_CONF:
+                return ent.get("model_confidence", 0.0)
             if col == COL_APPROVED:
                 return int(bool(ent.get("approved", False)))
             return self.data(index, Qt.ItemDataRole.DisplayRole)
@@ -402,6 +423,9 @@ class EditableEntityModel(QAbstractTableModel):
             return base | Qt.ItemFlag.ItemIsEditable
         if col == COL_APPROVED:
             return base | Qt.ItemFlag.ItemIsUserCheckable
+        if col == MODEL_CONF:
+            # Model-computed score; never user-editable.
+            return base & ~Qt.ItemFlag.ItemIsEditable
         return base
 
     # ── Mutators ─────────────────────────────────────────────────────────
@@ -420,6 +444,7 @@ class EditableEntityModel(QAbstractTableModel):
             "text": text,
             "type": entity_type,
             "confidence": 1.0,
+            "model_confidence": 1.0,
             "source": source,
             "role": "",
             "start": 0,
@@ -507,6 +532,10 @@ class EditableEntityModel(QAbstractTableModel):
                 "end": ent["end"],
                 "approved": bool(ent.get("approved", False)),
             }
+            # Preserve the real softmax probability so downstream stages
+            # (e.g. Stage 3 auto-approve audits) can key on it.
+            if "model_confidence" in ent:
+                out["model_confidence"] = ent["model_confidence"]
             if source == "person_ner":
                 out["person"] = ent["text"]
                 out["role"] = ent.get("role", "AUTHOR")
@@ -817,7 +846,7 @@ class EntityTextEditDialog(QDialog):
         return self._edit.toPlainText().strip()
 
 
-_AUTO_FIELDS: list[str] = ["confidence", "type", "role", "source"]
+_AUTO_FIELDS: list[str] = ["confidence", "model_confidence", "type", "role", "source"]
 _NUMERIC_OPS: list[str] = [">", ">=", "=", "<=", "<", "≠"]
 _STRING_OPS: list[str] = ["=", "≠", "in", "not in"]
 
@@ -930,7 +959,9 @@ class _RuleRow(QWidget):
         super().__init__(parent)
         self._options_for: dict[str, list[str]] = options_for or {}
         self._field_list: list[str] = list(fields) if fields else list(_AUTO_FIELDS)
-        self._numeric_fields: set[str] = set(numeric_fields or {"confidence"})
+        self._numeric_fields: set[str] = set(
+            numeric_fields or {"confidence", "model_confidence"}
+        )
         self._numeric_ranges = numeric_field_ranges or {}
         from mhm_pipeline.gui import theme  # noqa: PLC0415
 
@@ -1189,7 +1220,12 @@ class AutoApproveDialog(QDialog):
 
         self._options_for: dict[str, list[str]] = options_for or {}
         self._fields = fields
-        self._numeric_fields = set(numeric_fields or ()) or {"confidence"}
+        # Both confidence signals are spin-box numerics: the legacy
+        # keyword-classifier ``confidence`` (capped at 0.85) and the real
+        # softmax ``model_confidence`` from the BIO classifier.
+        self._numeric_fields = (
+            set(numeric_fields or ()) or {"confidence", "model_confidence"}
+        )
         self._numeric_ranges = numeric_field_ranges or {}
         from mhm_pipeline.gui import theme  # noqa: PLC0415
 
