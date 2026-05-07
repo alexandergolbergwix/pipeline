@@ -937,6 +937,53 @@ class AuthorityWorker(StageWorker):
         role_value = str(person.get("role", role))
         entity_type = str(person.get("type", "person"))
 
+        # Safety net: Stage 1's MARC handler occasionally classifies an
+        # organisation packaged in a 700 (person) field as type=person
+        # (e.g. "Central Archives for the History of the Jewish People").
+        # The keyword-based check upgrades it to "organization" so the
+        # corporate matcher gets a chance.
+        from converter.wikidata.item_builder import (  # noqa: PLC0415
+            is_institutional_name,
+        )
+        if entity_type == "person" and is_institutional_name(name):
+            entity_type = "organization"
+
+        if entity_type == "meeting":
+            return None
+
+        if entity_type == "organization":
+            if wd_matcher is None:
+                return None
+            if on_substep is not None:
+                on_substep("Stage 3.6 — Wikidata corporate match")
+            try:
+                corp_qid = wd_matcher.match_corporate(name)
+            except Exception as exc:  # defensive — never crash Stage 3
+                logger.debug(
+                    "WikidataMatcher.match_corporate failed for %r: %s",
+                    name,
+                    exc,
+                )
+                corp_qid = None
+            if corp_qid is None:
+                return None
+            match_info = self._create_match_info(
+                name=name,
+                role=role_value,
+                source="wikidata",
+                field=field,
+                mazal_id=None,
+                viaf_uri=None,
+            )
+            match_info["wikidata_qid"] = corp_qid
+            match_info["sources"] = ["wikidata"]
+            match_info["source_count"] = 1
+            match_info["confidence"] = "medium"
+            match_info["matched"] = 1
+            match_info["counted"] = 1
+            match_info["entity_kind"] = "organization"
+            return match_info
+
         # ── F4 — NLI strict mode (Plan §F4) ────────────────────────────
         # Try Mazal first; if it returns an authoritative NLI ID, skip
         # the VIAF SRU lookup entirely. F2's Wikidata cross-check resolves

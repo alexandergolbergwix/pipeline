@@ -283,7 +283,7 @@ def _get_genre_classifier() -> object | None:
     return _GENRE_CLASSIFIER
 
 
-def _is_institutional_name(name: str) -> bool:
+def is_institutional_name(name: str) -> bool:
     """True if the name looks like an institution (library, museum, etc.).
 
     Used to re-route MARC 710 (added entry — corporate name) values away
@@ -295,6 +295,9 @@ def _is_institutional_name(name: str) -> bool:
         return False
     lowered = name.lower()
     return any(kw in lowered for kw in _INSTITUTIONAL_KEYWORDS)
+
+
+_is_institutional_name = is_institutional_name  # backward-compat alias for internal callers
 
 
 def _to_natural_name_order(name: str) -> str:

@@ -696,24 +696,30 @@ class TestAuthorityWorker:
 
     @pytest.mark.skipif(IN_CI, reason="Mazal DB mock patch unreliable in CI")
     def test_marc_name_fields_100_110_111_700_710_711_matched(
-        self, qtbot: object, tmp_path: Path
+        self, qtbot: object, tmp_path: Path, monkeypatch: object
     ) -> None:
-        """AuthorityWorker should match all MARC name fields: 100, 110, 111, 700, 710, 711."""
+        """AuthorityWorker handles all MARC name field types.
+
+        Persons (100/700) → Mazal/VIAF/Wikidata person triangulation.
+        Organisations (110/710) → Wikidata corporate authority lookup;
+        emit a row when ``match_corporate`` returns a QID, drop otherwise.
+        Meetings (111/711) → drop (no Wikidata authority lookup wired
+        for them).
+        """
         from mhm_pipeline.controller.workers import AuthorityWorker
 
-        # MARC extract with all name field types as primary input
         marc_data = [
             {
                 "_control_number": "990000836520205171",
                 "authors": [
                     {"name": "משה בן יצחק", "type": "person"},  # 100
                     {"name": "הקהילה הקדושה", "type": "organization"},  # 110
-                    {"name": "כנסת הגדולים", "type": "meeting"},  # 111
+                    {"name": "כנסת הגדולים", "type": "meeting"},  # 111 — drops
                 ],
                 "contributors": [
                     {"name": "דוד המלך", "type": "person"},  # 700
                     {"name": "בית המדרש", "type": "organization"},  # 710
-                    {"name": "ועידת הרבנים", "type": "meeting"},  # 711
+                    {"name": "ועידת הרבנים", "type": "meeting"},  # 711 — drops
                 ],
             }
         ]
@@ -723,6 +729,13 @@ class TestAuthorityWorker:
         mock_mazal = MagicMock()
         mock_mazal.match_person.return_value = "NLI_TEST_123"
         mock_mazal.is_available = True
+
+        from converter.authority import wikidata_matcher
+        monkeypatch.setattr(  # type: ignore[attr-defined]
+            wikidata_matcher.WikidataMatcher,
+            "match_corporate",
+            lambda self, name: "Q_CORP_TEST",
+        )
 
         with patch("converter.authority.mazal_matcher.MazalMatcher", return_value=mock_mazal):
             worker = AuthorityWorker(
@@ -736,15 +749,132 @@ class TestAuthorityWorker:
                 worker.start()
 
         records = json.loads(Path(blocker.args[0]).read_text(encoding="utf-8"))
-
-        # Verify marc_authority_matches exists and has entries
         marc_matches = records[0].get("marc_authority_matches", [])
-        assert len(marc_matches) == 6, f"Expected 6 name field matches, got {len(marc_matches)}"
 
-        # Verify each field label is present
+        # 2 persons + 2 organisations (Wikidata-resolved) = 4. Meetings drop.
+        assert len(marc_matches) == 4, (
+            f"Expected 4 matches (2 person + 2 org); got {len(marc_matches)}: "
+            f"{[m.get('name') for m in marc_matches]}"
+        )
+        org_matches = [m for m in marc_matches if m.get("entity_kind") == "organization"]
+        assert len(org_matches) == 2
+        assert all(m["wikidata_qid"] == "Q_CORP_TEST" for m in org_matches)
+        assert all(m["source"] == "wikidata" for m in org_matches)
+        meeting_names = {"כנסת הגדולים", "ועידת הרבנים"}
+        assert not any(m.get("name") in meeting_names for m in marc_matches), (
+            "Meetings (111/711) must be dropped from marc_authority_matches"
+        )
+
         field_labels = {m.get("field") for m in marc_matches}
-        assert "100/110/111" in field_labels, "Missing 100/110/111 field label"
-        assert "700/710/711" in field_labels, "Missing 700/710/711 field label"
+        assert "100/110/111" in field_labels
+        assert "700/710/711" in field_labels
+
+    def test_marc710_corporate_routes_through_wikidata_match(
+        self, qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A MARC 710 corporate entry that resolves on Wikidata produces a
+        marc_authority_match row with wikidata_qid set, source='wikidata',
+        and no mazal_id / viaf_uri."""
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        marc_extract = [
+            {
+                "_control_number": "X1",
+                "title": "Synthetic test record",
+                "authors": [],
+                "contributors": [
+                    {
+                        "name": "The British Library",
+                        "role": "holder",
+                        "field": "710",
+                        "type": "organization",
+                    }
+                ],
+                "dates": {"original_string": "1700"},
+            }
+        ]
+        input_path = tmp_path / "marc_extract.json"
+        input_path.write_text(json.dumps(marc_extract), encoding="utf-8")
+
+        from converter.authority import wikidata_matcher
+
+        monkeypatch.setattr(
+            wikidata_matcher.WikidataMatcher,
+            "match_corporate",
+            lambda self, name: "Q23308",
+        )
+
+        worker = AuthorityWorker(
+            input_path=input_path,
+            output_dir=tmp_path,
+            ner_path=None,
+            enable_viaf=False,
+            enable_kima=False,
+        )
+        with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        output = json.loads(
+            (tmp_path / "authority_enriched.json").read_text(encoding="utf-8")
+        )
+        assert len(output) == 1
+        matches = output[0].get("marc_authority_matches") or []
+        assert len(matches) == 1, f"Expected exactly one match, got: {matches}"
+        m = matches[0]
+        assert m["wikidata_qid"] == "Q23308"
+        assert m["source"] == "wikidata"
+        assert not m.get("mazal_id")
+        assert not m.get("viaf_uri")
+
+    def test_marc710_corporate_no_match_drops_entry(
+        self, qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When match_corporate returns None, the corporate entry is dropped
+        from marc_authority_matches entirely."""
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        marc_extract = [
+            {
+                "_control_number": "X2",
+                "title": "Synthetic test record",
+                "authors": [],
+                "contributors": [
+                    {
+                        "name": "Some Obscure Library",
+                        "role": "holder",
+                        "field": "710",
+                        "type": "organization",
+                    }
+                ],
+                "dates": {"original_string": "1700"},
+            }
+        ]
+        input_path = tmp_path / "marc_extract.json"
+        input_path.write_text(json.dumps(marc_extract), encoding="utf-8")
+
+        from converter.authority import wikidata_matcher
+
+        monkeypatch.setattr(
+            wikidata_matcher.WikidataMatcher,
+            "match_corporate",
+            lambda self, name: None,
+        )
+
+        worker = AuthorityWorker(
+            input_path=input_path,
+            output_dir=tmp_path,
+            ner_path=None,
+            enable_viaf=False,
+            enable_kima=False,
+        )
+        with qtbot.waitSignal(worker.finished, timeout=30_000):  # type: ignore[attr-defined]
+            worker.start()
+
+        output = json.loads(
+            (tmp_path / "authority_enriched.json").read_text(encoding="utf-8")
+        )
+        matches = output[0].get("marc_authority_matches") or []
+        assert matches == []
 
 
 # ── Stage 2: 4-source authority chain (Mazal + VIAF + KIMA + Wikidata) ───────

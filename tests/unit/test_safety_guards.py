@@ -1872,6 +1872,227 @@ class TestNerPostFilters:
         assert len(out) == 2
 
 
+class TestOrganisationMatchRouting:
+    """When Stage 1 marks a MARC name as an organisation (type=110/710),
+    the worker routes it to the Wikidata corporate authority lookup
+    instead of the person-name search. Hits get a wikidata_qid; misses
+    drop the entry entirely so the auth-match table stops carrying
+    institution rows that nobody can match. A safety-net upgrade
+    promotes person-typed strings whose text matches the institutional
+    keyword set (catches e.g. ``Central Archives ... Jewish People`` that
+    Stage 1 mis-classified as a person).
+    """
+
+    def _make_worker(self):  # type: ignore[no-untyped-def]
+        from pathlib import Path
+
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        return AuthorityWorker(
+            input_path=Path("/dev/null"),
+            output_dir=Path("/tmp"),
+            ner_path=None,
+            enable_viaf=False,
+            enable_kima=False,
+        )
+
+    def test_organization_with_match_emits_wikidata_qid(self) -> None:
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = "Q23308"
+        result = worker._match_marc_person_entry(
+            person={
+                "name": "The British Library",
+                "type": "organization",
+                "role": "holder",
+            },
+            role="holder",
+            field="710",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result is not None
+        assert result["wikidata_qid"] == "Q23308"
+        assert result["source"] == "wikidata"
+        assert result.get("mazal_id") is None
+        assert result.get("viaf_uri") is None
+
+    def test_organization_with_no_match_returns_none(self) -> None:
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = None
+        result = worker._match_marc_person_entry(
+            person={
+                "name": "Some Obscure Library",
+                "type": "organization",
+                "role": "holder",
+            },
+            role="holder",
+            field="710",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result is None
+
+    def test_meeting_returns_none_immediately(self) -> None:
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        result = worker._match_marc_person_entry(
+            person={"name": "Some Conference", "type": "meeting", "role": ""},
+            role="contributor",
+            field="711",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result is None
+        wd.match_corporate.assert_not_called()
+        wd.match_person.assert_not_called()
+
+    def test_person_path_unchanged(self) -> None:
+        """Sanity: a person-typed entry still goes through the existing
+        Mazal -> VIAF -> Wikidata-person matcher chain, not the corporate
+        path. Verify by checking that ``match_corporate`` is NOT called."""
+        import os
+        from unittest.mock import MagicMock, patch
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = "Q1"  # would be wrong if called
+        wd.find_qid_by_viaf.return_value = None
+        wd.find_qid_by_mazal.return_value = None
+        wd.match_person.return_value = None
+        wd.last_match_was_latin_only.return_value = False
+        mazal = MagicMock()
+        mazal.match_person.return_value = None
+        mazal.get_person_details.return_value = {}
+        with patch.dict(
+            os.environ, {"MHM_DISABLE_WIKIDATA_CROSSCHECK": "1"}
+        ):
+            worker._match_marc_person_entry(
+                person={"name": "Maimonides", "type": "person", "role": "author"},
+                role="author",
+                field="100",
+                mazal=mazal,
+                viaf=None,
+                wd_matcher=wd,
+            )
+        wd.match_corporate.assert_not_called()
+
+    def test_safety_net_upgrades_org_keyword_person_to_organization(
+        self,
+    ) -> None:
+        """type='person' but text contains 'Library' → corporate path fires."""
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = "Q23308"
+        result = worker._match_marc_person_entry(
+            person={
+                "name": "Central Archives for the History of the Jewish People",
+                "type": "person",
+                "role": "holder",
+            },
+            role="holder",
+            field="700",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result is not None
+        assert result["wikidata_qid"] == "Q23308"
+        wd.match_corporate.assert_called_once()
+
+    def test_is_institutional_name_public_alias_exists(self) -> None:
+        from converter.wikidata.item_builder import is_institutional_name
+
+        assert callable(is_institutional_name)
+        assert is_institutional_name("The British Library") is True
+        assert is_institutional_name("Maimonides") is False
+
+    def test_is_institutional_name_private_alias_still_works(self) -> None:
+        """Internal callers in item_builder still see _is_institutional_name."""
+        from converter.wikidata.item_builder import (
+            _is_institutional_name,
+            is_institutional_name,
+        )
+
+        assert _is_institutional_name is is_institutional_name
+
+    def test_organization_match_carries_role_from_marc(self) -> None:
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = "Q23308"
+        result = worker._match_marc_person_entry(
+            person={
+                "name": "The British Library",
+                "type": "organization",
+                "role": "former owner",
+            },
+            role="former owner",
+            field="710",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result["role"] == "former owner"
+
+    def test_organization_match_has_correct_source_field(self) -> None:
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = "Q41755"
+        result = worker._match_marc_person_entry(
+            person={
+                "name": "The Bodleian Libraries",
+                "type": "organization",
+                "role": "holder",
+            },
+            role="holder",
+            field="710",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result["source"] == "wikidata"
+        assert result["sources"] == ["wikidata"]
+        assert result["source_count"] == 1
+
+    def test_organization_match_uses_medium_confidence(self) -> None:
+        """Single-source corporate match → medium, not high (high requires
+        Latin preferred name + multiple sources)."""
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker()
+        wd = MagicMock()
+        wd.match_corporate.return_value = "Q23308"
+        result = worker._match_marc_person_entry(
+            person={
+                "name": "The British Library",
+                "type": "organization",
+                "role": "holder",
+            },
+            role="holder",
+            field="710",
+            mazal=MagicMock(),
+            viaf=None,
+            wd_matcher=wd,
+        )
+        assert result["confidence"] == "medium"
+
+
 class TestNerPostFiltersPrecision:
     """Audit-driven precision tightening for Stage 2 post-filters:
 
