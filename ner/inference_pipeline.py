@@ -368,11 +368,10 @@ class JointNERPipeline:
                 input_ids=input_ids, attention_mask=attention_mask
             )
 
-        # Audit fix A3 (2026-05-06): surface the model's real softmax
-        # probabilities so downstream consumers can use a meaningful
-        # ``model_confidence`` signal. The legacy ``confidence`` field
-        # below stays at the keyword-heuristic 0.60/0.85 (Stage 3
-        # guards keyed on those values).
+        # ``model_confidence`` carries the real softmax probability of
+        # the predicted label (averaged across the entity's tokens).
+        # The legacy ``confidence`` field set later still carries the
+        # keyword-heuristic 0.60/0.85 — Stage 3 guards key on it.
         ner_probs = torch.softmax(ner_logits[0], dim=-1)
         ner_preds = torch.argmax(ner_logits[0], dim=-1).cpu().tolist()
         ner_max_probs = ner_probs.max(dim=-1).values.cpu().tolist()
@@ -440,12 +439,12 @@ class JointNERPipeline:
                 'model_confidence': span_conf,
             })
 
-        # Edge-normalisation pass: strip trailing punctuation / brackets /
-        # MARC equivalence markers from the entity text, then adjust the
-        # start / end offsets so they still bound the *cleaned* substring
-        # exactly inside ``text``. Stage-2 audit (2026-05-06) found 27 %
-        # of person spans ended with ``,;:.()"=``; the normaliser already
-        # existed at ner/entity_normalize.py but was never wired in.
+        # Edge-normalisation pass: strip trailing punctuation, brackets,
+        # and MARC equivalence markers from the entity text and adjust
+        # ``start`` / ``end`` so they still bound the cleaned substring
+        # exactly inside ``text``. Without this, names like
+        # ``"שמואל,"`` and ``"מ' גסטר."`` reach Stage 3 carrying
+        # punctuation that breaks Mazal / VIAF lookup.
         normalised_entities: List[Dict] = []
         for ent in raw_entities:
             raw_text = ent['person']

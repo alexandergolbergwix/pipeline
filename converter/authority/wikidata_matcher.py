@@ -175,12 +175,12 @@ def _qid_from_uri(uri: str) -> str | None:
 
 
 def _qid_sort_key(qid: str) -> int:
-    """Numeric portion of a QID, for sorting canonical-first.
+    """Numeric portion of a QID, used to sort candidates canonical-first.
 
-    Lower QIDs (Q189564) are almost always older / more canonical than
-    higher ones (Q139094451 — created recently by this pipeline). When
-    SPARQL returns several candidates that all match a Hebrew label we
-    pick the smallest-numbered one.
+    Lower QIDs were created earlier and are almost always the canonical
+    items; higher QIDs are newer and frequently turn out to be
+    duplicates. Sorting by this key lets the matcher prefer the older
+    item when several share the same label.
     """
     try:
         return int(qid[1:])
@@ -199,10 +199,9 @@ def _build_identifier_query(property_id: str, value: str) -> str:
 def _build_label_query(name: str, types: Iterable[str], lang: str) -> str:
     safe = _escape_literal(name)
     values = _values_clause(types)
-    # LIMIT 10 + return all candidates; the caller scores by QID number
-    # (lower = older = more canonical) so we prefer Q189564 (Rashi) over
-    # Q139094451 (a pipeline-created duplicate). LIMIT 2 was too tight —
-    # SPARQL's arbitrary order let our duplicates win.
+    # LIMIT 10 returns enough candidates that the caller can sort by
+    # QID number (lower = older = more canonical) and pick the
+    # established item over any newer duplicates that share the label.
     return (
         "SELECT DISTINCT ?p WHERE { "
         "{ ?p wdt:P1559 \"" + safe + "\"@" + lang + " } "
@@ -435,14 +434,15 @@ class WikidataMatcher:
         return self._match_identifier("P8189", mazal_id)
 
     def find_viaf_by_qid(self, qid: str) -> str | None:
-        """Backfill VIAF ID from a known Wikidata QID via ``wdt:P214``.
+        """Look up a VIAF ID stored on a Wikidata item via ``wdt:P214``.
 
-        Used after NLI-strict mode resolves a Mazal hit and triangulates
-        to a Wikidata QID — the Wikidata page nearly always carries the
-        canonical VIAF cluster ID, which the VIAF SRU search frequently
-        misses. ≤ 1 row returned → trusted; multiple values → abstain
-        (conflicting VIAF IDs on one item is itself a data-quality flag).
-        Honours the same on-disk cache as the other identifier lookups.
+        Useful when an NLI-strict resolution gives us a QID but no
+        VIAF: the QID's own P214 statement is more reliable than a
+        fresh VIAF SRU query. Returns the value when exactly one
+        ``P214`` row exists; returns ``None`` on zero or multiple
+        rows (conflicting IDs on one item is itself a data-quality
+        flag, so we abstain). Cached on disk like the other identifier
+        lookups.
         """
         if not is_enabled() or not qid:
             return None
@@ -522,11 +522,9 @@ class WikidataMatcher:
         """Run the label query for *normalised_name*, then verify each
         candidate's type membership and label distance.
 
-        Candidates are sorted by QID number ascending before verification
-        — lower QIDs are almost always more canonical (older). This stops
-        the matcher from picking a recent pipeline-created duplicate
-        (e.g. Q139094451 for Rashi) over the canonical entity (Q189564)
-        when both happen to share the same Hebrew label.
+        Candidates are sorted by QID number ascending before
+        verification so that the older / canonical item wins when
+        several entries share the same label.
         """
         query = _build_label_query(normalised_name, type_set, lang)
         payload = _http_sparql(query)

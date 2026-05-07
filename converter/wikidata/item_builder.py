@@ -388,11 +388,8 @@ _ROLE_TO_LABEL: dict[str, str] = {
     "author": "author",
     "SCRIBE": "scribe",
     "scribe": "scribe",
-    # The keyword classifier in `ner/inference_pipeline.py` emits
-    # ``TRANSCRIBER`` (not ``SCRIBE``). Keep this alias so descriptions
-    # built for those persons aren't blank. ``ROLE_TO_QID`` and
-    # ``ROLE_TO_PROPERTY`` already include ``TRANSCRIBER`` — only this
-    # description-label dict was missing it (audit 2026-05-06).
+    # The keyword classifier in ``ner/inference_pipeline.py`` emits
+    # ``TRANSCRIBER`` (not ``SCRIBE``); both alias to the same label.
     "TRANSCRIBER": "scribe",
     "transcriber": "scribe",
     "OWNER": "owner",

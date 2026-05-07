@@ -1461,17 +1461,15 @@ class TestTranslatorCommentatorProperties:
 
 
 class TestNerEntitySchemaCleanliness:
-    """Stage-2 audit fix A6 (2026-05-06): the per-record ``entities``
-    list must contain ONLY real NER spans (sources person_ner /
-    provenance_ner / contents_ner). Classifier outputs (colophon /
-    genre) live in dedicated channels — ``ml_colophon_sentences`` and
-    ``ml_genres`` — so the Stage 3 reconciler / authority editor
-    cannot accidentally route a classifier prediction through Wikidata
-    matching, which is exactly the failure mode that produced
-    Q139185072 / Q139168371 / Q138940447 (Geagea, 2026-04-14).
+    """The per-record ``entities`` list contains only real NER spans
+    (sources ``person_ner`` / ``provenance_ner`` / ``contents_ner``).
+    Classifier outputs (colophon, genre) live in dedicated channels —
+    ``ml_colophon_sentences`` and ``ml_genres`` — so the Stage 3
+    reconciler and the GUI authority editor cannot accidentally route
+    a classifier prediction through Wikidata matching.
 
-    These regression tests are static (source-level) so they survive
-    a refactor that re-imports the worker module without running it.
+    The checks below are source-level so they survive a refactor that
+    re-imports the worker module without running it.
     """
 
     def test_workers_does_not_emit_colophon_ml_source_string(self) -> None:
@@ -1508,8 +1506,8 @@ class TestNerEntitySchemaCleanliness:
         """``NerWorker.run`` must populate ``record['ml_genres']`` per record."""
         src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
         assert '"ml_genres"' in src, (
-            "NerWorker must include 'ml_genres' in the per-record results "
-            "dict (audit fix A6). Stage 4 reads this for P136 fallback."
+            "NerWorker must include 'ml_genres' in the per-record "
+            "results dict — Stage 4 reads it for the P136 fallback."
         )
 
     def test_extraction_editor_valid_sources_excludes_classifier_outputs(self) -> None:
@@ -1525,16 +1523,16 @@ class TestNerEntitySchemaCleanliness:
 
 
 class TestNerPostFilters:
-    """Stage-2 audit fixes B1, B2, B3, B4 (2026-05-06).
+    """Four deterministic post-filters cover NER mis-typing that would
+    otherwise produce wrong Wikidata claims:
 
-    Four deterministic post-filters that prevent the NER errors that
-    produced wrong Wikidata claims in the 2026-04 sysop cleanup
-    (Geagea, Pallor, Kolja21, Epìdosis):
-
-    * B1 — WORK_AUTHOR mistyping of folio refs.
-    * B2 — COLLECTION mistyping of catalog citations.
-    * B3 — OWNER capturing full bill-of-sale inscriptions.
-    * B4 — Person NER hallucinating non-persons (topic words, ALL-CAPS).
+    * Folio strings mis-typed as ``WORK_AUTHOR`` get re-tagged ``FOLIO``.
+    * Catalog citations mis-typed as ``COLLECTION`` route to a per-
+      record ``catalog_references`` field instead of P195.
+    * OWNER spans longer than the cap move to ``provenance_inscriptions``
+      (P7535) instead of P127.
+    * Person spans matching topic-word denylists, ALL-CAPS ASCII,
+      uncertainty markers, or too-short Hebrew get dropped.
     """
 
     # ── B1 ────────────────────────────────────────────────────────────
@@ -1712,15 +1710,11 @@ class TestNerPostFilters:
 
 
 class TestPersonNerModelConfidence:
-    """Stage-2 audit fix A3 (2026-05-06): person-NER entities must
-    expose the real model softmax probability as ``model_confidence``.
-    The audit found ``confidence`` was bimodal at exactly 0.60 / 0.85
-    — the keyword-heuristic hardcoded values, not real probabilities.
-
-    Stage 3 confidence guards (CLAUDE.md Rule 23) read ``confidence``
-    so we cannot silently change its semantics — the keyword value
-    stays. ``model_confidence`` is the new field carrying the softmax
-    score; downstream consumers can migrate explicitly.
+    """Person-NER entities expose the real model softmax probability
+    as ``model_confidence`` while ``confidence`` keeps the keyword-
+    heuristic 0.60 / 0.85 signal that Stage 3 guards key on. The two
+    fields coexist so that downstream consumers can migrate to the
+    new signal explicitly without silently changing thresholds.
     """
 
     def test_person_ner_emits_both_confidence_fields_in_source(self) -> None:
@@ -1729,17 +1723,17 @@ class TestPersonNerModelConfidence:
         from ``_classify_role``."""
         src = pathlib.Path("ner/inference_pipeline.py").read_text(encoding="utf-8")
         assert "torch.softmax(ner_logits[0]" in src, (
-            "Person NER must compute torch.softmax over ner_logits to "
-            "expose real model confidence (audit fix A3)."
+            "Person NER must compute torch.softmax over ner_logits "
+            "to expose real model confidence."
         )
         assert "'model_confidence'" in src, (
             "Person NER entities must include the 'model_confidence' "
-            "field (audit fix A3)."
+            "field."
         )
-        # Legacy `confidence` from keyword classifier still emitted.
+        # Legacy ``confidence`` from the keyword classifier remains.
         assert "ent['confidence'] = conf" in src, (
-            "Legacy 'confidence' field from _classify_role must remain "
-            "for Stage 3 backwards compatibility (audit fix A3)."
+            "Legacy 'confidence' field from _classify_role must "
+            "remain for Stage 3 backwards compatibility."
         )
 
     def test_keyword_classifier_still_returns_bimodal(self) -> None:
@@ -1753,13 +1747,10 @@ class TestPersonNerModelConfidence:
 
 
 class TestNerOffsetRebasing:
-    """Stage-2 audit fix A5 (2026-05-06): per-segment NER offsets must
-    be rebased onto ``record["text"]`` (or nulled if the entity text is
-    not findable in the global text). Audit found 92 contents-NER
-    entities on record 990001801390205171 had offsets indexing into a
-    phantom file-prefix instead of the body text — because
-    ``record["text"]`` was only notes+colophon, NOT the contents NER's
-    actual input.
+    """Per-segment NER offsets are rebased onto ``record["text"]``,
+    or nulled when the entity payload cannot be located. Without this
+    a contents-NER offset pointing at its own input segment slices
+    into garbage when the GUI uses it against the global text.
     """
 
     def test_rebase_helper_finds_entity_in_full_text(self) -> None:
@@ -1810,8 +1801,9 @@ class TestNerOffsetRebasing:
         offset rebasing actually has somewhere to land."""
         src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
         assert 'full_text_parts: list[str] = list(texts)' in src, (
-            "NerWorker must build full_text_parts from texts (notes+colophon) "
-            "and append provenance + contents segments — see audit fix A5."
+            "NerWorker must seed ``full_text_parts`` with the "
+            "person-NER inputs (notes + colophon) and then append "
+            "provenance + contents segments."
         )
         assert 'full_text_parts.append(str(provenance_text_full)' in src or \
                'full_text_parts.append(' in src, (
@@ -1820,16 +1812,13 @@ class TestNerOffsetRebasing:
 
 
 class TestMarc500ProvenanceRouting:
-    """Stage-2 audit fix A2 (2026-05-06): the MARC 500 sentence
-    classifier must route PROVENANCE sentences (in addition to
-    COLOPHON) through the provenance NER pipeline. The audit found
-    zero entities with ``from_marc500: True`` despite obvious
-    provenance content in 27/68 records — the routing was missing.
-
-    Rule 35 in CLAUDE.md promises the dual-head routing. Until the
-    second sigmoid head is trained, the classifier's
-    :meth:`is_provenance` falls back to the same Hebrew vocabulary
-    used to label the training corpus.
+    """The MARC 500 sentence classifier routes both COLOPHON and
+    PROVENANCE sentences. PROVENANCE hits run through the provenance
+    NER pipeline and emit entities flagged ``from_marc500: True`` so
+    downstream code knows the source segment. The current checkpoint
+    is single-head (COLOPHON), so :meth:`Marc500Classifier.is_provenance`
+    falls back to a Hebrew-vocabulary check matching the training-
+    corpus labels.
     """
 
     def test_classifier_exposes_is_provenance_method(self) -> None:
@@ -1887,20 +1876,20 @@ class TestMarc500ProvenanceRouting:
         MARC 500 sentence and route hits through provenance_pipeline."""
         src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
         assert "_marc500_clf.is_provenance(" in src, (
-            "NerWorker must call is_provenance on MARC 500 sentences "
-            "(audit fix A2)."
+            "NerWorker must call is_provenance on every MARC 500 "
+            "sentence so PROVENANCE hits route through provenance NER."
         )
         assert '"from_marc500"' in src, (
-            "NerWorker must stamp from_marc500 on routed entities "
-            "(audit fix A2 / Rule 35)."
+            "Routed entities must be stamped with ``from_marc500`` so "
+            "downstream code can tell them from MARC-561 emissions."
         )
 
 
 class TestRoleToLabelIncludesTranscriber:
-    """Stage-2 audit fix A4 (2026-05-06): the keyword classifier in
-    ``ner/inference_pipeline.py`` emits ``TRANSCRIBER`` (not ``SCRIBE``).
-    ``_ROLE_TO_LABEL`` must include the alias so person descriptions are
-    not blank for the 14 / 129 audit-corpus entities tagged TRANSCRIBER.
+    """The keyword classifier in ``ner/inference_pipeline.py`` emits
+    ``TRANSCRIBER`` (not ``SCRIBE``); ``_ROLE_TO_LABEL`` carries the
+    alias so person descriptions are not blank for spans tagged
+    ``TRANSCRIBER``.
     """
 
     def test_transcriber_uppercase_maps_to_scribe(self) -> None:

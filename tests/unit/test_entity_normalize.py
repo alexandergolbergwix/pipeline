@@ -124,59 +124,49 @@ def test_no_change_when_hebrew_clean() -> None:
     assert normalize_entity_text("ויטל, חיים בן יוסף") == "ויטל, חיים בן יוסף"
 
 
-# ── Wiring tests (audit fix A1, 2026-05-06): the normaliser is
-# documented as called by ``JointNERPipeline`` and
-# ``NERInferencePipeline`` but was unused for months — the tests below
-# guard the wiring so a regression in either pipeline trips the suite.
+# ── Wiring tests: both inference pipelines must import the normaliser
+# and call it on every emitted span. These checks are source-level
+# because the inference modules pull a sibling ``postprocessing_rules``
+# import at module top that only resolves under the runtime.
 
 
 def test_inference_pipeline_source_imports_normalize_entity_text() -> None:
-    """The Person-NER module must import the symbol at the top.
-
-    We can't import the module directly — it pulls ``postprocessing_rules``
-    via a sibling-module import that only resolves under the inference
-    runtime — so we read the source and assert the import line exists.
-    """
+    """The Person-NER module imports the normaliser at module top."""
     src = (REPO_ROOT / "ner" / "inference_pipeline.py").read_text(encoding="utf-8")
     assert "from ner.entity_normalize import normalize_entity_text" in src or \
            "from entity_normalize import normalize_entity_text" in src, (
-        "ner/inference_pipeline.py must import normalize_entity_text "
-        "(audit fix A1)."
+        "ner/inference_pipeline.py must import normalize_entity_text."
     )
 
 
 def test_ner_inference_pipeline_source_imports_normalize_entity_text() -> None:
-    """Same source-level guard for the provenance/contents pipeline."""
+    """Same import guard for the provenance / contents pipeline."""
     src = (REPO_ROOT / "ner" / "ner_inference_pipeline.py").read_text(encoding="utf-8")
     assert "from ner.entity_normalize import normalize_entity_text" in src or \
            "from entity_normalize import normalize_entity_text" in src, (
-        "ner/ner_inference_pipeline.py must import normalize_entity_text "
-        "(audit fix A1)."
+        "ner/ner_inference_pipeline.py must import normalize_entity_text."
     )
 
 
 def test_inference_pipeline_source_invokes_normaliser_on_person_spans() -> None:
-    """Source-level invariant: the BIO-decode loop must call
-    ``normalize_entity_text(raw_text)`` between span construction and the
-    role-classification pass. This guards against a future refactor that
-    silently drops the normaliser without the integration tests catching
-    it (the integration tests use synthetic short text where boundary
-    garbage is rare).
+    """The Person-NER BIO-decode loop calls the normaliser on every
+    emitted span before the role-classification pass — guards against
+    a refactor that silently drops the call (integration tests use
+    synthetic short text where boundary garbage is rare).
     """
     src = (REPO_ROOT / "ner" / "inference_pipeline.py").read_text(encoding="utf-8")
     assert "normalize_entity_text(raw_text)" in src or \
            "normalize_entity_text(' '.join(current))" in src or \
            "normalize_entity_text(entity_text)" in src, (
         "ner/inference_pipeline.py must apply normalize_entity_text "
-        "to person-NER span text before emitting entities (audit fix A1)."
+        "to person-NER span text before emitting entities."
     )
 
 
 def test_ner_inference_pipeline_source_invokes_normaliser_in_flush() -> None:
-    """Same invariant for provenance + contents NER decoding."""
+    """Same invariant for the provenance / contents BIO decoder."""
     src = (REPO_ROOT / "ner" / "ner_inference_pipeline.py").read_text(encoding="utf-8")
     assert "normalize_entity_text(raw_text)" in src, (
         "ner/ner_inference_pipeline.py must apply normalize_entity_text "
-        "to provenance/contents span text before emitting entities "
-        "(audit fix A1)."
+        "to provenance / contents span text before emitting entities."
     )

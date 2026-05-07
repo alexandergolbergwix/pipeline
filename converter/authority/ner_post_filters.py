@@ -1,34 +1,32 @@
-"""Post-filters applied to Stage 2 NER outputs.
+"""Deterministic post-filters for Stage 2 NER outputs.
 
-Stage 2 audit on 2026-05-06 surfaced four classes of NER errors that
-flow into Stage 3 / Stage 4 and produce wrong Wikidata claims of
-exactly the kind that drew sysop complaints in 2026-04 (Geagea,
-Pallor, Kolja21, Epìdosis on Property talk:P244/Duplicates and
-Property talk:P8189/Duplicates/humans):
+Each filter prevents a specific class of NER mistake from flowing to
+Stage 3 / Stage 4 and producing a wrong Wikidata claim:
 
-* B1 — Contents NER mistypes folio references as WORK_AUTHOR
-  (``"133ב :"``). Stage 4 would emit P50 author claims with folio
-  strings as values.
+* :func:`filter_work_author_folio` — re-types folio-shaped strings
+  ("133ב :") that the contents NER mis-tags as ``WORK_AUTHOR``,
+  preventing P50 author claims with folio values.
 
-* B2 — Provenance NER mistypes catalog citations as COLLECTION
-  (``"מ' גסטר."``, ``"הלברשטם 89."``). Stage 4 would emit P195
-  collection claims pointing at fake institutions. Geagea explicitly
-  flagged this kind of "wrong type assignment" failure.
+* :func:`filter_collection_citations` — routes catalog citations
+  ("מ' גסטר.", "הלברשטם 89.") out of the COLLECTION list and into a
+  per-record ``catalog_references`` field, preventing P195 claims
+  that point at non-existent institutions.
 
-* B3 — Provenance NER captures full Hebrew bill-of-sale inscriptions
-  in OWNER spans (one audit case was 287 chars). Stage 4 would emit
-  P127 / P2093 with paragraph values instead of names.
+* :func:`filter_owner_length` — moves OWNER spans longer than
+  :data:`OWNER_MAX_LENGTH` into a per-record ``provenance_inscriptions``
+  list (destined for P7535 description notes), preventing P127 /
+  P2093 from carrying paragraph-length bill-of-sale text instead of
+  a name.
 
-* B4 — Person NER hallucinates persons from English topic keywords
-  (``"kabbalah"``, ``"messiah"``), Hebrew topic words (``"ספרד"`` =
-  Spain, ``"קולופון"`` = colophon, ``"אוטוגרף"`` = autograph), or
-  ALL-CAPS ASCII fragments (``"NASH PAPYRUS"``, ``"TPP"``). Stage 4
-  would create person items for non-persons — exactly the failure
-  pattern behind the deleted Q139185072 / Q139168371 / Q138940447.
+* :func:`filter_person_hallucinations` — drops person spans whose
+  text is a known topic keyword (Hebrew or Latin), an ALL-CAPS ASCII
+  fragment, an MARC uncertainty marker, or too short to disambiguate;
+  prevents Stage 4 from creating person items for non-persons.
 
-The filters here are deterministic, side-effect-free, and operate on
-the entity list + record-level fallback collectors only. ``NerWorker``
-calls them once per record after each NER model emits its entities.
+All four are pure functions over the entity list (plus a shared
+``surrounding_text`` for B2). ``NerWorker`` chains them after every
+NER model has emitted its spans and the entity offsets have been
+rebased onto ``record["text"]``.
 """
 
 from __future__ import annotations
@@ -51,9 +49,11 @@ def filter_work_author_folio(
 ) -> list[dict[str, Any]]:
     """Re-type WORK_AUTHOR entities whose text is actually a folio ref.
 
-    Audit fix B1. Returns the SAME list (mutated in place) for ergonomic
-    chaining; entities whose ``type`` was ``WORK_AUTHOR`` and whose
-    ``text`` matches :data:`_FOLIO_PREFIX_RE` are re-tagged as ``FOLIO``.
+    Returns the same list (mutated in place) for ergonomic chaining.
+    A WORK_AUTHOR span whose text matches :data:`_FOLIO_PREFIX_RE`
+    (digits followed by a Hebrew side letter) is re-tagged as
+    ``FOLIO`` and stamped with ``retyped_from`` so callers can tell
+    a real WORK_AUTHOR from a recovered one.
     """
     for ent in entities:
         if ent.get("type") != "WORK_AUTHOR":
@@ -138,19 +138,21 @@ def filter_collection_citations(
     *,
     surrounding_text: str = "",
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Filter COLLECTION entities that are actually catalog citations.
+    """Separate real COLLECTION names from catalog-citation lookalikes.
 
-    Audit fix B2. Returns ``(kept_entities, catalog_refs)``.
+    Returns ``(kept_entities, catalog_refs)``. A COLLECTION span with
+    ``<surname> <digits>`` shape is disambiguated against two curated
+    surname allowlists:
 
-    * Match the surname against :data:`_KNOWN_CATALOGUER_SURNAMES` →
-      drop from collection list, append to ``catalog_refs``.
-    * Match against :data:`_KNOWN_INSTITUTION_SURNAMES` → keep as
-      COLLECTION iff *surrounding_text* contains an institution
-      marker; otherwise drop to ``catalog_refs`` (safer default).
-    * Other strings matching the citation regex with no recognised
-      surname → drop to ``catalog_refs`` (unrecognised + numeric
-      suffix is almost always a citation).
-    * Strings that don't match the regex → keep unchanged.
+    * Surname in :data:`_KNOWN_CATALOGUER_SURNAMES` → catalog citation,
+      route to ``catalog_refs``.
+    * Surname in :data:`_KNOWN_INSTITUTION_SURNAMES` → keep as COLLECTION
+      iff *surrounding_text* mentions an institution marker (אוסף,
+      Library, ms, …); otherwise route to ``catalog_refs``. The
+      no-marker fallback is the safer default — better to under-emit
+      P195 than emit one pointing at a non-existent institution.
+    * Citation-shape with unknown surname → route to ``catalog_refs``.
+    * Any other COLLECTION → keep unchanged.
     """
     kept: list[dict[str, Any]] = []
     catalog_refs: list[str] = []
@@ -201,9 +203,11 @@ def filter_owner_length(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Drop OWNER entities longer than :data:`OWNER_MAX_LENGTH` chars.
 
-    Audit fix B3. The full text is preserved in the returned
-    ``inscriptions`` list so the caller can append it to a
-    record-level ``provenance_inscriptions`` field for P7535.
+    A name belongs in P127; a full bill-of-sale paragraph belongs in
+    P7535. Hebrew provenance NER frequently produces the latter when
+    the inscription has no clean head/tail boundary. The full text is
+    preserved in the returned ``inscriptions`` list so the caller can
+    append it to a record-level ``provenance_inscriptions`` field.
     """
     kept: list[dict[str, Any]] = []
     inscriptions: list[str] = []
@@ -221,10 +225,9 @@ def filter_owner_length(
 # B4 — Person NER hallucination filter
 # ─────────────────────────────────────────────────────────────────────
 
-# Hebrew topic / meta keywords that the person NER frequently
-# hallucinates as person names. Curated from the 2026-05-06 audit
-# findings. NOT an exhaustive list — extend whenever an audit catches
-# a new false positive class.
+# Hebrew topic / meta keywords the person NER frequently emits as
+# spurious person spans. Extend when a new false-positive class
+# surfaces.
 _HEBREW_TOPIC_DENYLIST: frozenset[str] = frozenset({
     "ספרד", "פולין", "אשכנז", "צרפת", "איטליה", "תוגרמה",
     "קבלה", "גמרא", "תלמוד", "תורה", "משנה", "הלכה",
@@ -232,8 +235,8 @@ _HEBREW_TOPIC_DENYLIST: frozenset[str] = frozenset({
     "משיח", "גאולה",
 })
 
-# English / Latin topic words and acronyms tagged as persons in the
-# audit. Extend on each audit finding.
+# English / Latin topic words and acronyms commonly mis-tagged as
+# persons. Extend when a new false-positive class surfaces.
 _LATIN_TOPIC_DENYLIST: frozenset[str] = frozenset({
     "kabbalah", "messiah", "yihudim", "torah", "talmud", "halakhah",
     "midrash", "zohar", "siddur", "pesach", "yom kippur",
@@ -257,16 +260,17 @@ def filter_person_hallucinations(
 ) -> list[dict[str, Any]]:
     """Drop person_ner entities that are almost certainly not persons.
 
-    Audit fix B4. Conservative — only drops entities matching one of:
+    Conservative — only drops entities matching one of:
 
-    * Hebrew topic keyword (kabbalah, ספרד, אוטוגרף, קולופון, …)
-    * Latin topic keyword or all-caps ASCII fragment (NASH PAPYRUS, TPP)
-    * Contains an uncertainty marker (``?`` / ``[`` / ``]``)
+    * A Hebrew topic keyword (קבלה, ספרד, אוטוגרף, …).
+    * A Latin topic keyword or ALL-CAPS ASCII fragment (NASH PAPYRUS,
+      TPP) — never plausible as a personal name.
+    * An MARC uncertainty marker (``?`` / ``[`` / ``]``) — the
+      cataloguer wasn't sure, so authority-matching the span is
+      worse than dropping it.
     * Fewer than :data:`_MIN_HEBREW_LETTERS` Hebrew letters AND no
-      Latin word characters (single Hebrew tokens are unreliable)
-
-    Stamps ``rejected_reason`` on dropped entities so the GUI can
-    surface why they were dropped (Plan §B4).
+      Latin word characters — single Hebrew tokens are unreliable
+      as authority keys.
     """
     kept: list[dict[str, Any]] = []
     for ent in entities:

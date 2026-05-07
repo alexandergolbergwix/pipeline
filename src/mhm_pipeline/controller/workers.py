@@ -251,17 +251,13 @@ def _rebase_entity_offsets(
     """Relocate per-segment NER entity offsets onto ``full_text``.
 
     Provenance NER (MARC 561) and Contents NER (MARC 505) return
-    offsets local to their input segments — not relative to
-    ``record["text"]``. Audit 2026-05-06 found record 990001801390205171
-    had 92 contents-NER entities whose ``start``/``end`` indexed into a
-    phantom file-prefix string instead of the body text.
-
-    For each entity we search ``full_text`` for the entity payload
-    (``person`` for person_ner, ``text`` for the others). If found,
-    rebase ``start``/``end`` to the global position. If not found
-    (the segment text isn't part of ``full_text``), null the offsets
-    so consumers can render fallback display rather than slice into
-    garbage.
+    offsets local to their own input segments. The GUI highlighter
+    needs offsets relative to ``record["text"]``, which is the
+    concatenation of every NER input. We substring-search for each
+    entity's payload (``person`` for person_ner, ``text`` for the
+    others) and rebase to the global position. Entities whose payload
+    cannot be located get ``start``/``end`` nulled so consumers can
+    fall back to plain rendering instead of slicing into garbage.
     """
     for ent in entities:
         payload = ent.get("person") or ent.get("text") or ""
@@ -498,13 +494,10 @@ class NerWorker(StageWorker):
                             except Exception as cont_exc:
                                 logger.warning("Contents NER error: %s", cont_exc)
 
-                # MARC 500 colophon sentence detection. Audit fix A6
-                # (2026-05-06): classifier outputs no longer leak into
-                # ``entities`` as fake spans with ``start=0, end=0`` —
-                # they live in dedicated channels so Stage 3's source
-                # filter (person_ner / provenance_ner / contents_ner)
-                # is never bypassed and the GUI's authority editor
-                # cannot accidentally route a classifier prediction
+                # MARC 500 sentence classifier. Both heads land in
+                # dedicated record-level channels (not in ``entities``)
+                # so Stage 3's source filter and the GUI authority
+                # editor can never route a classifier prediction
                 # through Wikidata reconciliation.
                 ml_colophon_sentences: list[str] = []
                 if not marc500_announced:
@@ -515,21 +508,19 @@ class NerWorker(StageWorker):
                     for note in record.get("notes") or []:
                         for sent in _split_marc500_sentences(str(note)):
                             # COLOPHON head — sentence becomes a colophon
-                            # source for P1684 (audit fix A6: lives only
-                            # in ml_colophon_sentences, not entities[]).
+                            # source for P1684, accumulated in
+                            # ``ml_colophon_sentences``.
                             try:
                                 col_above, col_conf = _marc500_clf.is_colophon(sent)
                                 if col_above:
                                     ml_colophon_sentences.append(sent)
                             except Exception as _col_exc:
                                 logger.debug("MARC 500 colophon clf error: %s", _col_exc)
-                            # PROVENANCE head — Rule 35 says PROVENANCE
-                            # MARC 500 sentences route through the
-                            # provenance NER pipeline. Audit fix A2
-                            # (2026-05-06): this routing was missing —
-                            # zero entities had ``from_marc500: True``
-                            # despite obvious provenance content in
-                            # 27/68 records of the audit corpus.
+                            # PROVENANCE head — sentence is fed through
+                            # the provenance NER pipeline so any owners
+                            # / dates / collections it mentions become
+                            # entities flagged ``from_marc500: True`` so
+                            # downstream code knows the source segment.
                             try:
                                 prov_above, prov_conf = _marc500_clf.is_provenance(sent)
                                 if prov_above and provenance_pipeline is not None:
@@ -542,11 +533,10 @@ class NerWorker(StageWorker):
                             except Exception as _prov_exc:
                                 logger.debug("MARC 500 provenance routing error: %s", _prov_exc)
 
-                # Genre classifier (Stage 3 P136 fallback). Predictions
-                # land in ``ml_genres`` (audit fix A6), NOT in the
-                # entity list. The Wikidata Preview panel reads them
-                # directly; the GUI editor surfaces them in a separate
-                # read-only section if needed.
+                # Genre classifier — Stage 3 P136 fallback. Predictions
+                # land in ``ml_genres`` (NOT in the entity list) so they
+                # never traverse the authority-matching path. The
+                # Wikidata Preview panel reads them directly.
                 if not genre_announced:
                     self.substep.emit("Loading genre classifier")
                     genre_announced = True
@@ -576,14 +566,10 @@ class NerWorker(StageWorker):
                     except Exception as _genre_exc:
                         logger.debug("Genre ML error: %s", _genre_exc)
 
-                # Audit fix A5 (2026-05-06): ``record["text"]`` becomes
-                # the FULL concatenation of every input fed to the NER
-                # models (notes + colophon + provenance + contents),
-                # then provenance and contents entities have their
-                # offsets rebased onto it via substring search. The
-                # audit found 92 contents-NER offsets on record
-                # 990001801390205171 indexed into a phantom file-prefix
-                # because ``text`` only contained notes + colophon.
+                # ``record["text"]`` is the full concatenation of every
+                # input fed to the NER models — notes + colophon +
+                # provenance + contents — so global offsets have a
+                # single string to land on.
                 full_text_parts: list[str] = list(texts)
                 provenance_text_full = record.get("provenance") or ""
                 if isinstance(provenance_text_full, str) and provenance_text_full.strip():
@@ -602,12 +588,11 @@ class NerWorker(StageWorker):
                     elif isinstance(content, str) and content.strip():
                         full_text_parts.append(content)
                 full_text = "\n".join(full_text_parts)
-                # Re-base offsets for entities that did not come from
-                # the person-NER segment-offset pipeline (which was
-                # already global). We can't tell person from non-person
-                # by source alone here — instead, verify each entity's
-                # current offset is consistent with ``full_text`` and
-                # re-base only those that are not.
+                # Verify every entity's offsets against ``full_text``
+                # and rebase any that don't slice to the entity payload.
+                # Person-NER offsets are already global (segment offset
+                # was added at emit time); the others are local to
+                # their input segment and need substring relocation.
                 _verified: list[dict[str, Any]] = []
                 for ent in all_entities:
                     payload = ent.get("person") or ent.get("text") or ""
@@ -634,33 +619,20 @@ class NerWorker(StageWorker):
                     _verified.append(ent)
                 all_entities = _verified
 
-                # Audit fixes B1–B4 (2026-05-06): post-filters that prevent
-                # the four classes of NER errors that produced wrong
-                # Wikidata claims in the 2026-04 cleanup (Geagea, Pallor,
-                # Kolja21, Epìdosis). Each filter is documented in
-                # converter/authority/ner_post_filters.py.
+                # Post-filters that prevent classes of NER mis-typing
+                # from reaching Stage 3 / Stage 4. Each filter's intent
+                # is documented in ner_post_filters.py.
                 from converter.authority.ner_post_filters import (  # noqa: PLC0415
                     filter_collection_citations,
                     filter_owner_length,
                     filter_person_hallucinations,
                     filter_work_author_folio,
                 )
-                # B1: WORK_AUTHOR strings that look like folio refs
-                # ("133ב :") get re-typed to FOLIO.
                 all_entities = filter_work_author_folio(all_entities)
-                # B2: COLLECTION strings that look like catalog citations
-                # ("מ' גסטר.", "הלברשטם 89.") get routed to a record-
-                # level ``catalog_references`` field instead of P195.
                 all_entities, catalog_refs = filter_collection_citations(
                     all_entities, surrounding_text=full_text,
                 )
-                # B3: OWNER strings longer than 80 chars (full Hebrew
-                # bills of sale) get routed to ``provenance_inscriptions``
-                # for P7535 instead of P127.
                 all_entities, prov_inscriptions = filter_owner_length(all_entities)
-                # B4: Person NER hallucinations (kabbalah, ספרד,
-                # NASH PAPYRUS, …) get dropped from the entity list
-                # so they never reach Stage 3 reconciliation.
                 all_entities = filter_person_hallucinations(all_entities)
 
                 results.append(
@@ -1037,11 +1009,9 @@ class AuthorityWorker(StageWorker):
                     except (ValueError, IndexError):
                         pass
                 # ── Step 4b — backfill VIAF from QID ────────────────────
-                # When NLI strict mode resolved a Mazal hit and triangulated
-                # to a Wikidata QID, the Wikidata page nearly always has a
-                # P214 (VIAF) statement. The audit on 2026-05-06 showed VIAF
-                # coverage at 13% vs Mazal 72% — most of that gap closes by
-                # reading P214 off the QID we already have.
+                # When NLI-strict mode produces a QID without a VIAF,
+                # the Wikidata item's own ``P214`` is a more reliable
+                # source than a fresh VIAF SRU search.
                 if wikidata_qid is not None and not viaf_uri:
                     backfilled = wd_matcher.find_viaf_by_qid(wikidata_qid)
                     if backfilled:
@@ -1074,10 +1044,9 @@ class AuthorityWorker(StageWorker):
                     "WikidataMatcher label fallback failed for %s: %s", name, exc
                 )
 
-        # ``source`` is derived AT THE END from the IDs that survived the
-        # verdict (see "Derive authority source" block below). The literal
-        # placeholder here is overwritten — keeping the constructor shape
-        # backward-compatible with existing tests.
+        # ``source`` is derived from the IDs that survive the verdict
+        # (see the "Derive authority source" block below). The empty
+        # placeholder here is overwritten then.
         match_info = self._create_match_info(
             name=name,
             role=role_value,
@@ -1311,12 +1280,10 @@ class AuthorityWorker(StageWorker):
             wikidata_qid=wikidata_qid,
         )
 
-        # F1 (LLM disambiguator) was removed in 2026-05-03 — its 13GB
-        # weight bundle was incompatible with the desktop app's
-        # distribution constraint (CLAUDE.md, DRIFT_LOG type 14). The
-        # deterministic F2/F3/F4 + 5-guards layer hits 100% precision
-        # on the 22-case audit; medium-confidence residuals route to
-        # the GUI's manual-review queue.
+        # The deterministic F2 / F3 / F4 layer plus the five guards
+        # produces a final confidence bucket; medium-confidence
+        # residuals route to the GUI's manual-review queue rather than
+        # auto-promote.
 
         # Apply verdict — if Guard 1 / Guard 4 hard-rejected, the match
         # info now has cleared mazal_id / viaf_uri.
@@ -1339,10 +1306,10 @@ class AuthorityWorker(StageWorker):
             match_info["guard_flags"] = verdict["guard_flags"]
 
         # Derive authority source from the IDs that survived the verdict.
-        # Replaces the previous literal ``source="MARC"`` which never
-        # carried provenance information. ``field`` already captures the
-        # MARC field origin (e.g. "marc_100"); ``source`` now records
-        # which authorities agreed on this entity.
+        # ``field`` carries the MARC field origin (e.g. "marc_100");
+        # ``source`` records which authorities agree on this entity.
+        # ``cross_source`` means 2+ authorities agree; ``marc_only``
+        # means the name comes from MARC alone with no authority hit.
         sources_present: list[str] = []
         if match_info.get("mazal_id"):
             sources_present.append("mazal")
@@ -1570,11 +1537,9 @@ class AuthorityWorker(StageWorker):
                 record["entities"] = ner_rec["entities"]
                 enriched += 1
             else:
-                # Schema-consistency guarantee: every record gets an
-                # ``entities`` key (possibly empty) so downstream consumers
-                # can rely on ``record["entities"]`` without defensive
-                # ``.get(..., [])``. The audit on 2026-05-06 found 39/68
-                # records missing the key entirely.
+                # Every record carries an ``entities`` key (possibly
+                # empty) so downstream consumers can rely on the field
+                # being present without defensive ``.get(..., [])``.
                 record.setdefault("entities", [])
             ml_col = ner_rec.get("ml_colophon_sentences") if ner_rec else None
             if ml_col:

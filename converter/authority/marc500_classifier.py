@@ -24,12 +24,12 @@ logger = logging.getLogger(__name__)
 _BASE_MODEL = "dicta-il/dictabert"
 _LABEL2ID = {"COLOPHON": 0}
 
-# Hebrew ownership / acquisition vocabulary used to detect MARC 500
-# sentences that describe provenance. Lifted verbatim from
-# ``scripts/extract_marc500_sentences.py:_PROVENANCE_KEYWORDS`` —
-# the same set was used to label the training corpus that the
-# (single-head) DictaBERT classifier learned. Acts as a deterministic
-# fallback while the second sigmoid head (Rule 35 §) is being trained.
+# Hebrew ownership / acquisition vocabulary that flags a MARC 500
+# sentence as describing provenance. Same set lives at
+# ``scripts/extract_marc500_sentences.py:_PROVENANCE_KEYWORDS`` (the
+# labels for the training corpus). The trained checkpoint is
+# single-head (COLOPHON only); this set drives the deterministic
+# fallback used by :meth:`Marc500Classifier.is_provenance`.
 _PROVENANCE_KEYWORDS: frozenset[str] = frozenset({
     # acquisition
     "קנה", "קניתי", "נרכש", "רכשתי",
@@ -132,15 +132,15 @@ class Marc500Classifier:
         return (conf >= self.threshold, conf)
 
     def is_provenance(self, sentence: str) -> tuple[bool, float]:
-        """Return (above_threshold, confidence) for provenance routing.
+        """Return ``(above_threshold, confidence)`` for provenance routing.
 
-        The trained checkpoint has a single COLOPHON head — Rule 35's
-        promised PROVENANCE head is not yet trained. Until it is, this
-        method falls back to a deterministic Hebrew-vocabulary check
-        using the SAME keyword set
-        (:data:`_PROVENANCE_KEYWORDS`) that labelled the training
-        corpus. The return shape matches :meth:`is_colophon` so callers
-        (NerWorker MARC 500 router) can treat both heads uniformly.
+        Mirrors the shape of :meth:`is_colophon` so callers can treat
+        both heads uniformly. The current checkpoint is single-head
+        (COLOPHON only); this method runs a deterministic Hebrew-
+        vocabulary check (:data:`_PROVENANCE_KEYWORDS`) and reports
+        :data:`_PROVENANCE_HEURISTIC_CONF` on a hit. The heuristic
+        confidence is below the COLOPHON model's threshold so callers
+        can distinguish "model fired" from "keyword fired".
         """
         text = (sentence or "").strip()
         if not text:
