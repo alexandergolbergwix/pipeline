@@ -1510,16 +1510,129 @@ class TestNerEntitySchemaCleanliness:
             "results dict — Stage 4 reads it for the P136 fallback."
         )
 
-    def test_extraction_editor_valid_sources_excludes_classifier_outputs(self) -> None:
-        from mhm_pipeline.gui.widgets.extraction_editor import VALID_SOURCES
+    def test_extraction_editor_lists_classifier_outputs_as_synthetic(self) -> None:
+        """The GUI editor surfaces classifier predictions as synthetic
+        rows so reviewers can approve / reject them. The source labels
+        are valid filter values; on save (``to_records``) they round-
+        trip back to ``ml_colophon_sentences`` / ``ml_genres`` rather
+        than into the real ``entities`` list. The worker invariant
+        (no fake entities at emit time) is enforced by the two source-
+        level tests above on ``workers.py``.
+        """
+        from mhm_pipeline.gui.widgets.extraction_editor import (
+            SYNTHETIC_SOURCES, VALID_SOURCES,
+        )
 
-        # ``colophon_ml`` and ``genre_ml`` are NOT real NER sources.
-        assert "colophon_ml" not in VALID_SOURCES
-        assert "genre_ml" not in VALID_SOURCES
-        # The three real sources must still be present.
+        # Real NER sources must always be present.
         assert "person_ner" in VALID_SOURCES
         assert "provenance_ner" in VALID_SOURCES
         assert "contents_ner" in VALID_SOURCES
+        # Classifier sources are filterable in the GUI but live in the
+        # synthetic set so ``to_records`` knows to route them back to
+        # the dedicated record-level channels.
+        assert "colophon_ml" in VALID_SOURCES
+        assert "genre_ml" in VALID_SOURCES
+        assert "colophon_ml" in SYNTHETIC_SOURCES
+        assert "genre_ml" in SYNTHETIC_SOURCES
+        # The real NER sources must NOT be in the synthetic set.
+        assert "person_ner" not in SYNTHETIC_SOURCES
+        assert "provenance_ner" not in SYNTHETIC_SOURCES
+        assert "contents_ner" not in SYNTHETIC_SOURCES
+
+
+class TestEditorClassifierVirtualRows:
+    """The GUI editor surfaces classifier predictions as virtual rows
+    so reviewers can approve / reject them, then routes approved rows
+    back to ``ml_colophon_sentences`` / ``ml_genres`` on save. Real NER
+    spans round-trip into ``entities``; the two never mix.
+    """
+
+    def _qapp(self):  # noqa: ANN001
+        from PyQt6.QtCore import QCoreApplication
+        return QCoreApplication.instance() or QCoreApplication([])
+
+    def test_load_surfaces_colophon_and_genre_as_virtual_rows(self) -> None:
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
+
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [{
+                "person": "Maimonides", "role": "AUTHOR",
+                "confidence": 0.6, "source": "person_ner",
+                "start": 0, "end": 10,
+            }],
+            "ml_colophon_sentences": ["נשלם הספר ביד משה"],
+            "ml_genres": [{"label": "commentary", "confidence": 0.83}],
+        }])
+        sources = {e["source"] for e in m._entities}
+        assert sources == {"person_ner", "colophon_ml", "genre_ml"}
+        assert len(m._entities) == 3
+
+    def test_to_records_routes_synthetic_rows_back_to_channels(self) -> None:
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
+
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [{
+                "person": "Maimonides", "role": "AUTHOR",
+                "confidence": 0.6, "source": "person_ner",
+                "start": 0, "end": 10,
+            }],
+            "ml_colophon_sentences": ["נשלם"],
+            "ml_genres": [{"label": "commentary", "confidence": 0.83}],
+        }])
+        for e in m._entities:
+            e["approved"] = True
+        out = m.to_records()[0]
+        # Real NER entity stays in entities[]
+        assert len(out["entities"]) == 1
+        assert out["entities"][0]["source"] == "person_ner"
+        # Synthetic rows route back to dedicated channels
+        assert out["ml_colophon_sentences"] == ["נשלם"]
+        assert out["ml_genres"] == [{"label": "commentary", "confidence": 0.83}]
+
+    def test_to_records_drops_unapproved_synthetic_rows(self) -> None:
+        """Approving a colophon prediction keeps it; rejecting empties
+        the channel. Symmetric with how the editor handles real entities.
+        """
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
+
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [],
+            "ml_colophon_sentences": ["a", "b"],
+            "ml_genres": [{"label": "commentary", "confidence": 0.5}],
+        }])
+        # Approve only the second colophon; leave the genre rejected.
+        for e in m._entities:
+            if e["source"] == "colophon_ml" and e["text"] == "b":
+                e["approved"] = True
+        out = m.to_records()[0]
+        assert out["ml_colophon_sentences"] == ["b"]
+        assert out["ml_genres"] == []
+
+    def test_to_records_preserves_unrelated_record_channels(self) -> None:
+        """Channels the editor doesn't model (catalog_references,
+        provenance_inscriptions, …) must round-trip untouched."""
+        self._qapp()
+        from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
+
+        m = EditableEntityModel()
+        m.load_from_records([{
+            "_control_number": "X1",
+            "entities": [],
+            "catalog_references": ["Halberstam 89."],
+            "provenance_inscriptions": ["נכתב עבור משה ..."],
+        }])
+        out = m.to_records()[0]
+        assert out["catalog_references"] == ["Halberstam 89."]
+        assert out["provenance_inscriptions"] == ["נכתב עבור משה ..."]
 
 
 class TestBuildAppKeepsNerRuntimeFiles:

@@ -231,10 +231,19 @@ def _calculate_segment_offset(texts: list[str], index: int) -> int:
 
 
 def _adjust_entity_positions(entities: list[dict[str, Any]], offset: int) -> list[dict[str, Any]]:
-    """Adjust entity positions by adding offset to start/end."""
+    """Adjust entity positions by adding offset to start/end.
+
+    Skips entries whose ``start`` or ``end`` is not an ``int`` —
+    rebasing earlier in the pipeline may have nulled them when the
+    payload could not be located in the global text.
+    """
     for ent in entities:
-        ent["start"] = ent.get("start", 0) + offset
-        ent["end"] = ent.get("end", 0) + offset
+        s = ent.get("start")
+        e = ent.get("end")
+        if isinstance(s, int):
+            ent["start"] = s + offset
+        if isinstance(e, int):
+            ent["end"] = e + offset
     return entities
 
 

@@ -73,7 +73,21 @@ VALID_ENTITY_TYPES = [
 
 VALID_ROLES = ["", "AUTHOR", "SCRIBE", "OWNER", "CENSOR", "COMMENTATOR", "TRANSCRIBER"]
 
-VALID_SOURCES = ["person_ner", "provenance_ner", "contents_ner", "manual"]
+VALID_SOURCES = [
+    "person_ner",
+    "provenance_ner",
+    "contents_ner",
+    "colophon_ml",
+    "genre_ml",
+    "manual",
+]
+
+# Synthetic-only sources that originate in record-level channels
+# (``ml_colophon_sentences`` / ``ml_genres``) rather than in the
+# ``entities`` list. The editor surfaces them as rows so reviewers can
+# approve / reject classifier predictions; ``to_records`` routes them
+# back to the original channels instead of polluting ``entities``.
+SYNTHETIC_SOURCES: frozenset[str] = frozenset({"colophon_ml", "genre_ml"})
 
 
 def _type_colors() -> dict[str, tuple[str, str]]:
@@ -186,7 +200,15 @@ class EditableEntityModel(QAbstractTableModel):
     # ── Loading ──────────────────────────────────────────────────────────
 
     def load_from_records(self, records: list[dict]) -> None:
-        """Flatten NER result records into entity rows."""
+        """Flatten NER result records into entity rows.
+
+        Real NER spans come from ``record["entities"]``. Classifier
+        predictions stored in dedicated channels (``ml_colophon_sentences``
+        and ``ml_genres``) are surfaced as virtual rows tagged
+        ``source="colophon_ml"`` / ``"genre_ml"`` so reviewers can
+        approve them. ``to_records`` routes virtual rows back to the
+        channels rather than into ``entities``.
+        """
         self.beginResetModel()
         self._entities.clear()
         self._records_by_cn = {
@@ -207,6 +229,32 @@ class EditableEntityModel(QAbstractTableModel):
                     "approved": bool(entity.get("approved", False)),
                 }
                 self._entities.append(row)
+            for sentence in record.get("ml_colophon_sentences") or []:
+                self._entities.append({
+                    "_control_number": cn,
+                    "text": str(sentence),
+                    "type": "COLOPHON",
+                    "confidence": 0.0,
+                    "source": "colophon_ml",
+                    "role": "",
+                    "start": 0,
+                    "end": 0,
+                    "approved": False,
+                })
+            for prediction in record.get("ml_genres") or []:
+                if not isinstance(prediction, dict):
+                    continue
+                self._entities.append({
+                    "_control_number": cn,
+                    "text": str(prediction.get("label") or ""),
+                    "type": "GENRE",
+                    "confidence": float(prediction.get("confidence") or 0.0),
+                    "source": "genre_ml",
+                    "role": "",
+                    "start": 0,
+                    "end": 0,
+                    "approved": False,
+                })
         self._original = copy.deepcopy(self._entities)
         self.endResetModel()
 
@@ -420,33 +468,62 @@ class EditableEntityModel(QAbstractTableModel):
             self._entities = saved
 
     def to_records(self) -> list[dict]:
-        """Reconstruct NER-style records from the current entity state."""
-        by_cn: dict[str, list[dict]] = {}
+        """Reconstruct NER-style records from the current entity state.
+
+        Real NER rows go back into ``record["entities"]``. Synthetic
+        classifier rows (``source`` in :data:`SYNTHETIC_SOURCES`) round-
+        trip into the dedicated channels — colophon rows back to
+        ``ml_colophon_sentences``, genre rows back to ``ml_genres``.
+        Only approved synthetic rows are kept on save so the user's
+        rejections from the GUI flow downstream.
+        """
+        by_cn_entities: dict[str, list[dict]] = {}
+        by_cn_colophons: dict[str, list[str]] = {}
+        by_cn_genres: dict[str, list[dict[str, Any]]] = {}
+        seen_cns: set[str] = set()
+
         for ent in self._entities:
             cn = ent["_control_number"]
-            by_cn.setdefault(cn, [])
+            seen_cns.add(cn)
+            source = ent["source"]
+            if source == "colophon_ml":
+                if ent.get("approved", False):
+                    by_cn_colophons.setdefault(cn, []).append(str(ent["text"]))
+                continue
+            if source == "genre_ml":
+                if ent.get("approved", False):
+                    by_cn_genres.setdefault(cn, []).append({
+                        "label": str(ent["text"]),
+                        "confidence": float(ent.get("confidence") or 0.0),
+                    })
+                continue
+            by_cn_entities.setdefault(cn, [])
             out: dict[str, Any] = {
                 "text": ent["text"],
                 "type": ent["type"],
                 "confidence": ent["confidence"],
-                "source": ent["source"],
+                "source": source,
                 "start": ent["start"],
                 "end": ent["end"],
                 "approved": bool(ent.get("approved", False)),
             }
-            if ent["source"] == "person_ner":
+            if source == "person_ner":
                 out["person"] = ent["text"]
                 out["role"] = ent.get("role", "AUTHOR")
             elif ent.get("role"):
                 out["role"] = ent["role"]
-            by_cn[cn].append(out)
-        # Preserve original record keys (text, ml_colophon_sentences) by
-        # merging over the cached source record.
+            by_cn_entities[cn].append(out)
+
+        # Merge over the cached source records so unrelated keys
+        # (text, catalog_references, provenance_inscriptions, …) survive.
         merged: list[dict] = []
-        for cn, ents in by_cn.items():
+        all_cns = seen_cns | set(self._records_by_cn.keys())
+        for cn in all_cns:
             base = copy.deepcopy(self._records_by_cn.get(cn, {"_control_number": cn}))
             base["_control_number"] = cn
-            base["entities"] = ents
+            base["entities"] = by_cn_entities.get(cn, [])
+            base["ml_colophon_sentences"] = by_cn_colophons.get(cn, [])
+            base["ml_genres"] = by_cn_genres.get(cn, [])
             merged.append(base)
         return merged
 
