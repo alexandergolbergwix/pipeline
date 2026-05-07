@@ -1524,6 +1524,193 @@ class TestNerEntitySchemaCleanliness:
         assert "contents_ner" in VALID_SOURCES
 
 
+class TestNerPostFilters:
+    """Stage-2 audit fixes B1, B2, B3, B4 (2026-05-06).
+
+    Four deterministic post-filters that prevent the NER errors that
+    produced wrong Wikidata claims in the 2026-04 sysop cleanup
+    (Geagea, Pallor, Kolja21, Epìdosis):
+
+    * B1 — WORK_AUTHOR mistyping of folio refs.
+    * B2 — COLLECTION mistyping of catalog citations.
+    * B3 — OWNER capturing full bill-of-sale inscriptions.
+    * B4 — Person NER hallucinating non-persons (topic words, ALL-CAPS).
+    """
+
+    # ── B1 ────────────────────────────────────────────────────────────
+
+    def test_b1_folio_prefix_retyped_to_FOLIO(self) -> None:
+        from converter.authority.ner_post_filters import filter_work_author_folio
+
+        ents = [
+            {"text": "133ב :", "type": "WORK_AUTHOR", "source": "contents_ner"},
+            {"text": "342ב, 45א", "type": "WORK_AUTHOR", "source": "contents_ner"},
+        ]
+        out = filter_work_author_folio(ents)
+        assert all(e["type"] == "FOLIO" for e in out)
+        assert all(e.get("retyped_from") == "WORK_AUTHOR" for e in out)
+
+    def test_b1_real_author_passes_through(self) -> None:
+        from converter.authority.ner_post_filters import filter_work_author_folio
+
+        ents = [{"text": "שמשון בן צדוק", "type": "WORK_AUTHOR", "source": "contents_ner"}]
+        out = filter_work_author_folio(ents)
+        assert out[0]["type"] == "WORK_AUTHOR"
+        assert "retyped_from" not in out[0]
+
+    # ── B2 ────────────────────────────────────────────────────────────
+
+    def test_b2_known_cataloguer_routed_to_catalog_refs(self) -> None:
+        from converter.authority.ner_post_filters import filter_collection_citations
+
+        ents = [
+            {"text": "מ' גסטר.", "type": "COLLECTION", "source": "provenance_ner"},
+            {"text": "הלברשטם 89.", "type": "COLLECTION", "source": "provenance_ner"},
+        ]
+        kept, refs = filter_collection_citations(ents)
+        assert kept == []
+        assert "מ' גסטר." in refs
+        assert "הלברשטם 89." in refs
+
+    def test_b2_known_institution_with_marker_kept(self) -> None:
+        from converter.authority.ner_post_filters import filter_collection_citations
+
+        ents = [{"text": "ששון 123", "type": "COLLECTION", "source": "provenance_ner"}]
+        kept, refs = filter_collection_citations(
+            ents, surrounding_text="from the Sassoon Collection ms 123"
+        )
+        assert len(kept) == 1
+        assert refs == []
+
+    def test_b2_known_institution_without_marker_routed_to_refs(self) -> None:
+        """Default safer route: when an institution-eligible surname
+        appears without confirming context, treat as catalog citation."""
+        from converter.authority.ner_post_filters import filter_collection_citations
+
+        ents = [{"text": "ששון 123", "type": "COLLECTION", "source": "provenance_ner"}]
+        kept, refs = filter_collection_citations(ents, surrounding_text="")
+        assert kept == []
+        assert refs == ["ששון 123"]
+
+    def test_b2_unknown_surname_with_digits_routed_to_refs(self) -> None:
+        """Unrecognised surname matching the citation pattern → safer
+        default of catalog reference, not P195 collection."""
+        from converter.authority.ner_post_filters import filter_collection_citations
+
+        ents = [{"text": "Foo 42", "type": "COLLECTION", "source": "provenance_ner"}]
+        kept, refs = filter_collection_citations(ents)
+        assert kept == []
+        assert refs == ["Foo 42"]
+
+    def test_b2_non_collection_passes_through(self) -> None:
+        from converter.authority.ner_post_filters import filter_collection_citations
+
+        ents = [{"text": "anyone", "type": "OWNER", "source": "provenance_ner"}]
+        kept, refs = filter_collection_citations(ents)
+        assert len(kept) == 1
+        assert refs == []
+
+    # ── B3 ────────────────────────────────────────────────────────────
+
+    def test_b3_long_owner_moved_to_inscriptions(self) -> None:
+        from converter.authority.ner_post_filters import filter_owner_length
+
+        long_text = "נכתב עבור משה בן יצחק " * 10  # ~210 chars
+        ents = [{"text": long_text, "type": "OWNER", "source": "provenance_ner"}]
+        kept, inscriptions = filter_owner_length(ents)
+        assert kept == []
+        assert inscriptions == [long_text]
+
+    def test_b3_short_owner_passes_through(self) -> None:
+        from converter.authority.ner_post_filters import filter_owner_length
+
+        ents = [{"text": "יעקב בן שלמה", "type": "OWNER", "source": "provenance_ner"}]
+        kept, inscriptions = filter_owner_length(ents)
+        assert len(kept) == 1
+        assert inscriptions == []
+
+    # ── B4 ────────────────────────────────────────────────────────────
+
+    def test_b4_hebrew_topic_keyword_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "ספרד", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "אוטוגרף", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "קולופון", "role": "TRANSCRIBER", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_b4_latin_topic_keyword_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "kabbalah", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "messiah", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_b4_all_caps_ascii_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "NASH PAPYRUS", "role": "OWNER", "source": "person_ner"},
+            {"person": "TPP", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_b4_uncertainty_marker_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "משה[?]", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "שלמה ?", "role": "OWNER", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_b4_too_short_hebrew_dropped(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [{"person": "נח", "role": "AUTHOR", "source": "person_ner"}]
+        out = filter_person_hallucinations(ents)
+        assert out == []
+
+    def test_b4_real_hebrew_name_passes(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "משה בן מימון", "role": "AUTHOR", "source": "person_ner"},
+            {"person": "אלעזר אזכרי", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert len(out) == 2
+
+    def test_b4_real_latin_name_passes(self) -> None:
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"person": "Joseph Sanger", "role": "OWNER", "source": "person_ner"},
+            {"person": "Maimonides", "role": "AUTHOR", "source": "person_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert len(out) == 2
+
+    def test_b4_skips_non_person_ner_sources(self) -> None:
+        """Filter must not touch provenance_ner / contents_ner spans."""
+        from converter.authority.ner_post_filters import filter_person_hallucinations
+
+        ents = [
+            {"text": "kabbalah", "type": "WORK", "source": "contents_ner"},
+            {"text": "ספרד", "type": "OWNER", "source": "provenance_ner"},
+        ]
+        out = filter_person_hallucinations(ents)
+        assert len(out) == 2
+
+
 class TestPersonNerModelConfidence:
     """Stage-2 audit fix A3 (2026-05-06): person-NER entities must
     expose the real model softmax probability as ``model_confidence``.

@@ -634,6 +634,35 @@ class NerWorker(StageWorker):
                     _verified.append(ent)
                 all_entities = _verified
 
+                # Audit fixes B1–B4 (2026-05-06): post-filters that prevent
+                # the four classes of NER errors that produced wrong
+                # Wikidata claims in the 2026-04 cleanup (Geagea, Pallor,
+                # Kolja21, Epìdosis). Each filter is documented in
+                # converter/authority/ner_post_filters.py.
+                from converter.authority.ner_post_filters import (  # noqa: PLC0415
+                    filter_collection_citations,
+                    filter_owner_length,
+                    filter_person_hallucinations,
+                    filter_work_author_folio,
+                )
+                # B1: WORK_AUTHOR strings that look like folio refs
+                # ("133ב :") get re-typed to FOLIO.
+                all_entities = filter_work_author_folio(all_entities)
+                # B2: COLLECTION strings that look like catalog citations
+                # ("מ' גסטר.", "הלברשטם 89.") get routed to a record-
+                # level ``catalog_references`` field instead of P195.
+                all_entities, catalog_refs = filter_collection_citations(
+                    all_entities, surrounding_text=full_text,
+                )
+                # B3: OWNER strings longer than 80 chars (full Hebrew
+                # bills of sale) get routed to ``provenance_inscriptions``
+                # for P7535 instead of P127.
+                all_entities, prov_inscriptions = filter_owner_length(all_entities)
+                # B4: Person NER hallucinations (kabbalah, ספרד,
+                # NASH PAPYRUS, …) get dropped from the entity list
+                # so they never reach Stage 3 reconciliation.
+                all_entities = filter_person_hallucinations(all_entities)
+
                 results.append(
                     {
                         "_control_number": record.get("_control_number"),
@@ -641,6 +670,8 @@ class NerWorker(StageWorker):
                         "entities": all_entities,
                         "ml_colophon_sentences": ml_colophon_sentences,
                         "ml_genres": ml_genres,
+                        "catalog_references": catalog_refs,
+                        "provenance_inscriptions": prov_inscriptions,
                     }
                 )
                 self.progress.emit(int((idx + 1) / total * 100))
