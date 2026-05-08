@@ -3170,19 +3170,27 @@ class TestAuthorityEditor:
             flatten_authority_records,
         )
         rows = flatten_authority_records(_records)
-        # R1: 1 marc match + 1 entity (with viaf) + 1 KIMA place = 3
+        # R1: 1 marc match + 2 entities (matched + anon) + 1 KIMA place = 4
         # R2: 1 marc match = 1
-        assert len(rows) == 4, f"Expected 4 rows, got {len(rows)}: {rows}"
+        assert len(rows) == 5, f"Expected 5 rows, got {len(rows)}: {rows}"
         kinds = {r["_origin_kind"] for r in rows}
         assert kinds == {"marc", "entity", "kima"}
 
-    def test_flatten_skips_entities_without_authority_id(self, _qapp, _records) -> None:
+    def test_flatten_emits_unmatched_ner_entities(self, _qapp, _records) -> None:
+        """Every NER entity is shown — even those without VIAF/Mazal IDs.
+
+        The reviewer needs to see every Stage-2 candidate, including
+        ones that did not resolve to an authority, so they can edit /
+        approve / reject directly in the table.
+        """
         from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
             flatten_authority_records,
         )
         rows = flatten_authority_records(_records)
         anon_rows = [r for r in rows if r["entity_text"] == "anon"]
-        assert not anon_rows, "Anonymous entity without VIAF/Mazal should not appear"
+        assert len(anon_rows) == 1
+        assert anon_rows[0]["matched_name"] == "(no match found)"
+        assert anon_rows[0]["_auth_kind"] == "ner_unmatched"
 
     def test_unflatten_drops_unapproved(self, _qapp, _records) -> None:
         from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
@@ -3246,7 +3254,7 @@ class TestAuthorityEditor:
         rules = [{"field": "has_external_id", "op": "=", "value": "true"}]
         matched = [i for i, r in enumerate(editor._model._rows)
                    if evaluate_auth_rules(r, rules, "AND")]
-        # Every one of our 4 rows has a matched_id
+        # 5 rows total — 4 carry an authority ID (the anon NER row does not)
         assert len(matched) == 4
 
     def test_auto_approve_source_not_in(self, _qapp, _records) -> None:
@@ -3255,11 +3263,11 @@ class TestAuthorityEditor:
         )
         editor = AuthorityEditor()
         editor.load_records(_records, None)
-        rules = [{"field": "source", "op": "not in", "value": ["kima"]}]
+        rules = [{"field": "source", "op": "not in", "value": ["KIMA Place"]}]
         matched = [i for i, r in enumerate(editor._model._rows)
                    if evaluate_auth_rules(r, rules, "AND")]
-        # 4 rows - 1 KIMA = 3
-        assert len(matched) == 3
+        # 5 rows total - 1 KIMA = 4
+        assert len(matched) == 4
 
     def test_save_drops_unapproved_end_to_end(
         self, _qapp, _records, tmp_path: object,
@@ -3279,6 +3287,127 @@ class TestAuthorityEditor:
         assert total_matches == 1
         total_places = sum(len(r.get("kima_places", {})) for r in approved_records)
         assert total_places == 0, "Unapproved KIMA place was not dropped"
+
+    # ── Source-column origin labels + unmatched NER rows ────────────────
+
+    def test_unmatched_ner_entity_appears_in_table(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [],
+            "entities": [{
+                "text": "John Smith", "type": "OWNER",
+                "source": "provenance_ner", "confidence": 0.9,
+                "start": 0, "end": 10,
+            }],
+        }]
+        rows = flatten_authority_records(records)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["source"] == "NER Owner"
+        assert r["match_type"] == "owner"
+        assert r["matched_name"] == "(no match found)"
+
+    def test_marc_100_label_for_personal_main_entry(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [{
+                "name": "Maimonides", "field": "100/110/111", "type": "person",
+                "role": "author", "mazal_id": "987001", "confidence": "high",
+            }],
+        }]
+        rows = flatten_authority_records(records)
+        assert rows[0]["source"] == "MARC 100"
+
+    def test_marc_710_label_for_corporate_added_entry(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [{
+                "name": "The British Library", "field": "700/710/711",
+                "type": "organization", "entity_kind": "organization",
+                "wikidata_qid": "Q23308", "role": "holder", "confidence": "medium",
+            }],
+        }]
+        rows = flatten_authority_records(records)
+        assert rows[0]["source"] == "MARC 710"
+
+    def test_marc_711_label_for_meeting_added_entry(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [{
+                "name": "Some Conference", "field": "700/710/711",
+                "type": "meeting", "role": "", "confidence": "low",
+            }],
+        }]
+        rows = flatten_authority_records(records)
+        assert rows[0]["source"] == "MARC 711"
+
+    def test_ner_entity_with_authority_id_keeps_ner_source(self, _qapp) -> None:
+        """The Source column shows the row's ORIGIN (NER pipeline), not the
+        authority that resolved it. The authority info still flows through
+        matched_id and wikidata_qid for the user to inspect."""
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [],
+            "entities": [{
+                "person": "Maimonides", "role": "AUTHOR",
+                "source": "person_ner", "confidence": 0.85,
+                "mazal_id": "J9U_TEST", "start": 0, "end": 10,
+            }],
+        }]
+        rows = flatten_authority_records(records)
+        assert rows[0]["source"] == "NER Author"
+        assert rows[0]["matched_id"] == "J9U_TEST"
+
+    def test_kima_place_label(self, _qapp) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [],
+            "kima_places": {"Jerusalem": "https://www.wikidata.org/entity/Q1218"},
+        }]
+        rows = flatten_authority_records(records)
+        assert rows[0]["source"] == "KIMA Place"
+        assert rows[0]["wikidata_qid"] == "Q1218"
+
+    def test_unflatten_round_trips_unmatched_ner_entity(self, _qapp) -> None:
+        """Unmatched NER OWNER survives a load → unflatten → load cycle."""
+        from mhm_pipeline.gui.widgets.authority_editor import (  # noqa: PLC0415
+            flatten_authority_records, unflatten_rows_into_records,
+        )
+        records = [{
+            "_control_number": "X1",
+            "marc_authority_matches": [],
+            "entities": [{
+                "text": "John Smith", "type": "OWNER",
+                "source": "provenance_ner", "confidence": 0.9,
+                "start": 0, "end": 10,
+            }],
+        }]
+        rows = flatten_authority_records(records)
+        for r in rows:
+            r["approved"] = True
+        rebuilt = unflatten_rows_into_records(rows, records)
+        assert any(
+            e.get("text") == "John Smith" and e.get("type") == "OWNER"
+            for r in rebuilt for e in r.get("entities") or []
+        )
 
 
 # ── Wikidata Studio / QPEntityBrowser tests ─────────────────────────────

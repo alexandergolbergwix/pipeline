@@ -93,8 +93,26 @@ from mhm_pipeline.gui.widgets.extraction_editor import (
 
 logger = logging.getLogger(__name__)
 
-VALID_SOURCES: list[str] = ["mazal", "viaf", "kima", "ner_entity", "marc_field"]
-VALID_MATCH_TYPES: list[str] = ["person", "place", "work"]
+VALID_SOURCES: list[str] = [
+    "MARC 100", "MARC 110", "MARC 111",
+    "MARC 700", "MARC 710", "MARC 711",
+    "NER Author",
+    "NER Owner", "NER Date", "NER Collection",
+    "NER Work", "NER Folio", "NER Work Author",
+    "KIMA Place",
+]
+
+VALID_MATCH_TYPES: list[str] = [
+    "person",
+    "place",
+    "work",
+    "work_author",
+    "folio",
+    "owner",
+    "collection",
+    "date",
+]
+
 VALID_CONF_BANDS: list[str] = ["high", "medium", "low", "no_match"]
 
 
@@ -113,6 +131,66 @@ def _conf_band(conf: float | None) -> str:
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _origin_label(
+    *,
+    kind: str,
+    marc_field: str | None,
+    entity_type: str | None,
+    ner_source: str | None,
+) -> str:
+    """Human-readable origin label for the auth-match table's Source column.
+
+    Maps each row's origin (MARC catalog field or NER pipeline + type) to
+    one of the labels in :data:`VALID_SOURCES`.
+    """
+    if kind == "kima":
+        return "KIMA Place"
+    if kind == "marc":
+        # The worker emits ``field`` collapsed as "100/110/111" (main
+        # entries) or "700/710/711" (added entries). Combine that with
+        # the entry's type to disambiguate to a specific MARC field.
+        prefix = "MARC "
+        is_main = "100" in (marc_field or "")
+        et = (entity_type or "").lower()
+        if et == "organization":
+            return prefix + ("110" if is_main else "710")
+        if et == "meeting":
+            return prefix + ("111" if is_main else "711")
+        return prefix + ("100" if is_main else "700")
+    if kind == "ner":
+        if ner_source == "person_ner":
+            return "NER Author"
+        if ner_source == "provenance_ner":
+            t = (entity_type or "").upper()
+            if t == "OWNER":
+                return "NER Owner"
+            if t == "DATE":
+                return "NER Date"
+            if t == "COLLECTION":
+                return "NER Collection"
+        if ner_source == "contents_ner":
+            t = (entity_type or "").upper()
+            if t == "WORK":
+                return "NER Work"
+            if t == "FOLIO":
+                return "NER Folio"
+            if t == "WORK_AUTHOR":
+                return "NER Work Author"
+        return "NER Author" if ner_source == "person_ner" else "unknown"
+    return "unknown"
+
+
+# Map an NER entity's ``type`` field onto a row ``match_type`` value.
+_NER_TYPE_TO_MATCH_TYPE: dict[str, str] = {
+    "OWNER": "owner",
+    "DATE": "date",
+    "COLLECTION": "collection",
+    "WORK": "work",
+    "WORK_AUTHOR": "work_author",
+    "FOLIO": "folio",
+}
+
+
 def flatten_authority_records(records: list[dict]) -> list[dict]:
     """Flatten the three-shape authority JSON into flat match-rows.
 
@@ -124,11 +202,13 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
           "_control_number": "...",
           "_origin_kind": "marc" | "entity" | "kima",
           "_origin_index": int,   # position in the origin list
+          "_auth_kind": "mazal" | "viaf" | "kima" | "marc_field"
+                          | "ner_mazal" | "ner_viaf" | "ner_unmatched",
           "entity_text": str,
-          "match_type": "person" | "place" | "work",
+          "match_type": str,      # person / place / work / owner / date / …
           "role": str,
           "matched_name": str,
-          "source": str,          # mazal / viaf / kima / …
+          "source": str,          # human-readable origin label (see VALID_SOURCES)
           "matched_id": str,
           "wikidata_qid": str,    # Wikidata QID when known (KIMA URI / harvested)
           "confidence": float,
@@ -146,7 +226,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
         for i, m in enumerate(record.get("marc_authority_matches") or []):
             viaf = m.get("viaf_uri") or ""
             mazal = m.get("mazal_id") or ""
-            source = "mazal" if mazal else ("viaf" if viaf else "marc_field")
+            auth_kind = "mazal" if mazal else ("viaf" if viaf else "marc_field")
             # When neither Mazal nor VIAF resolved, the match was not
             # found — show "(no match found)" instead of echoing the
             # entity name (which previously made the row look like a
@@ -155,10 +235,17 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 matched_name = str(m.get("preferred_name_lat") or m.get("name") or "")
             else:
                 matched_name = "(no match found)"
+            source = _origin_label(
+                kind="marc",
+                marc_field=str(m.get("field") or ""),
+                entity_type=str(m.get("type") or m.get("entity_kind") or ""),
+                ner_source=None,
+            )
             out.append({
                 "_control_number": cn,
                 "_origin_kind": "marc",
                 "_origin_index": i,
+                "_auth_kind": auth_kind,
                 "entity_text": str(m.get("name") or ""),
                 "match_type": "person",
                 "role": str(m.get("role") or ""),
@@ -176,25 +263,57 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "approved": bool(m.get("approved", False)),
             })
 
-        # 2. NER entities enriched with authority IDs
+        # 2. NER entities — emit one row per entity, matched or not.
         for i, e in enumerate(record.get("entities") or []):
             viaf = e.get("viaf_uri") or ""
             mazal = e.get("mazal_id") or ""
-            if not viaf and not mazal:
-                continue
-            source = "mazal" if mazal else "viaf"
+            ner_source = e.get("source")
+            entity_type = e.get("type")
+            source_label = _origin_label(
+                kind="ner",
+                marc_field=None,
+                entity_type=entity_type,
+                ner_source=ner_source,
+            )
+            if mazal:
+                auth_kind = "ner_mazal"
+            elif viaf:
+                auth_kind = "ner_viaf"
+            else:
+                auth_kind = "ner_unmatched"
+
+            # match_type derives from the entity's NER type (with a
+            # person_ner default of "person" when no type field is set).
+            t_norm = (entity_type or "").upper()
+            if t_norm in _NER_TYPE_TO_MATCH_TYPE:
+                match_type = _NER_TYPE_TO_MATCH_TYPE[t_norm]
+            elif entity_type:
+                match_type = str(entity_type).lower()
+            else:
+                match_type = "person"
+
+            if mazal or viaf:
+                matched_name = str(e.get("preferred_name_lat") or "")
+            else:
+                matched_name = "(no match found)"
+
+            confidence_value = e.get("model_confidence")
+            if confidence_value is None:
+                confidence_value = e.get("confidence")
+
             out.append({
                 "_control_number": cn,
                 "_origin_kind": "entity",
                 "_origin_index": i,
+                "_auth_kind": auth_kind,
                 "entity_text": str(e.get("person") or e.get("text") or ""),
-                "match_type": "person",
+                "match_type": match_type,
                 "role": str(e.get("role") or ""),
-                "matched_name": "",
-                "source": source,
-                "matched_id": str(mazal or viaf),
+                "matched_name": matched_name,
+                "source": source_label,
+                "matched_id": str(mazal or viaf or ""),
                 "wikidata_qid": str(e.get("wikidata_qid") or ""),
-                "confidence": _coerce_confidence(e.get("confidence")),
+                "confidence": _coerce_confidence(confidence_value),
                 "dates": "",
                 "gnd_id": "", "lc_id": "", "isni": "", "bnf_id": "",
                 "field_origin": "ner",
@@ -215,11 +334,12 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                     "_control_number": cn,
                     "_origin_kind": "kima",
                     "_origin_index": i,
+                    "_auth_kind": "kima",
                     "entity_text": str(name),
                     "match_type": "place",
                     "role": "",
                     "matched_name": "",
-                    "source": "kima",
+                    "source": "KIMA Place",
                     "matched_id": str(uri),
                     "wikidata_qid": qid,
                     "confidence": 1.0,          # KIMA is a direct-index lookup
@@ -263,14 +383,15 @@ def unflatten_rows_into_records(
         if rec is None:
             continue
         kind = row.get("_origin_kind")
+        auth_kind = str(row.get("_auth_kind") or "")
         if kind == "marc":
             marc_match: dict[str, Any] = {
                 "name": row.get("entity_text", ""),
                 "role": row.get("role", ""),
                 "field": row.get("field_origin", ""),
                 "confidence": row.get("confidence", 0.0),
-                "mazal_id": row.get("matched_id", "") if row.get("source") == "mazal" else "",
-                "viaf_uri": row.get("matched_id", "") if row.get("source") == "viaf" else "",
+                "mazal_id": row.get("matched_id", "") if auth_kind == "mazal" else "",
+                "viaf_uri": row.get("matched_id", "") if auth_kind == "viaf" else "",
                 "preferred_name_lat": row.get("matched_name", ""),
                 "dates": row.get("dates", ""),
                 "gnd_id": row.get("gnd_id", ""),
@@ -287,10 +408,12 @@ def unflatten_rows_into_records(
             entities = rec.get("entities") or []
             if 0 <= idx < len(entities):
                 e = entities[idx]
-                if row.get("source") == "mazal":
+                if auth_kind == "ner_mazal":
                     e["mazal_id"] = row.get("matched_id", "")
-                else:
+                elif auth_kind == "ner_viaf":
                     e["viaf_uri"] = row.get("matched_id", "")
+                # Unmatched NER entities (auth_kind == "ner_unmatched")
+                # round-trip back to ``record["entities"]`` unchanged.
                 if row.get("wikidata_qid"):
                     e["wikidata_qid"] = row["wikidata_qid"]
                 e["authority_approved"] = True
@@ -1129,18 +1252,28 @@ class AuthorityEditor(QWidget):
                 marc_record = r
                 break
 
-        source = str(row.get("source", ""))
+        auth_kind = str(row.get("_auth_kind") or "")
+        # The biodata fetcher routes by a short authority key — collapse
+        # the two NER variants onto their underlying authority.
+        if auth_kind == "ner_mazal":
+            fetch_source = "mazal"
+        elif auth_kind == "ner_viaf":
+            fetch_source = "viaf"
+        elif auth_kind in {"mazal", "viaf", "kima"}:
+            fetch_source = auth_kind
+        else:
+            fetch_source = ""
         auth_id = str(row.get("matched_id", ""))
-        if source == "viaf" and "/" in auth_id:
+        if fetch_source == "viaf" and "/" in auth_id:
             auth_id = auth_id.rstrip("/").split("/")[-1]
 
         marc_bio = extract_marc_biodata(marc_record, row=row)
         initial = BioComparison(
-            marc=marc_bio, authority=BioData(), source=source,
+            marc=marc_bio, authority=BioData(), source=fetch_source,
         )
         dlg.load_row(row, comparison=initial)
 
-        if source in ("marc_field", "") or not auth_id:
+        if not fetch_source or not auth_id:
             # No async work — keep the dialog synchronous
             dlg._progress.setVisible(False)  # type: ignore[attr-defined]
             return
@@ -1150,7 +1283,7 @@ class AuthorityEditor(QWidget):
         kima_fetcher = self._make_kima_fetcher()
 
         signals = fetch_biodata_async(
-            source=source, auth_id=auth_id, marc_record=marc_record,
+            source=fetch_source, auth_id=auth_id, marc_record=marc_record,
             viaf_fetcher=viaf_fetcher,
             mazal_fetcher=mazal_fetcher,
             kima_fetcher=kima_fetcher,
@@ -1217,9 +1350,19 @@ class AuthorityEditor(QWidget):
             if str(r.get("_control_number", "")) == cn:
                 marc_record = r
                 break
+        next_auth_kind = str(next_row.get("_auth_kind") or "")
+        if next_auth_kind == "ner_mazal":
+            next_fetch_source = "mazal"
+        elif next_auth_kind == "ner_viaf":
+            next_fetch_source = "viaf"
+        elif next_auth_kind in {"mazal", "viaf", "kima"}:
+            next_fetch_source = next_auth_kind
+        else:
+            next_fetch_source = ""
+
         marc_bio = extract_marc_biodata(marc_record, row=next_row)
         initial = BioComparison(
-            marc=marc_bio, authority=BioData(), source=str(next_row.get("source", "")),
+            marc=marc_bio, authority=BioData(), source=next_fetch_source,
         )
 
         # Kick off the async fetch so that by the time the dialog's
@@ -1241,8 +1384,7 @@ class AuthorityEditor(QWidget):
         return {
             "row": next_row,
             "comparison": initial,
-            "show_progress": str(next_row.get("source", ""))
-                not in ("marc_field", "")
+            "show_progress": bool(next_fetch_source)
                 and bool(next_row.get("matched_id")),
         }
 

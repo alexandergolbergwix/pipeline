@@ -4917,9 +4917,12 @@ class TestAuthorityEditorNoMatchDisplay:
         rows = flatten_authority_records(records)
         assert len(rows) == 1
         assert rows[0]["entity_text"] == "Cohen, Daniel J."
+        # Without a ``field`` value the helper defaults to the added-entry
+        # label (700-series). The user-visible source string carries the
+        # row's MARC origin, not the authority service.
         assert rows[0]["matched_name"] == "(no match found)"
         assert rows[0]["matched_id"] == ""
-        assert rows[0]["source"] == "marc_field"
+        assert rows[0]["source"] == "MARC 700"
 
     def test_matched_marc_row_shows_preferred_name(self) -> None:
         from mhm_pipeline.gui.widgets.authority_editor import (
@@ -4943,7 +4946,8 @@ class TestAuthorityEditorNoMatchDisplay:
         rows = flatten_authority_records(records)
         assert rows[0]["matched_name"] == "Maimonides, Moses"
         assert rows[0]["matched_id"] == "987007388484005171"
-        assert rows[0]["source"] == "mazal"
+        # No ``field`` set → helper defaults to the added-entry label.
+        assert rows[0]["source"] == "MARC 700"
 
     def test_unmatched_with_only_name_no_lat(self) -> None:
         """Edge case: ``preferred_name_lat`` field present but empty,
@@ -5040,7 +5044,7 @@ class TestAuthorityEditorWikidataColumn:
         ]
         rows = flatten_authority_records(records)
         assert len(rows) == 1
-        assert rows[0]["source"] == "kima"
+        assert rows[0]["source"] == "KIMA Place"
         assert rows[0]["wikidata_qid"] == "Q1218"
         # The full URI is still preserved in matched_id for backward compat.
         assert rows[0]["matched_id"] == "https://www.wikidata.org/entity/Q1218"
@@ -6472,6 +6476,78 @@ class TestEditorModelConfidenceColumn:
         }])
         idx = m.index(0, MODEL_CONF)
         assert not (m.flags(idx) & Qt.ItemFlag.ItemIsEditable)
+
+
+class TestAuthorityTableFullPicture:
+    """The auth-match table's Source column shows the row's field /
+    pipeline of origin (``"MARC 100"`` / ``"NER Owner"`` / ``"KIMA Place"``)
+    so the user can tell at a glance where each row came from. The
+    constants below back the filter-chip dropdown and the auto-approve
+    dialog's field-options.
+    """
+
+    def test_VALID_SOURCES_includes_marc_field_labels(self) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import VALID_SOURCES
+        for label in (
+            "MARC 100", "MARC 110", "MARC 111",
+            "MARC 700", "MARC 710", "MARC 711",
+        ):
+            assert label in VALID_SOURCES, f"{label} missing from VALID_SOURCES"
+
+    def test_VALID_SOURCES_includes_ner_pipeline_labels(self) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import VALID_SOURCES
+        for label in (
+            "NER Author", "NER Owner", "NER Date", "NER Collection",
+            "NER Work", "NER Folio", "NER Work Author",
+        ):
+            assert label in VALID_SOURCES, f"{label} missing from VALID_SOURCES"
+
+    def test_VALID_SOURCES_includes_kima_place(self) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import VALID_SOURCES
+        assert "KIMA Place" in VALID_SOURCES
+
+    def test_VALID_MATCH_TYPES_includes_owner_date_collection_folio(self) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import VALID_MATCH_TYPES
+        for t in ("owner", "date", "collection", "folio", "work_author"):
+            assert t in VALID_MATCH_TYPES, f"{t} missing from VALID_MATCH_TYPES"
+        for t in ("person", "place", "work"):
+            assert t in VALID_MATCH_TYPES
+
+    def test_VALID_SOURCES_no_duplicate_values(self) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import VALID_SOURCES
+        assert len(VALID_SOURCES) == len(set(VALID_SOURCES)), (
+            f"Duplicates in VALID_SOURCES: {VALID_SOURCES}"
+        )
+
+    def test_VALID_MATCH_TYPES_no_duplicate_values(self) -> None:
+        from mhm_pipeline.gui.widgets.authority_editor import VALID_MATCH_TYPES
+        assert len(VALID_MATCH_TYPES) == len(set(VALID_MATCH_TYPES))
+
+    def test_auto_approve_field_options_use_valid_sources(self) -> None:
+        """The auto-approve dialog's field-options dict reads from
+        ``VALID_SOURCES`` / ``VALID_MATCH_TYPES`` so a constant change
+        propagates without a literal duplication."""
+        from mhm_pipeline.gui.widgets.authority_editor import (
+            VALID_SOURCES, VALID_MATCH_TYPES, _AUTH_FIELD_OPTIONS,
+        )
+        assert list(_AUTH_FIELD_OPTIONS.get("source") or ()) == list(VALID_SOURCES)
+        assert list(_AUTH_FIELD_OPTIONS.get("match_type") or ()) == list(VALID_MATCH_TYPES)
+
+    def test_filter_combo_lists_every_VALID_SOURCE(self) -> None:
+        """Static check: the source-filter combo is populated by
+        iterating VALID_SOURCES, not from a hardcoded literal."""
+        src = pathlib.Path(
+            "src/mhm_pipeline/gui/widgets/authority_editor.py"
+        ).read_text(encoding="utf-8")
+        assert "VALID_SOURCES" in src
+        assert (
+            "addItems(VALID_SOURCES)" in src
+            or "for src_name in VALID_SOURCES" in src
+            or "for s in VALID_SOURCES" in src
+        ), (
+            "The source-filter combo must be populated from "
+            "VALID_SOURCES, not a hardcoded list."
+        )
 
 
 if __name__ == "__main__":
