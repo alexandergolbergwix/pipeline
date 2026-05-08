@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import platformdirs
@@ -34,3 +35,17 @@ def ensure_app_dirs() -> None:
     """Create all application directories if they do not exist."""
     for d in (app_data_dir(), app_config_dir(), app_log_dir(), app_cache_dir()):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def bundled_resource_root() -> Path:
+    """Return the base directory containing bundled assets (models, DBs, ontologies).
+
+    When frozen by PyInstaller (one-folder mode), returns sys._MEIPASS — the
+    extraction directory. In development, returns the repo root (3 parents up
+    from this file: src/mhm_pipeline/platform_/paths.py -> repo root).
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+    return Path(__file__).resolve().parents[3]

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +46,55 @@ def _configure_logging(log_level: str) -> None:
     )
 
 
+def _set_macos_process_name() -> None:
+    """Set the app process name in the macOS menu bar when available."""
+    if sys.platform != "darwin":
+        return
+
+    try:
+        import ctypes  # noqa: PLC0415
+
+        libc = ctypes.cdll.LoadLibrary("libc.dylib")
+        libc.setprogname(b"MHM Pipeline")
+    except Exception:
+        pass
+
+
+def _auto_complete_first_run_if_bundled(settings: SettingsManager) -> None:
+    """Skip the first-run wizard if the app is frozen by PyInstaller and all
+    bundled models are present at the expected paths. Sets HF offline env vars
+    so transformers / huggingface_hub never try to fetch from the network.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if settings.first_run_done:
+        return
+    from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+
+    root = bundled_resource_root()
+    required = [
+        root / "converter" / "authority" / "mazal_index.db",
+        root / "data" / "kima" / "kima_index.db",
+        root / "ner" / "provenance_ner_model.pt",
+        root / "ner" / "contents_ner_model.pt",
+        root / "models" / "hebrew-manuscript-joint-ner-v2",
+        root / "models" / "dictabert",
+    ]
+    if all(p.exists() for p in required):
+        settings.first_run_done = True
+        os.environ["HF_HOME"] = str(root / "models")
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "1"
+
+
+def _append_crash_log(traceback_text: str) -> None:
+    """Write fallback crash information to the platform log directory."""
+    crash_path = app_log_dir() / "crash.log"
+    crash_path.parent.mkdir(parents=True, exist_ok=True)
+    with crash_path.open("a", encoding="utf-8") as crash_file:
+        crash_file.write(f"\n--- {datetime.datetime.now()} ---\n{traceback_text}")
+
+
 def main() -> None:
     """Launch the MHM Pipeline desktop application."""
     ensure_app_dirs()
@@ -55,13 +106,7 @@ def main() -> None:
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
     # Set process name for macOS menu bar (shows "MHM Pipeline" instead of "Python")
-    try:
-        import ctypes  # noqa: PLC0415
-
-        libc = ctypes.cdll.LoadLibrary("libc.dylib")
-        libc.setprogname(b"MHM Pipeline")
-    except Exception:
-        pass
+    _set_macos_process_name()
 
     app = QApplication(sys.argv)
     app.setApplicationName("MHM Pipeline")
@@ -70,6 +115,7 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(_ICON_PATH)))
 
     settings = SettingsManager()
+    _auto_complete_first_run_if_bundled(settings)
     _configure_logging(settings.log_level)
 
     if not settings.first_run_done:
@@ -107,14 +153,7 @@ if __name__ == "__main__":
             pass
         # Also write to a plain crash file so it's visible even without logging
         try:
-            from pathlib import Path as _Path  # noqa: PLC0415
-
-            _crash = _Path.home() / "Library" / "Logs" / "MHMPipeline" / "crash.log"
-            _crash.parent.mkdir(parents=True, exist_ok=True)
-            with open(_crash, "a") as _f:
-                import datetime  # noqa: PLC0415
-
-                _f.write(f"\n--- {datetime.datetime.now()} ---\n{_tb}")
+            _append_crash_log(_tb)
         except Exception:
             pass
         raise

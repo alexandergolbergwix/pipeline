@@ -114,8 +114,8 @@ Three requirements drive every decision in this document:
 
 \begin{description}[style=nextline, leftmargin=3cm]
 \item[GUI framework] \textbf{PyQt6} --- already adopted in \filepath{converter/gui/main\_window.py}, GPL-compatible, richest widget set for pipeline UIs, Apple Silicon arm64 wheels available on PyPI.
-\item[Distribution] \textbf{uv bootstrap + native OS installers} --- the installer ships a small launcher ($<$20\,MB) that invokes a \code{uv}-based bootstrap script to install Python~3.12 and all dependencies into an isolated virtual environment. Five ML models are bundled in the \code{.app}/\code{.dmg}: Person NER ($\approx$2.2\,GB, HuggingFace snapshot), Provenance NER ($\approx$704\,MB), Contents NER ($\approx$704\,MB), MARC~500 Colophon~ML sentence classifier ($\approx$703\,MB), and Genre~ML classifier ($\approx$703\,MB, used by Stage~3 for P136 fallback). On first launch any missing weights fall through to a PyQt6 wizard using \code{huggingface\_hub}. The macOS \code{.app} bundle is $\approx$16\,GB uncompressed; the compressed DMG is $\approx$11\,GB.
-\item[Build toolchain] \textbf{pkgbuild / productbuild} (macOS, included in Xcode Command Line Tools) and \textbf{Inno Setup 6} (Windows, free). Both are invoked automatically by a GitHub Actions release workflow triggered on version tags.
+\item[Distribution] \textbf{Hybrid packaging by platform} --- macOS uses a native app bundle / DMG workflow, while Windows uses a fully offline PyInstaller one-folder build wrapped by Inno Setup into a single \code{.exe}. Five ML models are bundled with the installed application on both platforms: Person NER ($\approx$2.2\,GB, HuggingFace snapshot), Provenance NER ($\approx$704\,MB), Contents NER ($\approx$704\,MB), MARC~500 Colophon~ML sentence classifier ($\approx$703\,MB), and Genre~ML classifier ($\approx$703\,MB, used by Stage~3 for P136 fallback). The Windows source bundle used to prepare the offline installer is $\approx$6\,GB compressed and expands to $\approx$9.5\,GB before Inno Setup compression; the resulting \code{MHMPipeline-Setup-0.1.0.exe} is $\approx$4--5\,GB.
+\item[Build toolchain] \textbf{pkgbuild / productbuild} (macOS, included in Xcode Command Line Tools) and \textbf{PyInstaller + Inno Setup 6} (Windows, free). The Windows build is executed on a Windows host via \filepath{installer/windows/Build Installer.bat}; the Mac host prepares a transport bundle via \filepath{scripts/package\_for\_windows\_build.sh}.
 \item[Project config] A single \code{pyproject.toml} at the repository root replaces all per-module \code{requirements.txt} files and centralises \code{ruff}, \code{mypy}, and \code{pytest} configuration.
 \end{description}
 
@@ -214,15 +214,19 @@ Docker & \yes & \yes & 1\,GB image & No MPS & \no{} Rejected \\
 \hline
 conda / constructor & \yes & \yes & 3--4\,GB & Full & Alternative \\
 \hline
-\textbf{uv + native pkg} & \textbf{\yes} & \textbf{\yes} & \textbf{$<$20\,MB} & \textbf{Full} & \textbf{Selected} \\
+\textbf{Hybrid: app bundle + PyInstaller} & \textbf{\yes} & \textbf{\yes} & \textbf{4--5\,GB Windows installer} & \textbf{Full} & \textbf{Selected} \\
 \hline
 \end{longtable}
 
-\paragraph{Why PyInstaller is ruled out.} PyInstaller bundles a frozen copy of every imported module. With PyTorch 2.x and CUDA libraries this produces a 4--8\,GB directory that: (a) exhibits a severe startup regression on macOS ARM (PyInstaller issue \#8211, January 2024); (b) cannot produce a universal2 binary because PyTorch does not ship universal2 wheels; and (c) duplicates CUDA shared libraries unpredictably, causing runtime symbol errors on Windows. These are not configuration problems --- they are fundamental limitations of the freeze-everything approach at this dependency scale.
+\paragraph{Why pure PyInstaller is ruled out on macOS.} PyInstaller bundles a frozen copy of every imported module. With PyTorch 2.x and Apple-Silicon-specific dependencies this produces a very large directory and exhibits severe startup regressions on macOS ARM; it also cannot produce a universal2 binary because PyTorch does not ship universal2 wheels. These are fundamental limitations of the freeze-everything approach at this dependency scale. On Windows, where a single offline installer is the overriding requirement, the project accepts the large footprint and uses PyInstaller in one-folder mode, wrapped by Inno Setup.
 
-\subsection{Selected Strategy: uv Bootstrap + Native OS Installers}
+\subsection{Selected Strategy: Platform-Specific Packaging}
 
-The installer contains only: a \code{uv} binary ($\approx$15\,MB), the project source tree, and a bootstrap script. At install time the script uses \code{uv} to download Python~3.12 and install all Python dependencies into an isolated prefix. ML models are downloaded separately on first launch. This pattern is used by ComfyUI, AUTOMATIC1111, and TransformerLab --- the established ML desktop application ecosystem.
+The project now uses a split strategy because the user-facing constraints differ by platform.
+
+\paragraph{macOS.} The macOS path remains bundle-oriented: a native application bundle / DMG layout carries the Python environment, bundled models, and launcher metadata. When the app is launched from a developer checkout or from a lightweight bootstrap layout, the first-run PyQt6 wizard can still download missing model weights into the HuggingFace cache.
+
+\paragraph{Windows.} The supported Windows distribution path is a fully offline installer. A macOS development host stages the repository, local databases, ontology files, model checkpoints, and HuggingFace snapshots into \filepath{dist/mhm-pipeline-source.zip} using \filepath{scripts/package\_for\_windows\_build.sh}. On a Windows host, \filepath{installer/windows/Build Installer.bat} creates a Python~3.12 build virtual environment, installs PyInstaller, freezes the application into \filepath{dist/MHMPipeline/}, and invokes Inno Setup to create \filepath{dist/MHMPipeline-Setup-0.1.0.exe}. The supervisor who receives that \code{.exe} does not need Python, \code{pip}, \code{uv}, or internet access at install time.
 
 \begin{figure}[H]
 \centering
@@ -251,9 +255,9 @@ The installer contains only: a \code{uv} binary ($\approx$15\,MB), the project s
 \node[box] (win1) at (6.5,-1.0) {GitHub Release\\MHMPipeline-Setup.exe};
 \node[box] (win2) at (6.5,-2.4) {Double-click .exe\\Inno Setup wizard};
 \node[box] (win3) at (6.5,-3.8) {Accept licence\\choose install dir};
-\node[boldbox] (win4) at (6.5,-5.2) {Inno runs install.ps1\\PowerShell bootstrap};
-\node[box] (win5) at (6.5,-6.6) {uv python install 3.12\\uv sync};
-\node[box] (win6) at (6.5,-8.0) {Write MHMPipeline.exe\\to Program Files};
+\node[boldbox] (win4) at (6.5,-5.2) {Extract bundled\\PyInstaller payload};
+\node[box] (win5) at (6.5,-6.6) {Copy MHMPipeline.exe\\+\_internal models/data};
+\node[box] (win6) at (6.5,-8.0) {Write Start Menu +\\desktop shortcuts};
 \node[boldbox, fill=green!10] (win7) at (6.5,-9.4) {Launch MHMPipeline.exe};
 
 %% arrows macOS
@@ -275,12 +279,12 @@ The installer contains only: a \code{uv} binary ($\approx$15\,MB), the project s
 %% shared note
 \node[draw, dashed, rounded corners, fill=yellow!8, font=\scriptsize, align=center,
       minimum width=4cm] (note) at (3.25,-11.0)
-  {First launch: model download wizard\\(see Section~\ref{sec:wizard})};
+  {Developer / lightweight install: model wizard\\Offline packaged install: bundled models already present};
 \draw[arrow, dashed] (mac7) -- (note);
 \draw[arrow, dashed] (win7) -- (note);
 
 \end{tikzpicture}
-\caption{Installation flow for macOS (left) and Windows (right). Bold/blue boxes are the bootstrap steps that invoke \code{uv}.}
+\caption{Installation flow for macOS (left) and Windows (right). The macOS path may bootstrap dependencies; the Windows path ships a fully bundled offline payload.}
 \label{fig:install-flow}
 \end{figure}
 
@@ -318,31 +322,24 @@ chmod +x /Applications/MHMPipeline.app/Contents/MacOS/mhm_pipeline
 echo "MHM Pipeline installed successfully."
 \end{lstlisting}
 
-\begin{lstlisting}[language=bash, caption={install.ps1 --- Windows bootstrap (invoked by Inno Setup)}]
-$ErrorActionPreference = "Stop"
-$AppDir = "$env:ProgramFiles\MHMPipeline"
-$UvBin  = "$AppDir\bin\uv.exe"
+\begin{lstlisting}[language=bash, caption={installer/windows/Build Installer.bat --- one-click offline Windows build}]
+@echo off
+setlocal
+cd /d "%~dp0\..\.."
 
-# Install uv
-if (-not (Test-Path $UvBin)) {
-    $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest `
-      -Uri "https://astral.sh/uv/install.ps1" `
-      -OutFile "$env:TEMP\uv_install.ps1"
-    & "$env:TEMP\uv_install.ps1" -InstallDir "$AppDir\bin"
-}
+echo [1/4] Creating Python 3.12 build venv...
+py -3.12 -m venv .venv-build
+call .venv-build\Scripts\activate.bat
 
-# Install Python 3.12 + dependencies
-Set-Location $AppDir
-& $UvBin python install 3.12
-& $UvBin sync --frozen --no-dev
+echo [2/4] Installing PyInstaller and project dependencies...
+python -m pip install --quiet pyinstaller
+python -m pip install --quiet -e .
 
-# Write launcher batch file
-$launcher = "@echo off`r`n" +
-            "`"$AppDir\bin\python.exe`" -m mhm_pipeline.app %*`r`n"
-Set-Content "$AppDir\MHMPipeline.bat" $launcher
+echo [3/4] Running PyInstaller...
+pyinstaller installer\windows\MHMPipeline.spec --noconfirm
 
-Write-Host "MHM Pipeline installed successfully."
+echo [4/4] Running Inno Setup compiler...
+"%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer\windows\build_installer.iss
 \end{lstlisting}
 
 \subsection{First-Run Model Download Wizard}
@@ -521,8 +518,11 @@ mhm-pipeline/
 |   |   |-- launcher.m         # Obj-C launcher, sets NER model env vars
 |   |   `-- MHMPipeline.pkgproj
 |   `-- windows/
-|       |-- build_installer.iss  # Inno Setup script
-|       `-- install.ps1
+|       |-- Build Installer.bat  # one-click Windows build entry point
+|       |-- MHMPipeline.spec     # PyInstaller one-folder spec
+|       |-- build_installer.iss  # Inno Setup wrapper for dist/MHMPipeline/
+|       |-- LICENSE.rtf
+|       `-- README.md
 |-- tests/
 |   |-- unit/
 |   `-- integration/
@@ -963,7 +963,7 @@ Temp dir & \code{/tmp} & \code{\%TEMP\%} & \code{tempfile.mkdtemp()} \\
 \hline
 GPU acceleration & Apple MPS (\code{torch.backends.mps}) & NVIDIA CUDA (\code{torch.cuda}) & \code{gpu.py} cascade \\
 \hline
-Launcher & \code{.app} bundle + Objective-C \code{launcher.m} & \code{.exe} + \code{.bat} & Installer-generated; macOS launcher sets \code{MHM\_BUNDLED\_NER\_MODEL}, \code{MHM\_BUNDLED\_PROVENANCE\_MODEL}, \code{MHM\_BUNDLED\_CONTENTS\_MODEL} env vars \\
+Launcher & \code{.app} bundle + Objective-C \code{launcher.m} & PyInstaller-generated \code{MHMPipeline.exe} wrapped by Inno Setup & Installer-generated; the frozen Windows app auto-detects bundled models and suppresses the first-run wizard \\
 \hline
 Hebrew RTL text & Cocoa native & Uniscribe native & Qt handles both \\
 \hline
@@ -1115,35 +1115,7 @@ jobs:
 
 \subsection{Release Workflow}
 
-\begin{lstlisting}[language=bash, caption={.github/workflows/release.yml --- build installers on version tag}]
-name: Release
-on:
-  push:
-    tags: ["v*.*.*"]
-
-jobs:
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-      - run: uv sync --frozen
-      - run: bash installer/macos/build_pkg.sh
-      - uses: actions/upload-release-asset@v1
-        with:
-          asset_path: dist/MHMPipeline.dmg
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-      - run: uv sync --frozen
-      - run: iscc installer/windows/build_installer.iss
-      - uses: actions/upload-release-asset@v1
-        with:
-          asset_path: dist/MHMPipeline-Setup.exe
-\end{lstlisting}
+The macOS installer can be built directly from the repository checkout on a macOS host. The offline Windows installer is a two-host workflow: a macOS development machine prepares \filepath{dist/mhm-pipeline-source.zip} via \filepath{scripts/package\_for\_windows\_build.sh}, then a Windows host runs \filepath{installer/windows/Build Installer.bat} to execute PyInstaller and Inno Setup locally. The Windows artifact path is \filepath{dist/MHMPipeline-Setup-0.1.0.exe}. The operator-facing instructions are documented in \filepath{installer/windows/README.md}.
 
 \subsection{Branch and PR Conventions}
 
@@ -1441,9 +1413,9 @@ v0.2 & Full GUI & PyQt6 \code{MainWindow} with all six stage panels; \code{Stage
 \hline
 v0.3 & macOS installer & \code{.pkg} + \code{.dmg}; first-run model wizard; MPS GPU support verified & Q3 2026 \\
 \hline
-v0.4 & Windows installer & Inno Setup \code{.exe}; CUDA GPU support verified; PowerShell bootstrap & Q3 2026 \\
+v0.4 & Windows installer & Offline Inno Setup \code{.exe} wrapping a PyInstaller one-folder build; all models bundled; no install-time internet dependency & Q3 2026 \\
 \hline
-v0.5 & Release pipeline & GitHub Actions auto-build on tag; both installers uploaded to GitHub Release & Q3 2026 \\
+v0.5 & Release pipeline & macOS release automation plus documented Windows offline build workflow (source bundle + Windows host packaging) & Q3 2026 \\
 \hline
 v1.0 & Public release & Documentation site; \code{CONTRIBUTING.md}; all stages integrated end-to-end & Q4 2026 \\
 \hline
@@ -1486,4 +1458,3 @@ This document is a living specification. It must be kept in sync with the implem
 The PR checklist in \filepath{.github/pull\_request\_template.md} includes a checkbox: ``\emph{Design documents updated if architecture changed}.''
 
 \end{document}
-
