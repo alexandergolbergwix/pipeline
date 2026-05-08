@@ -262,6 +262,17 @@ _SOURCE_FILENAME_RE = re.compile(
     r"^[A-Za-z0-9_\-]+\.(mrc|txt|csv|xml|json)$", re.IGNORECASE
 )
 
+# Hebrew Unicode block (U+0590..U+05FF). A title like "Bible" or "Diodati
+# Segre" has no characters in this range and must NOT land in the `he`
+# label slot — that triggers HE_LABEL_IS_LATIN in item_validator.py
+# (see Kolja21 community report on Q139231608).
+_HEBREW_SCRIPT_RE = re.compile(r"[\u0590-\u05ff]")
+
+
+def _has_hebrew_script(text: str | None) -> bool:
+    """True iff `text` contains at least one Hebrew-block code point."""
+    return bool(text) and bool(_HEBREW_SCRIPT_RE.search(text))
+
 # ── Genre classifier lazy singleton ─────────────────────────────────
 # Loaded on first use; None when model file is absent (graceful degradation).
 _GENRE_CLASSIFIER: object | None = "unloaded"
@@ -1199,9 +1210,21 @@ class WikidataItemBuilder:
         """
         is_placeholder = _is_placeholder_title(title)
         shelfmark = record.get("shelfmark")
-        if title and not is_placeholder:
-            item.labels["he"] = title.rstrip(". ")
-            item.labels["en"] = title.rstrip(". ")
+        title_clean = title.rstrip(". ") if title else ""
+        title_has_hebrew = _has_hebrew_script(title_clean)
+        if title_clean and not is_placeholder:
+            # Latin-only titles (e.g. "Meir Netiv in Latin", "Referat über
+            # den XI Zionistischen Kongress in Basel") must NOT go into the
+            # he-label slot — the validator flags that as HE_LABEL_IS_LATIN.
+            # Route them to the en slot only and keep them as an en-alias for
+            # searchability (the en label may later be overwritten by the
+            # shelfmark-based form).
+            if title_has_hebrew:
+                item.labels["he"] = title_clean
+                item.labels["en"] = title_clean
+            else:
+                item.labels["en"] = title_clean
+                item.aliases.setdefault("en", []).append(title_clean)
         elif title:
             # Placeholder: keep the original cataloger string as a Hebrew
             # alias for searchability, but do NOT use it as the label.
@@ -1209,11 +1232,11 @@ class WikidataItemBuilder:
 
         if shelfmark:
             item.labels["en"] = f"Jerusalem, NLI, {shelfmark}"
-            if title and not is_placeholder:
-                item.aliases.setdefault("he", []).append(title)
-            # When the title was a placeholder AND we have a shelfmark,
-            # synthesise a useful Hebrew label from the shelfmark.
-            if is_placeholder and "he" not in item.labels:
+            if title_clean and not is_placeholder and title_has_hebrew:
+                item.aliases.setdefault("he", []).append(title_clean)
+            # When the title was a placeholder OR Latin-only AND we have a
+            # shelfmark, synthesise a useful Hebrew label from the shelfmark.
+            if "he" not in item.labels and (is_placeholder or not title_has_hebrew):
                 item.labels["he"] = f"כתב יד עברי, ספרייה לאומית, {shelfmark}"
 
         # Variant titles as aliases
@@ -1797,8 +1820,10 @@ class WikidataItemBuilder:
 
         person = WikidataItem(entity_type="person", local_id=key)
 
-        # Clean name: strip surrounding quotes and trailing punctuation from MARC
-        clean_name = name.strip().strip('"\'').strip().rstrip(",;:")
+        # Clean name: strip surrounding quotes and trailing MARC ISBD punctuation.
+        # The full set ",;:." matches the validator's TRAILING_PUNCTUATION rule —
+        # missing the period here let "בחיי בן יוסף אבן פקודה." through unfiltered.
+        clean_name = name.strip().strip('"\'').strip().rstrip(",;:.")
         if not clean_name or len(clean_name) < 2:
             # Stub, but do NOT add to _person_items — see _skipped_person_keys
             self._skipped_person_keys.add(key)
@@ -2216,16 +2241,22 @@ class WikidataItemBuilder:
         work = WikidataItem(entity_type="work", local_id=key)
         if existing_qid:
             work.existing_qid = existing_qid
-        work.labels["he"] = title
-        # Fix 2026-04-15 third audit Fix #6: work items had only a Hebrew label,
-        # making them invisible to non-Hebrew-reading patrollers. Add an English
-        # label: use the title verbatim if it is Latin-script, otherwise generate
-        # a shelfmark-based fallback that is always unique and searchable.
+        # Latin-only work titles (e.g. "Bible", "Diodati Segre") must NOT
+        # land in the he-label slot — validator rule HE_LABEL_IS_LATIN.
+        # Route them to en only and store as a he-alias for searchability.
         shelfmark_for_work = str(source_record.get("shelfmark") or "")
-        if title and all(ord(c) < 256 for c in title if c.isalpha()):
+        if _has_hebrew_script(title):
+            work.labels["he"] = title
+            if title and all(ord(c) < 256 for c in title if c.isalpha()):
+                work.labels["en"] = title
+            elif shelfmark_for_work:
+                work.labels["en"] = f"work from Hebrew manuscript {shelfmark_for_work}"
+        else:
+            # Latin-only title (e.g. "Bible", "Diodati Segre"): route to the en
+            # slot only — never any he slot (label OR alias). Putting Latin text
+            # in any he-tagged slot was the original Kolja21/Geagea complaint.
             work.labels["en"] = title
-        elif shelfmark_for_work:
-            work.labels["en"] = f"work from Hebrew manuscript {shelfmark_for_work}"
+            work.aliases.setdefault("en", []).append(title)
         # Bug fix 2026-04-15 (web audit): all 3,970 work items previously
         # received the identical description "Hebrew manuscript work", which
         # made same-label items indistinguishable on Wikidata. Build a

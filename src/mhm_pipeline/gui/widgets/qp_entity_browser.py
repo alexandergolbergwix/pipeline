@@ -602,7 +602,9 @@ class QPEntityModel(QAbstractTableModel):
                     parts.append(f"✗ {errors} error{'s' if errors != 1 else ''}")
                 if warnings:
                     parts.append(f"⚠ {warnings} warning{'s' if warnings != 1 else ''}")
-                return " · ".join(parts)
+                # Append ⓘ glyph so the cell visually advertises that it is
+                # clickable for full issue details (mirrors the Status column).
+                return " · ".join(parts) + " ⓘ"
 
         if role == Qt.ItemDataRole.UserRole:
             if col == COL_NCLAIMS:
@@ -647,9 +649,11 @@ class QPEntityModel(QAbstractTableModel):
             issues = r.get("issues") or []
             if not issues:
                 return "No validation issues."
-            return "\n".join(
+            lines = [
                 f"[{i.severity.upper()}] {i.code}: {i.message}" for i in issues
-            )
+            ]
+            lines.append("Click for full validation details.")
+            return "\n".join(lines)
 
         return None
 
@@ -2161,7 +2165,8 @@ class QPEntityBrowser(QWidget):
 
     def _on_cell_clicked(self, proxy_idx: QModelIndex) -> None:
         """Click routing — #Claims cell → ClaimsEditDialog,
-        Status cell → ItemStatusDialog (ℹ popup)."""
+        Status cell → ItemStatusDialog,
+        Issues cell → ItemStatusDialog (Validator tab carries the full payload)."""
         if not proxy_idx.isValid():
             return
         col = proxy_idx.column()
@@ -2169,6 +2174,9 @@ class QPEntityBrowser(QWidget):
             self._open_claims_dialog(proxy_idx.row())
             return
         if col == COL_STATUS:
+            self._open_status_dialog(proxy_idx.row())
+            return
+        if col == COL_ISSUES:
             self._open_status_dialog(proxy_idx.row())
             return
 

@@ -2833,16 +2833,32 @@ class TestPersonNameCleaning:
     def test_quoted_name_stripped(self) -> None:
         """Names wrapped in double quotes get those quotes removed."""
         # The clean_name logic in _get_or_create_person strips surrounding quotes.
-        # Test it via source-code inspection (the logic is in a local scope).
         raw = '"Moshe ha-Kohen"'
-        clean = raw.strip().strip('"\'').strip().rstrip(",;:")
+        clean = raw.strip().strip('"\'').strip().rstrip(",;:.")
         assert clean == "Moshe ha-Kohen"
 
     def test_trailing_comma_stripped(self) -> None:
         """Trailing commas still stripped after adding quote stripping."""
         raw = "Moshe ha-Kohen,"
-        clean = raw.strip().strip('"\'').strip().rstrip(",;:")
+        clean = raw.strip().strip('"\'').strip().rstrip(",;:.")
         assert clean == "Moshe ha-Kohen"
+
+    def test_trailing_period_stripped(self) -> None:
+        """Trailing period stripped — bug fix for "בחיי בן יוסף אבן פקודה." landing
+        in person label slot with trailing period (validator TRAILING_PUNCTUATION)."""
+        raw = "בחיי בן יוסף אבן פקודה."
+        clean = raw.strip().strip('"\'').strip().rstrip(",;:.")
+        assert clean == "בחיי בן יוסף אבן פקודה"
+
+    def test_clean_name_rstrip_includes_period_in_source(self) -> None:
+        """Source code: clean_name rstrip set must include '.', else
+        TRAILING_PUNCTUATION fires on names ending in period."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The line: clean_name = name.strip().strip('"\'').strip().rstrip(",;:.")
+        assert 'rstrip(",;:.")' in src, (
+            "clean_name in _get_or_create_person must rstrip period; the validator's "
+            "TRAILING_PUNCTUATION rule strips ',;:.', the cleaner must match."
+        )
 
     def test_quote_stripping_in_source(self) -> None:
         """Source code: clean_name line must include .strip('"\\'')'."""
@@ -3116,6 +3132,285 @@ class TestTitleTrailingPeriodStripped:
         for alias in he_aliases:
             assert not alias.endswith("."), (
                 f"Variant title alias must not end with period, got {alias!r}"
+            )
+
+
+class TestHebrewLabelLatinScriptGuard:
+    """Latin-only titles must NOT be assigned to the `he` label slot — that
+    triggers HE_LABEL_IS_LATIN in item_validator.py (Kolja21 community report,
+    Q139231608). They go into `en` only, with a he-alias for searchability."""
+
+    def test_has_hebrew_script_helper(self) -> None:
+        """Helper function correctly distinguishes Hebrew vs Latin scripts."""
+        from converter.wikidata.item_builder import _has_hebrew_script
+
+        assert _has_hebrew_script("ספר אהבה") is True
+        assert _has_hebrew_script("ספר אהבה Latin mix") is True
+        assert _has_hebrew_script("Bible") is False
+        assert _has_hebrew_script("Diodati Segre") is False
+        assert _has_hebrew_script("Referat über den XI Zionistischen") is False
+        assert _has_hebrew_script("") is False
+        assert _has_hebrew_script(None) is False
+
+    def test_manuscript_latin_title_does_not_pollute_he_label(self) -> None:
+        """Manuscript with Latin-only title and shelfmark — he label uses
+        the synthesised "כתב יד עברי, ספרייה לאומית, <shelfmark>" form,
+        NOT the raw Latin title."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990001400870205171",
+            "title": "Meir Netiv in Latin",
+            "shelfmark": "Heb. 8°1234",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        he_label = item.labels.get("he", "")
+        # Hebrew label MUST contain Hebrew characters (or be empty).
+        assert "Meir Netiv" not in he_label, (
+            f"Latin-only title must not land in he label, got {he_label!r}"
+        )
+        # The Latin form should still be searchable as an alias on en.
+        en_aliases = item.aliases.get("en", [])
+        assert "Meir Netiv in Latin" in en_aliases or "Meir Netiv in Latin" == item.labels.get("en"), (
+            f"Latin title should be searchable; en aliases: {en_aliases}, en label: {item.labels.get('en')}"
+        )
+
+    def test_manuscript_hebrew_title_keeps_he_label(self) -> None:
+        """Hebrew-script title still goes into the he label slot (no regression)."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990002",
+            "title": "ספר הזוהר",
+            "shelfmark": "F 5678",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        assert item.labels.get("he") == "ספר הזוהר", (
+            f"Hebrew title must populate he label, got {item.labels.get('he')!r}"
+        )
+
+    def test_work_latin_title_routed_to_en(self) -> None:
+        """Latin-only work title (e.g. 'Bible', 'Diodati Segre') goes to en
+        label + en alias only — never any he-tagged slot (label OR alias).
+        Putting Latin in any he-slot is what triggered Kolja21/Geagea
+        complaints in April 2026."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990003",
+            "title": "ספר",
+            "shelfmark": "F 0001",
+            "notes": [],
+            "variant_titles": [],
+            "marc_authority_matches": [],
+            "entities": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        work = builder._get_or_create_work("Bible", None, record)
+        # `he` label must NOT contain the Latin title.
+        he_label = work.labels.get("he", "")
+        assert "Bible" not in he_label, (
+            f"Latin-only work title must not be the he label, got {he_label!r}"
+        )
+        # `he` aliases must NOT contain Latin text either — that was the
+        # original complaint pattern (Kolja21 on Q139231608).
+        he_aliases = work.aliases.get("he", [])
+        assert "Bible" not in he_aliases, (
+            f"Latin work title must not be a he-alias either, got {he_aliases!r}"
+        )
+        # English label OR alias must carry the Latin form for searchability.
+        assert work.labels.get("en") == "Bible" or "Bible" in work.aliases.get("en", []), (
+            f"Latin work title not searchable; en={work.labels.get('en')!r} "
+            f"en-aliases={work.aliases.get('en', [])}"
+        )
+
+    def test_work_hebrew_title_keeps_he_label(self) -> None:
+        """Hebrew-script work title still goes into he label (no regression)."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990004",
+            "title": "ספר",
+            "shelfmark": "F 0002",
+            "notes": [],
+            "variant_titles": [],
+            "marc_authority_matches": [],
+            "entities": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        work = builder._get_or_create_work("ספר הזוהר", None, record)
+        assert work.labels.get("he") == "ספר הזוהר", (
+            f"Hebrew work title must populate he label, got {work.labels.get('he')!r}"
+        )
+
+
+def _is_hebrew_only(text: str) -> bool:
+    """Helper: True iff text contains only Hebrew-block characters (and spaces)."""
+    return all(c == " " or "\u0590" <= c <= "\u05ff" for c in text)
+
+
+class TestSetLabelsRefactorPreservesPastFixes:
+    """Regression sweep: my 2026-05-08 refactor of _set_labels (Latin-script
+    routing) must not regress any of the past Wikidata-community-reported
+    fixes that flow through the same code path. Every assertion below maps
+    to a specific community complaint.
+    """
+
+    def test_kovetz_placeholder_still_routed_to_alias(self) -> None:
+        """Geagea complaint (2026-04-15): "קובץ." (compilation) used as label.
+        After refactor, placeholders must still route to alias, not he label."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990001",
+            "title": "קובץ.",
+            "shelfmark": "F 1234",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        assert item.labels.get("he") == "כתב יד עברי, ספרייה לאומית, F 1234", (
+            f"Placeholder must produce shelfmark-based he label, got {item.labels.get('he')!r}"
+        )
+        # build_manuscript_item strips trailing punctuation from the title
+        # before passing to _set_labels, so the alias is "קובץ" without
+        # the trailing period (which is also what the TRAILING_PUNCTUATION
+        # validator rule would prefer).
+        assert "קובץ" in item.aliases.get("he", []), (
+            f"Placeholder text should still be searchable as a he-alias, "
+            f"got he-aliases={item.aliases.get('he', [])!r}"
+        )
+
+    def test_kovetz_variant_still_detected(self) -> None:
+        """Variant placeholders ('קובץ בקבלה.', 'קובץ מדרשים.') routed too."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990002",
+            "title": "קובץ בקבלה.",
+            "shelfmark": "F 5678",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        assert item.labels.get("he", "").startswith("כתב יד עברי, ספרייה לאומית"), (
+            f"Placeholder variant must still produce shelfmark fallback, "
+            f"got {item.labels.get('he')!r}"
+        )
+
+    def test_no_latin_in_he_label_or_he_alias_for_works(self) -> None:
+        """Kolja21 complaint pattern (2026-04-12): Latin text in any he-slot.
+        After refactor, both he label AND he aliases must be free of Latin."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990003",
+            "title": "ספר",
+            "shelfmark": "F 9999",
+            "notes": [],
+            "variant_titles": [],
+            "marc_authority_matches": [],
+            "entities": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        for latin_title in ("Bible", "Diodati Segre", "Liber generationis"):
+            work = builder._get_or_create_work(latin_title, None, record)
+            he_label = work.labels.get("he", "")
+            he_aliases = work.aliases.get("he", [])
+            for slot_name, slot_value in (("he label", he_label), *((f"he alias[{i}]", a) for i, a in enumerate(he_aliases))):
+                # Slot must be either empty, all-Hebrew, or contain at least
+                # one Hebrew character — Latin-only strings are forbidden.
+                if not slot_value:
+                    continue
+                has_hebrew = any("\u0590" <= c <= "\u05ff" for c in slot_value)
+                has_latin = any("a" <= c.lower() <= "z" for c in slot_value)
+                if has_latin and not has_hebrew:
+                    raise AssertionError(
+                        f"{slot_name}={slot_value!r} contains Latin-only text — "
+                        f"this is the Kolja21/Geagea complaint pattern."
+                    )
+
+    def test_hebrew_label_not_overwritten_by_shelfmark_fallback(self) -> None:
+        """Refactor must NOT replace a real Hebrew title with the shelfmark
+        fallback. Regression check on the new conditional in _set_labels."""
+        from unittest.mock import MagicMock
+
+        from converter.wikidata.item_builder import WikidataItemBuilder
+
+        record = {
+            "_control_number": "990004",
+            "title": "ספר הזוהר",  # genuine Hebrew title
+            "shelfmark": "F 2222",
+            "notes": [],
+            "variant_titles": [],
+        }
+        builder = WikidataItemBuilder(reconciler=MagicMock())
+        item = builder.build_manuscript_item(record)
+        assert item.labels.get("he") == "ספר הזוהר", (
+            f"Hebrew title must NOT be replaced by shelfmark fallback, "
+            f"got {item.labels.get('he')!r}"
+        )
+
+
+class TestIssuesColumnClickable:
+    """The Issues column in the Wikidata Studio must open ItemStatusDialog on
+    click (mirrors the Status column's ⓘ behaviour) so curators can see
+    validator details. Source-code structural test — no Qt instantiation."""
+
+    def test_on_cell_clicked_routes_col_issues_to_status_dialog(self) -> None:
+        """The _on_cell_clicked method must handle COL_ISSUES by opening
+        ItemStatusDialog (the dialog already has a Validator tab)."""
+        src = pathlib.Path(
+            "src/mhm_pipeline/gui/widgets/qp_entity_browser.py"
+        ).read_text(encoding="utf-8")
+        # Find the _on_cell_clicked function and verify it handles COL_ISSUES.
+        idx = src.find("def _on_cell_clicked(")
+        assert idx != -1, "_on_cell_clicked not found in qp_entity_browser.py"
+        # Look in the next ~30 lines for COL_ISSUES handling.
+        body = src[idx:idx + 2000]
+        assert "col == COL_ISSUES" in body, (
+            "_on_cell_clicked must route COL_ISSUES clicks (open ItemStatusDialog "
+            "for validator details — Kolja21/Epìdosis report visibility)."
+        )
+        assert "_open_status_dialog" in body, (
+            "_on_cell_clicked must call _open_status_dialog for COL_ISSUES."
+        )
+
+    def test_issues_cell_text_includes_info_glyph(self) -> None:
+        """The Issues cell's display text must include a ⓘ glyph when issues
+        are present — visual hint that the cell is clickable."""
+        src = pathlib.Path(
+            "src/mhm_pipeline/gui/widgets/qp_entity_browser.py"
+        ).read_text(encoding="utf-8")
+        # Find the COL_ISSUES rendering branch
+        idx = src.find('if col == COL_ISSUES:')
+        assert idx != -1, "COL_ISSUES rendering not found"
+        body = src[idx:idx + 1200]
+        assert "ⓘ" in body or 'glyph' in body.lower(), (
+            "Issues cell text must include ⓘ glyph or similar visual hint that "
+            "the cell is clickable for details."
             )
 
 
