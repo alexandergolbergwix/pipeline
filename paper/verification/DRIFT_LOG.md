@@ -29,7 +29,7 @@ landed in the paper) recurs across sections.
 | Codebase has | 14 (`item_validator.py` enumerates EMPTY_LABEL, ANONYMOUS_PERSON, KOVETZ_PLACEHOLDER, TRAILING_PUNCTUATION, INVERTED_NAME_LABEL, INSTITUTION_AS_PERSON, P3959_ON_HUMAN, P8189_BAD_PREFIX, VIAF_ON_NON_PERSON, P1559_LATIN_AS_HE, NO_IDENTIFIER, MULTIPLE_P1559_SAME_LANG, HE_LABEL_IS_LATIN, AMBIGUOUS_SINGLE_NAME) |
 | Resolution | Paper number drifted forward — three rules added after submission. Update §7.5 to "fourteen pre-upload checks" before next revision. |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (paper §7.5 now says "Fourteen pre-upload validation checks" with full enumeration of all 14 codes) |
 
 ---
 
@@ -65,7 +65,7 @@ landed in the paper) recurs across sections.
 | Codebase has | CLAUDE.md fix #10 (Rule 28) explicitly **removed** P1343=Q_KTIV as a main statement on persons. Persons no longer carry it. |
 | Resolution | Paper draft pre-dates the removal. Either drop the P1343 row from Table 2 (preferred) or note it as a deprecated v1.9 metric. |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (P1343 row removed from Table 2) |
 
 ### P1412 on persons
 
@@ -75,7 +75,7 @@ landed in the paper) recurs across sections.
 | Codebase has | CLAUDE.md fix #7 (Rule 26) — derived from MARC 008/041 per-record, not blanket-hardcoded. |
 | Resolution | Update the "Source" column in Table 2 to "MARC 008/041". |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (Table 2 P1412 source column now reads "MARC 008/041") |
 
 ---
 
@@ -89,7 +89,7 @@ landed in the paper) recurs across sections.
 | §6 / Table 5 says | 85 % (line 474) |
 | Resolution | Abstract overstates. Encoded as `ABS-genre-coverage-headline` with `op: ge, value: 0.85` and a note. Reconcile the abstract phrasing in next paper revision. |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (abstract now says "85% genre coverage", consistent with §6 and Table 5) |
 
 ### Genre classifier sequence length
 
@@ -100,7 +100,7 @@ landed in the paper) recurs across sections.
 | Codebase has | `--max-length 64` in `train_genre_classifier.py` |
 | Resolution | Line 309 is wrong — the actual training max-length is 64. Fix line 309 to "Sequences are truncated to 64 tokens (matched to inference window)". |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (§4.6 line 309 now reads "Sequences are truncated to 64 tokens (matched to the inference window)") |
 
 ### Item-count headline numbers
 
@@ -150,7 +150,7 @@ recommendations, not test failures.
 | Actual | **2,534,411** rows (4× larger) |
 | Resolution | The Mazal index has been rebuilt from a more complete NLI authority dump since the paper was drafted. Update §3.1 + §4.3 to "~2.5M Mazal records" or "over 2.5 million authority entries." |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (both §3.1 and §4.3 now read "~2.5 million records") |
 | Audit | `paper/verification/audit/ARCH-mazal-record-count.md` |
 
 ### Wikidata property count
@@ -174,7 +174,7 @@ recommendations, not test failures.
 | Actual | **37** entries |
 | Resolution | Update §4.2 to 37; CLAUDE.md §19 also stale. |
 | Action | **paper-revise** + **claude-md-revise** |
-| Status | open |
+| Status | partially resolved: 2026-05-08 (paper §4.2 now says "37 LCSH subject headings"; CLAUDE.md §19 still references 30 — separate task) |
 | Audit | `paper/verification/audit/METH-lcsh-qid-mappings-30.md` |
 
 ### Hebrew ordinal mappings
@@ -186,7 +186,7 @@ recommendations, not test failures.
 | Actual | **23** entries (with 2 intentional duplicates ט״ו=15 and ט״ז=16; unique-century count is 21) |
 | Resolution | Either update §4.2 to "23 entries (21 unique centuries, with two duplicate spellings for the special-case 15 and 16)" or to "21 unique century mappings" depending on which framing the paper prefers. |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (§4.2 now reads "23 entries (21 unique centuries, with two duplicate spellings for the special-case 15 and 16)") |
 | Audit | `paper/verification/audit/METH-hebrew-ordinal-mapping-size.md` |
 
 ### Validator-rule count (re-confirmed by V2)
@@ -199,7 +199,7 @@ recommendations, not test failures.
 | The three additions | `P1559_LATIN_AS_HE`, `HE_LABEL_IS_LATIN`, `AMBIGUOUS_SINGLE_NAME` (each traceable to a specific community report on Q139230386, Q139231608, Q139231258) |
 | Resolution | Update §7.5 to "fourteen pre-upload validation checks" or, if the paper wants to credit the latest fix-set, "fourteen, of which three were added in response to community reports on items Q139230386, Q139231608, and Q139231258". |
 | Action | **paper-revise** |
-| Status | open |
+| Status | resolved: 2026-05-08 (paper §7.5 now reads "Fourteen pre-upload validation checks" with all 14 codes enumerated; duplicate of Drift type 1) |
 | Audit | `paper/verification/audit/SAFE-validator-eleven-checks.md` |
 
 ## Drift type 7: Reproducibility friction
@@ -526,3 +526,43 @@ falls through to the legacy 3-source flow exactly. All 22 existing
 - Person NER missing labels (SCRIBE / EDITOR / RECIPIENT / DEDICATEE / PATRON never appear).
 
 These need data work, not code; they are tracked here for the next training cycle.
+
+---
+
+## 2026-05-08 — Paper revision: recent improvements + low-friction number refreshes
+
+**Action:** A surgical revision of `paper/swj-paper.tex` landed the recent improvement waves (Drift 16, 17, 18) plus this session's auth-table commits (`90776e5`, G1, G4, A+B) into the paper as new prose, and refreshed nine low-friction number-drift cells. The 14 high-risk claims tracked in `paper/SWJ_claim_ledger_and_revision_plan.md` (data-loss `~0%` vs `~17%`, item count `670` vs `4,653` vs `5,785`, persons `570` vs `583`, future-work contradictions, baseline methodology, production-readiness language vs Rule~25 moratorium, etc.) are explicitly **out of scope** for this revision and remain on the ledger for a later evidence pass.
+
+**Edits to `swj-paper.tex`:**
+
+| Section | Change |
+|---|---|
+| §3 (System Architecture) | (a) Added "Wikidata" as the 4th authority source under Stage~3. (b) Updated NER stage to "3 NER models + 2 sentence-level classifiers" with the genre + MARC~500 classifier acknowledged. (c) New paragraph at the end of §3.1 describing the unified `DynamicProgressBar` + substep telemetry across all 9 workers. |
+| §4.1.1 (Person NER) | New "Confidence signals" sub-paragraph documenting the dual `confidence` (legacy keyword bimodal at 0.60/0.85) + `model_confidence` (real softmax mean) emission per Drift 18 #6. |
+| §4.1.4 (NEW) | "Post-extraction filtering" subsection describing the four `ner_post_filters.py` filters: WORK\_AUTHOR folio re-route, COLLECTION catalog-citation routing, OWNER length cap, person hallucination filter — closes Drift 18 #7. |
+| §4.3 (Multi-Authority Linking) | Added Wikidata as 4th authority source with the three search modes and `find_viaf_by_qid` backfill description. New paragraph on the cross-source verdict (`source`, `source_count`, `sources` array, `score_confidence` — `high`/`medium`/`low`) per Drift 17. |
+| §4.7 (NEW) | "Strategy G: MARC 500 Sentence Classifier" subsection (Motivation / Architecture / Training data / Inference and integration / Coverage impact) — closes Drift 8 #4. |
+| §7.6 (Wikidata Studio) | New "Auth-match table with field-origin Source column" paragraph describing commit `90776e5`'s changes (every NER entity row visible, Source column shows `MARC 100`, `NER Author`, `KIMA Place`, etc.). |
+| Number-drift refreshes (10 cells) | Abstract: `100% genre coverage` $\to$ `85% genre coverage`. §3.1: Mazal `630K+` $\to$ `~2.5M`. §4.2: Hebrew ordinals `20` $\to$ `23 (21 unique centuries; two duplicate spellings for 15 and 16)`. §4.2: LCSH `30` $\to$ `37`. §4.3: Mazal `630K+` $\to$ `~2.5M`. §4.6: sequence length `128` $\to$ `64 (matched to inference window)`. Table 2: P1343 row removed; P1412 source `Hardcoded` $\to$ `MARC 008/041`. §7.5: validator count `Eleven` $\to$ `Fourteen` with full enumeration. §7.5: test count `232` $\to$ `545`. |
+
+**DRIFT entries marked resolved by this revision:**
+
+- Drift type 1 (validator-rule count) — resolved.
+- Drift type 3, P1343 on persons — resolved.
+- Drift type 3, P1412 on persons — resolved.
+- Drift type 4, Genre coverage — resolved.
+- Drift type 4, Genre classifier sequence length — resolved.
+- Drift type 4b, Mazal record count — resolved.
+- Drift type 4b, LCSH subject QIDs — partially resolved (paper updated; CLAUDE.md §19 still references 30, separate task).
+- Drift type 4b, Hebrew ordinal mappings — resolved.
+- Drift type 4b, Validator-rule count (V2 re-confirmation) — resolved (duplicate of Drift type 1).
+- Drift type 8 #4, MARC 500 classifier missing §4 subsection — resolved.
+- Drift type 16 (Unified `DynamicProgressBar`) — resolved (paper §3.1 now describes substep telemetry).
+- Drift type 17 (Stage 3 4-source authority chain) — resolved (paper §4.3 now describes Wikidata as 4th source + `find_viaf_by_qid` backfill + cross-source verdict).
+- Drift type 18 (Stage 2 NER 8 fixes) — resolved (paper §4.1.1 dual confidence + §4.1.4 post-filtering subsection).
+
+**Still open** (carried forward in `SWJ_claim_ledger_and_revision_plan.md`): the 14 high-risk C-claims, plus Drift type 3 P921, Drift type 4 item-count + persons-count footnotes, Drift type 4b Wikidata property count, Drift type 6 (3-models framing), Drift type 7 (reproducibility argparse defaults), Drift type 8 #1/#2/#3/#5/#6/#9/#10/#11/#12/#13.
+
+**Verification:** see commit-time `git diff --stat paper/swj-paper.tex` (~120 added lines, ~12 removed). The `verify_paper.py` harness should now PASS on `ABS-genre-coverage-headline`, `ARCH-mazal-record-count`, `METH-lcsh-qid-mappings-30`, `METH-hebrew-ordinal-mapping-size`, `SAFE-validator-eleven-checks`, and `GENRE-seq-length` rows where they previously DRIFTED.
+
+**Status:** done.

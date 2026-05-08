@@ -42,7 +42,7 @@
 \email{golbera3@biu.ac.il}
 
 \begin{abstract}
-Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 100\% genre coverage, an average of 73.6 Wikidata statements per manuscript (including 4,162 exemplar-of links to automatically created work items), and 7.5 statements per person entity---reducing data loss from 26.4\% to approximately 0\%.
+Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system for automated conversion of Hebrew manuscript MARC records to Wikidata, achieving 96\% date coverage, 85\% genre coverage, an average of 73.6 Wikidata statements per manuscript (including 4,162 exemplar-of links to automatically created work items), and 7.5 statements per person entity---reducing data loss from 26.4\% to approximately 0\%.
 
 Our approach combines six complementary strategies: (A)~three domain-specific Named Entity Recognition models trained via distant supervision from MARC structured fields, achieving 85.7\%, 95.9\%, and 99.99\% F1 for person, provenance, and contents extraction respectively; (B)~rule-based pattern extraction for Hebrew dates, physical descriptions, and genre/subject term mapping to Wikidata QIDs; (C)~multi-authority linking through Mazal/NLI, VIAF, and KIMA gazetteers; (D)~VIAF cluster harvesting for cross-referencing GND, LCCN, ISNI, and BnF identifiers; (E)~property-level data type validation against the WikiProject Manuscripts Data Model; and (F)~a distant-supervision genre classifier trained on 25,421 quality-filtered records using whole-token Hebrew keyword matching and a 3-sentence context window as input — with DictaBERT warm-started from the NER checkpoint, top-2 layers fine-tuned, focal loss ($\gamma=2$), and a NOTA abstention class — achieving micro-F1 of 0.918 ($\pm$0.003, 5-fold CV; best fold 0.921) on 8 genre classes and raising P136 coverage from 69\% to approximately 85\%.
 
@@ -135,14 +135,15 @@ The MHM Pipeline consists of six stages, each producing an intermediate artifact
 \begin{enumerate}[leftmargin=*]
 \item \textbf{MARC Parsing} (\texttt{UnifiedReader} + \texttt{field\_handlers.py}): Extracts 59 structured fields from MARC~21 records into a normalized \texttt{ExtractedData} representation, handling MARC's complex subfield structure and encoding variations.
 
-\item \textbf{NER Extraction} (3 models): Applies three DictaBERT-based NER models in parallel to different MARC fields:
+\item \textbf{NER Extraction} (3 NER models + 2 sentence-level classifiers): Applies three DictaBERT-based NER models in parallel to different MARC fields:
   \begin{itemize}
     \item Person NER on MARC~500 (general notes): extracts person names with role classification
     \item Provenance NER on MARC~561 (ownership history): extracts owners, dates, collections
     \item Contents NER on MARC~505 (contents): extracts work titles, folio references, work authors
   \end{itemize}
+  Two complementary classifiers (genre, Strategy~F; MARC~500 sentence classifier, Strategy~G) run alongside the NER models in the same Stage~2 worker, sharing the DictaBERT encoder.
 
-\item \textbf{Authority Resolution}: Matches extracted names against three authority databases: Mazal/NLI (local, 630K+ records), VIAF (international, SRU API), and KIMA (Hebrew place gazetteer). VIAF cluster harvesting extracts cross-referenced GND, LCCN, ISNI, and BnF identifiers.
+\item \textbf{Authority Resolution}: Matches extracted names against four authority sources: Mazal/NLI (local SQLite, $\sim$2.5~million records), VIAF (international, SRU API), KIMA (Hebrew place gazetteer), and Wikidata (SPARQL, public). VIAF cluster harvesting extracts cross-referenced GND, LCCN, ISNI, and BnF identifiers.
 
 \item \textbf{RDF Construction}: Maps enriched records to the Hebrew Manuscripts Ontology (HMO), producing an RDF graph compliant with FRBRoo and CIDOC-CRM.
 
@@ -150,6 +151,8 @@ The MHM Pipeline consists of six stages, each producing an intermediate artifact
 
 \item \textbf{Wikidata Upload}: Converts validated records to WikibaseIntegrator item representations and uploads via the Wikidata API with OAuth~2.0 authentication, claim-level diffing (no duplicate statements), and batch rate limiting.
 \end{enumerate}
+
+Every stage exposes a substep telemetry channel (\texttt{substep~=~pyqtSignal(str)} on the \texttt{StageWorker} base class) so the GUI's unified \texttt{DynamicProgressBar} surfaces the running operation (e.g.\ ``Stage 3.1~--~Mazal lookup ($i/n$)'') alongside percentage and rolling-window ETA. All nine workers --- the six pipeline stages plus the three preview/validate variants --- emit through the same channel, so the user sees one consistent progress convention regardless of which stage is running.
 
 \subsection{Wikidata Property Mapping}
 
@@ -201,9 +204,8 @@ P5008& on focus list    & Hardcoded  & 100\% \\
 P31   & instance of    & Rule            & 570 \\
 P106  & occupation     & Role mapping    & 314 \\
 P214  & VIAF ID        & VIAF search     & 142 \\
-P1343 & described by   & Hardcoded       & 570 \\
 P21   & sex/gender     & Heuristic       & 332 \\
-P1412 & language       & Hardcoded       & 332 \\
+P1412 & language       & MARC 008/041    & 332 \\
 P1559 & native name    & Hebrew name     & 332 \\
 P244  & LCCN           & Cluster harvest & 104 \\
 P213  & ISNI           & Cluster harvest & 129 \\
@@ -236,6 +238,8 @@ The core methodological contribution is the exploitation of MARC's dual structur
 
 \textbf{Role classification.} The model extracts person mentions; role assignment (author, scribe, owner, translator, commentator, censor) uses keyword-based heuristics on surrounding Hebrew context, matching terms such as \texthebrew{מעתיק} (copyist), \texthebrew{בעלים} (owner), and \texthebrew{מתרגם} (translator).
 
+\textbf{Confidence signals.} Each emitted person span carries two distinct confidence values: a legacy \texttt{confidence} field derived from the keyword classifier (bimodal at 0.60 and 0.85), preserved for backward compatibility with downstream Stage~3 thresholds, and a \texttt{model\_confidence} field reporting the mean softmax probability across the entity's tokens, which the GUI auto-approve gate consumes as an orthogonal signal.
+
 \subsubsection{Model 2: Provenance NER (95.9\% F1)}
 
 \textbf{Training data generation.} Three distant supervision strategies target MARC~561 (ownership/custodial history):
@@ -251,25 +255,34 @@ Training on 12,100 samples (28.4\% augmented with multi-entity examples) yielded
 
 MARC~505 (contents notes) follows a highly regular semi-structured format: numbered entries with work titles, folio references, and sometimes author names. Rule-based parsing of 505 fields generates training data with near-perfect labels, explaining the exceptional F1 score. Three entity types: WORK, FOLIO, WORK\_AUTHOR. Trained on 10,000 samples.
 
+\subsubsection{Post-extraction filtering}
+\label{sec:ner-post-filters}
+
+The three NER models emit raw spans that are then routed through four deterministic post-filters in \texttt{converter/authority/ner\_post\_filters.py} before reaching Stage~3. (i)~A WORK\_AUTHOR span whose payload matches a folio-shape pattern (digits followed by a Hebrew side letter, e.g.\ \texthebrew{133ב~:}) is re-typed to FOLIO and stamped with a \texttt{retyped\_from} marker. (ii)~A COLLECTION span whose surrounding context lacks an institutional marker (\texthebrew{אוסף} ``collection'', ``Library'', ``ms'') and whose surname matches a curated catalog-citation list is routed to a separate \texttt{record["catalog\_references"]} channel rather than treated as an institutional collection; this prevents catalog citations like \texthebrew{מ' גסטר} (``M.\ Gaster'') from polluting P195 (collection) statements. (iii)~OWNER spans longer than 80 characters are routed to \texttt{record["provenance\_inscriptions"]} where they feed P7535 (description) narratively, rather than being collapsed into a single P127 (owned~by) statement; bills of sale and multi-line ownership inscriptions are documentary objects, not single-owner attestations. (iv)~Person spans matching curated topic-keyword denylists (e.g.\ \texthebrew{קבלה} ``kabbalah'', \texthebrew{משיח} ``messiah'', \texthebrew{קולופון} ``colophon''), all-caps ASCII fragments, or sequences with insufficient Hebrew letter count are dropped as model hallucinations. On the 68-record audit corpus, the four filters together eliminated 22 WORK\_AUTHOR/folio confusions, 5 catalog-citation false positives, 5 bill-of-sale paragraphs misrouted to P127, and 16 person-hallucination spans, with no impact on true-positive person, owner, or work entities.
+
 \subsection{Strategy B: Rule-Based Pattern Extraction}
 
 \subsubsection{Hebrew Date Parsing}
 
-Hebrew manuscript dates present unique challenges. NLI catalogs encode dates in three formats: structured years (``1495''), English century descriptions (``16th century''), and Hebrew century strings (\texthebrew{מאה ט"ז} = 16th century = ca.~1550). Our parser handles all three formats, including Hebrew ordinal-to-integer conversion via a mapping of 20 Hebrew letter-number combinations. Coverage improved from 22\% to 96\% after implementing Hebrew century parsing.
+Hebrew manuscript dates present unique challenges. NLI catalogs encode dates in three formats: structured years (``1495''), English century descriptions (``16th century''), and Hebrew century strings (\texthebrew{מאה ט"ז} = 16th century = ca.~1550). Our parser handles all three formats, including Hebrew ordinal-to-integer conversion via a mapping of 23 entries (21 unique centuries, with two duplicate spellings for the special-case 15 and 16). Coverage improved from 22\% to 96\% after implementing Hebrew century parsing.
 
 \subsubsection{Genre and Subject QID Mapping}
 
-We created comprehensive mapping dictionaries: 50~genre terms to Wikidata QIDs (covering 100\% of NLI's genre vocabulary), 30~LCSH subject headings, 13~Bible books, and 14~Talmud Bavli tractates. All mappings are centralized in a single module (\texttt{property\_mapping.py}) for maintainability.
+We created comprehensive mapping dictionaries: 50~genre terms to Wikidata QIDs (covering 100\% of NLI's genre vocabulary), 37~LCSH subject headings, 13~Bible books, and 14~Talmud Bavli tractates. All mappings are centralized in a single module (\texttt{property\_mapping.py}) for maintainability.
 
 \subsection{Strategy C: Multi-Authority Linking}
 
-Three authority databases provide entity resolution:
+Four authority sources provide entity resolution:
 
-\textbf{Mazal/NLI} (local SQLite, 630K+ records): Fuzzy matching of person, place, work, and corporate body names against the NLI authority file. Provides NLI~J9U identifiers (P8189) and biographical dates.
+\textbf{Mazal/NLI} (local SQLite, $\sim$2.5~million records): Fuzzy matching of person, place, work, and corporate body names against the NLI authority file. Provides NLI~J9U identifiers (P8189) and biographical dates.
 
 \textbf{VIAF} (public API, SRU/CQL): Name search with JSON content negotiation. Rate-limited to 2~requests/second. Provides VIAF~URIs (P214).
 
 \textbf{KIMA} (Hebrew place gazetteer, SQLite): Maps Hebrew historical place names to Wikidata QIDs via variant name matching. Provides location of creation claims (P1071).
+
+\textbf{Wikidata} (SPARQL, public): A fourth authority source resolves entities directly against Wikidata using three search modes --- (i)~identifier triangulation, when a candidate carries P214 / P8189 / P244 / P227 / P213; (ii)~Hebrew-label search ordered by ascending QID number, preferring canonical low-numbered entries (e.g.\ Q189564 for Rashi) over pipeline-created Q139xxx duplicates; and (iii)~Latin-name fallback. The matcher's \texttt{find\_viaf\_by\_qid} method reads \texttt{wdt:P214} off any known QID; this is invoked as a backfill step when a Mazal authority match resolved to a Wikidata QID without a VIAF URI, increasing VIAF coverage from 13\% to 33\% on the 68-record audit corpus and unlocking the cluster-harvesting amplification described in Strategy~D.
+
+Each match record carries a \texttt{source} field --- one of \texttt{mazal}, \texttt{viaf}, \texttt{wikidata}, \texttt{cross\_source}, or \texttt{marc\_only} --- and a \texttt{source\_count} integer in $[0, 3]$ recording how many independent identifier sources agreed on the resolution. Matches with \texttt{source\_count} $\geq 2$ also carry a \texttt{sources} array enumerating the agreeing sources (e.g.\ \texttt{["mazal", "wikidata"]}). The \texttt{score\_confidence} function consumes these signals plus VIAF over-merge detection and cross-source conflict probes to assign one of \texttt{high}, \texttt{medium}, or \texttt{low}; only \texttt{high} survives the GUI's 0.95 auto-approve threshold, while \texttt{medium} and \texttt{low} require explicit curator review.
 
 \subsection{Strategy D: VIAF Cluster Harvesting}
 
@@ -306,7 +319,7 @@ Two additional quality filters are applied: (i)~\emph{Literature (Miscellaneous,
 
 \textbf{Keyword synonym dictionary.} Since MARC~655 headings are in English while MARC~500 notes are in Hebrew, direct string overlap yields near-zero matches. We therefore compiled \texttt{GENRE\_KEYWORDS}: a dictionary mapping each of the 20 genre classes to all known Hebrew morphological forms and English variants. For example, \emph{Legislation (Jewish law)} maps to \{תקנה, תקנות, תקנן, תוקן, חוק, חוקים, פסק, פסקי דין, גזרה, גזרות, חרם, חרמות, צו, צווים, takkanot, decree, ordinance, statute\}.
 
-\textbf{Input (X).} Rather than using the entire notes field, the model input is the MARC~245 title concatenated with a \emph{3-sentence context window} from MARC~500: the sentence immediately before the keyword match, the matching sentence itself, and the sentence immediately after. This localises the input to the exact textual evidence the cataloger wrote about that genre. Sequences are truncated to 128 tokens.
+\textbf{Input (X).} Rather than using the entire notes field, the model input is the MARC~245 title concatenated with a \emph{3-sentence context window} from MARC~500: the sentence immediately before the keyword match, the matching sentence itself, and the sentence immediately after. This localises the input to the exact textual evidence the cataloger wrote about that genre. Sequences are truncated to 64 tokens (matched to the inference window).
 
 \textbf{Architecture.} The encoder is \texttt{dicta-il/dictabert}~\cite{shmidman2023dictabert} warm-started from the provenance NER checkpoint (already domain-adapted on 12,100 Hebrew manuscript samples via our earlier distant supervision pipeline). The bottom 10 of 12 transformer layers are frozen — they encode generic Hebrew morphology and syntax already learned during NER fine-tuning — while the top 2 layers and the classification head are fine-tuned. This partial fine-tuning allows the encoder to adapt its higher-level representations to the genre domain without catastrophic forgetting of Hebrew pretraining. The [CLS] representation is passed through Dropout(0.3) and a linear layer to logits over 9 classes: the 8 retained genres plus an explicit \emph{None-of-the-Above} (NOTA) class, allowing the model to abstain when no genre applies. Focal loss~\cite{lin2017focal} with $\gamma=2$ and per-class positive weights $w_c = n_{\text{neg},c}/n_{\text{pos},c}$ is used instead of standard BCE, downweighting easy majority-class examples and focusing training on the harder, rarer classes.
 
@@ -342,6 +355,19 @@ NOTA (abstention class) & 1,629 \\
 \end{table}
 
 This strategy raises P136 coverage from 69\% to approximately 85\%.
+
+\subsection{Strategy G: MARC 500 Sentence Classifier}
+\label{sec:marc500-classifier}
+
+MARC~500 (general notes) is the catch-all field of the MARC record: catalogers use it for colophon attestations, fragments of provenance history, codicological observations, and unrelated commentary. Routing each sentence to the right downstream consumer --- P1684 (inscription) for colophons versus the Provenance NER pipeline for ownership-history sentences versus discarded otherwise --- requires sentence-level classification rather than naive whole-field heuristics.
+
+\textbf{Architecture.} A single DictaBERT encoder feeds two independent sigmoid heads, one per class (COLOPHON, PROVENANCE), trained jointly. The heads share encoder representations but make independent decisions, so a sentence may be flagged simultaneously as colophon and provenance (rare but legitimate). The infrastructure reuses the genre-classifier model class (\texttt{GenreClassificationModel}) with \texttt{num\_classes}~$=$~2 and the same focal-loss + per-class positive-weight scheme.
+
+\textbf{Training data.} Distant supervision extracts positive labels from MARC structured fields: a sentence is COLOPHON-positive if it contains canonical Hebrew colophon-formula keywords (\texthebrew{נשלם}, \texthebrew{סיום}, \texthebrew{קולופון}) or is the closing sentence of MARC~500 in records that have a parallel MARC~561 entry; a sentence is PROVENANCE-positive if it contains a name that also appears in MARC~561 of the same record. Training uses 5-fold stratified cross-validation; each fold's classification thresholds are tuned independently per head by scanning $[0.2, 0.8]$ to maximise per-class F1. The threshold pair is stored in the checkpoint and applied at inference.
+
+\textbf{Inference and integration.} At Stage~2, every MARC~500 sentence is scored. Sentences passing the COLOPHON threshold accumulate in \texttt{record["ml\_colophon\_sentences"]} and are appended to \texttt{record["colophon\_text"]}, where the existing P1684 mapper picks them up. Sentences passing the PROVENANCE threshold are routed through the Provenance NER pipeline (the same model that runs on MARC~561), and each emitted entity carries \texttt{from\_marc500: True} for downstream auditability. Both routings degrade gracefully when the classifier checkpoint is absent: the missing model triggers a no-op rather than a failure, and the pipeline runs as if MARC~500 were unclassified.
+
+\textbf{Coverage impact.} Expected uplift on the 100-MS evaluation: P1684 (inscription) coverage from 41\% to approximately 55\%; P127 (owned by) and P11603 (transcribed by) from 17\% / 19\% to approximately 25\% / 25\%. The two-head design means the classifier amortises a single forward pass across both downstream lifts.
 
 
 %% ====================================================================
@@ -588,11 +614,11 @@ We addressed items (1) and (2) directly: unconfirmed person attributions (those 
 
 A pilot upload of 670~items to Wikidata in April~2026 generated substantive community feedback through user talk pages. The Wikidata community identified: (a)~duplicate person items caused by the reconciler checking only VIAF and NLI identifiers, missing existing items findable via LCCN/GND/ISNI; (b)~institutional holders (MARC~710 entries) incorrectly attached as P50~(author) instead of P195~(collection) or P127~(owned~by); (c)~P8189 authority-record identifiers attached to non-human entities; and (d)~generic catalog placeholders (Hebrew \textit{kovetz}, `collection') emitted verbatim as Wikidata labels.
 
-Each issue was fixed and protected by a regression test. The full reconciler now checks all five identifier types before creating any new person entity; the institutional name detector routes MARC~710 entries to the appropriate collection/ownership property; P8189 is gated on both authority-record prefix and \texttt{P31=Q5} (human); and placeholder titles are detected and replaced with shelfmark-based labels. Eleven pre-upload validation checks in \texttt{item\_validator.py} block any item carrying a known failure pattern (empty label, anonymous person, kovetz placeholder, trailing punctuation, MARC-inverted label, institutional-as-person, P3959 on human, P8189 bad prefix, VIAF on non-person, multiple same-language P1559, no-identifier person) from being approved in the GUI; every error-level finding disables the ``Approved'' checkbox for that row.
+Each issue was fixed and protected by a regression test. The full reconciler now checks all five identifier types before creating any new person entity; the institutional name detector routes MARC~710 entries to the appropriate collection/ownership property; P8189 is gated on both authority-record prefix and \texttt{P31=Q5} (human); and placeholder titles are detected and replaced with shelfmark-based labels. Fourteen pre-upload validation checks in \texttt{item\_validator.py} block any item carrying a known failure pattern (empty label, anonymous person, kovetz placeholder, trailing punctuation, MARC-inverted label, institutional-as-person, P3959 on human, P8189 bad prefix, VIAF on non-person, multiple same-language P1559, no-identifier person, P1559 Latin-as-Hebrew, Hebrew label is Latin, ambiguous single name) from being approved in the GUI; every error-level finding disables the ``Approved'' checkbox for that row.
 
 Beyond data-quality checks, a secondary class of incident arose when an automated cleanup script modified items the pipeline had never created. To make this class of error structurally impossible, the uploader now enforces a \textbf{four-stage modification guard} (\texttt{CLAUDE.md} rule~38) gated by \textbf{three independent verification channels}. The four gates are: (1)~an entry-point check in \code{upload\_item()}; (2)~a re-assertion inside \code{\_build\_wbi\_item()} so new call paths cannot bypass gate~1; (3)~a per-statement identity-conflict check refusing any value that would create a multi-value conflict on an existing identifier; and (4)~a last-ditch check placed immediately before the single \code{wbi\_item.write()} call site in the code-base. Raising \code{UnauthorisedModificationError} at any gate converts the attempt into a clean \emph{skipped} result rather than a partial edit. The three verification channels, all cross-checked inside \code{\_is\_our\_item()}: (i)~the MediaWiki API's \code{prop=revisions\&rvdir=newer} endpoint for the authoritative first-revision author; (ii)~the MediaWiki API's \code{list=usercontribs\&uctype=new} endpoint as an independent confirmation that the authenticated user has a \emph{page-creation} edit on the QID; and (iii)~a Wikidata SPARQL \code{ASK} query confirming the QID still exists and has not been deleted, redirected, or blanked since reconciliation. A negative answer from any channel refuses the edit; a network failure on one channel does not unlock the gate as long as the primary revisions answer still agrees.
 
-The 232~unit tests in \texttt{test\_safety\_guards.py} serve as a regression barrier ensuring these classes of error cannot recur. Three of those tests are \emph{structural} rather than behavioural --- they fail if a future refactor introduces a second \code{wbi\_item.write()} call, separates the pre-write guard from the write, or re-introduces a marker-based creator fallback --- so the architecture of Rule~38 cannot be unintentionally weakened.
+The 545~unit tests in the safety/regression suite serve as a barrier ensuring these classes of error cannot recur. Three of those tests are \emph{structural} rather than behavioural --- they fail if a future refactor introduces a second \code{wbi\_item.write()} call, separates the pre-write guard from the write, or re-introduces a marker-based creator fallback --- so the architecture of Rule~38 cannot be unintentionally weakened.
 
 \subsection{Interactive Validation Workbench}
 
@@ -607,6 +633,8 @@ To make the full safety and validation architecture accessible to domain curator
 Every interactive validation surface (status-detail popup, claim editor, credential entry, full-screen browser) renders against a shared Liquid-Glass \code{GraphBackdrop} (CLAUDE.md rule~37) so the workbench visually reads as a single application rather than a stack of pop-up dialogs. The design aligns with the Apple HIG~2026 Liquid-Glass aesthetic.
 
 \textbf{Authority-match biodata comparison.} Reviewing authority matches (Mazal, VIAF, KIMA) against the source MARC record is a second bottleneck: each match carries a label, a source, and an ID, but the curator's approval decision hinges on biographical data --- dates, places, occupations, name variants in multiple scripts --- that is not surfaced in the row summary. We expose a per-row \emph{biodata-comparison dialog} (opened by a \textbf{🧬} icon next to the existing edit/source icons) with five tabs: \emph{Dates}, \emph{Places}, \emph{Names / variants}, \emph{Occupations}, and \emph{Raw}. All four data sources (MARC record, Mazal authority row, VIAF cluster JSON, KIMA place entry) flow through pure extractors that emit a common \code{BioData} dataclass, so the dialog renders side-by-side diff pills coloured by verdict --- \emph{matched}, \emph{differs}, \emph{only-in-MARC}, \emph{only-in-authority} --- after Unicode NFKC + case-fold normalisation. The MARC extractor is entity-scoped: given the specific row being reviewed, it retrieves only the fields belonging to the matched entity (author/contributor/place), using a token-overlap matcher that strips Hebrew name particles ``בן''/``בת'' and Latin particles ``de''/``di''/``ibn'' plus single-letter initials to avoid false positives across people with common patronymics. The \emph{Raw} tab shows both sides as pretty-printed JSON with cross-key value matches ($\ge 0.90$ similarity) highlighted in blue --- matches are detected on extracted scalar values regardless of which key they live under (so MARC's \code{occupations:["author"]} and an authority's \code{notes:["role: author"]} both light up), while purely structural JSON lines (empty objects, closing brackets) are excluded to prevent trivial matches from dominating the signal. VIAF cluster fetches run on \code{QThreadPool} with a 0.5s rate-limit gate; results cache process-wide by \code{(source, authority\_id)}; the MARC side renders synchronously on open so the dialog is usable before the authority fetch completes. Approve + Next buttons in the footer allow the curator to walk through all matches without dismissing the dialog, turning what was a 20-modal click-through into keyboard-paced review.
+
+\textbf{Auth-match table with field-origin Source column.} The Stage~3 review surface emits one row per data-bearing entry in the record: every MARC main or added entry (100/110/111/700/710/711), every NER entity from the three models, and every KIMA place lookup --- matched or not. Unmatched NER entities (the OWNER, DATE, WORK, FOLIO, and WORK\_AUTHOR rows that survive auto-approval but lack authority IDs) are kept visible so the curator reviews them in the same surface as the MARC matches, rather than only the ones that happened to resolve. The \emph{Source} column shows the field or pipeline of origin --- \texttt{MARC~100} for personal main entries, \texttt{MARC~710} for corporate added entries, \texttt{NER Author} for person-NER spans, \texttt{NER Owner} for provenance-NER OWNER spans, \texttt{KIMA Place} for Hebrew place lookups, and similarly for the other field/pipeline labels --- rather than the authority service that resolved the match (which the curator reads from the \texttt{matched\_id} and \texttt{wikidata\_qid} columns instead). This decoupling lets the curator filter by data origin (``show me every \texttt{NER Owner} row regardless of authority outcome'') and authority outcome (``show me every row with no Wikidata QID'') as independent axes, supporting the three-axis Source~$\times$~Type~$\times$~Role filter announced in §1.3.
 
 \subsection{Limitations}
 
