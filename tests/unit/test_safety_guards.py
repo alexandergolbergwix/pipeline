@@ -3263,6 +3263,85 @@ def _is_hebrew_only(text: str) -> bool:
     return all(c == " " or "\u0590" <= c <= "\u05ff" for c in text)
 
 
+class TestLoadValidatedFileDictIssuesCrash:
+    """Bug fix 2026-05-08: clicking Load Data on a saved
+    `*_wikidata_verified.json` file crashed the Wikidata Studio because
+    update_validation stored the JSON's plain-dict issues directly into
+    r["issues"], then the COL_ISSUES rendering (`i.severity`) and
+    worst_severity raised AttributeError on dict access. Fix is the
+    `_issues_from_json` coercion helper called from update_validation."""
+
+    def test_issues_from_json_coerces_dicts_to_dataclass(self) -> None:
+        from mhm_pipeline.gui.widgets.qp_entity_browser import _issues_from_json
+        from converter.wikidata.item_validator import ValidationIssue, worst_severity
+
+        dict_issues = [
+            {"severity": "error", "code": "HE_LABEL_IS_LATIN", "message": "x", "reference": "ref"},
+            {"severity": "warning", "code": "SOMETHING", "message": "y", "reference": ""},
+        ]
+        coerced = _issues_from_json(dict_issues)
+        assert all(isinstance(i, ValidationIssue) for i in coerced)
+        assert worst_severity(coerced) == "error"
+        # Attribute access (i.severity) must work — that's what crashed before.
+        assert coerced[0].severity == "error"
+        assert coerced[0].code == "HE_LABEL_IS_LATIN"
+
+    def test_issues_from_json_idempotent_on_dataclass(self) -> None:
+        """If issues are already ValidationIssue instances, no re-wrapping."""
+        from mhm_pipeline.gui.widgets.qp_entity_browser import _issues_from_json
+        from converter.wikidata.item_validator import ValidationIssue
+
+        issues = [ValidationIssue("error", "X", "msg", "")]
+        coerced = _issues_from_json(issues)
+        assert coerced[0] is issues[0]
+
+    def test_issues_from_json_handles_none_and_empty(self) -> None:
+        from mhm_pipeline.gui.widgets.qp_entity_browser import _issues_from_json
+        assert _issues_from_json(None) == []
+        assert _issues_from_json([]) == []
+
+    def test_update_validation_coerces_dict_issues_from_payload(self) -> None:
+        """Full end-to-end: model.update_validation on a payload carrying
+        dict-form validator_issues must store them as dataclass instances —
+        otherwise COL_ISSUES rendering crashes."""
+        # Avoid Qt import side effects in headless CI by guarding under app.
+        from PyQt6.QtWidgets import QApplication
+
+        from mhm_pipeline.gui.widgets.qp_entity_browser import QPEntityModel
+        from converter.wikidata.item_builder import WikidataItem
+        from converter.wikidata.item_validator import ValidationIssue
+
+        app = QApplication.instance() or QApplication([])
+        _ = app  # silence "unused"
+        item = WikidataItem(
+            entity_type="work",
+            local_id="work:bible",
+            labels={"he": "Bible"},
+        )
+        model = QPEntityModel()
+        model.load([item])
+        # Simulate the JSON-deserialised payload format
+        payload = {
+            "status": "new",
+            "validator_issues": [
+                {
+                    "severity": "error",
+                    "code": "HE_LABEL_IS_LATIN",
+                    "message": "Hebrew label slot contains Latin-only text 'Bible'",
+                    "reference": "https://www.wikidata.org/wiki/Help:Label",
+                },
+            ],
+        }
+        model.update_validation("work:bible", payload)
+        stored = model._rows[0]["issues"]
+        assert all(isinstance(i, ValidationIssue) for i in stored), (
+            f"update_validation must coerce dict issues to ValidationIssue, "
+            f"got types: {[type(i).__name__ for i in stored]}"
+        )
+        # And severity rolled up correctly
+        assert model._rows[0]["severity"] == "error"
+
+
 class TestSetLabelsRefactorPreservesPastFixes:
     """Regression sweep: my 2026-05-08 refactor of _set_labels (Latin-script
     routing) must not regress any of the past Wikidata-community-reported

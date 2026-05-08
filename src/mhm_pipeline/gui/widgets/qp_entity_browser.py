@@ -190,6 +190,40 @@ def _glass_table_style(theme_mod: Any) -> str:
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _issues_from_json(items: list[Any] | None) -> list[Any]:
+    """Coerce a list of issue-dicts (as deserialised from a saved validated
+    JSON) back into ``ValidationIssue`` dataclass instances. The COL_ISSUES
+    rendering and ``worst_severity`` use attribute access (``i.severity``);
+    leaving raw dicts in ``r["issues"]`` crashes the panel when the user
+    clicks Load Data on a saved file. Idempotent — already-dataclass items
+    pass through unchanged.
+    """
+    if not items:
+        return []
+    from converter.wikidata.item_validator import ValidationIssue  # noqa: PLC0415
+
+    out: list[Any] = []
+    for it in items:
+        if isinstance(it, ValidationIssue):
+            out.append(it)
+            continue
+        if isinstance(it, dict):
+            out.append(ValidationIssue(
+                severity=str(it.get("severity", "")),
+                code=str(it.get("code", "")),
+                message=str(it.get("message", "")),
+                reference=str(it.get("reference", "")),
+            ))
+            continue
+        out.append(ValidationIssue(
+            severity=str(getattr(it, "severity", "") or ""),
+            code=str(getattr(it, "code", "") or ""),
+            message=str(getattr(it, "message", "") or ""),
+            reference=str(getattr(it, "reference", "") or ""),
+        ))
+    return out
+
+
 def serialize_validated_rows(rows: list[dict]) -> list[dict]:
     """Serialise ``QPEntityModel._rows`` entries to a JSON-friendly list.
 
@@ -525,9 +559,14 @@ class QPEntityModel(QAbstractTableModel):
                 if k in payload:
                     r[k] = payload[k]
             # Validator issues may have been re-run with live data;
-            # refresh severity to match.
+            # refresh severity to match. When the payload arrives via the
+            # JSON load path (`_load_validated_file`), the issues are plain
+            # dicts — coerce them back to ValidationIssue dataclass instances
+            # so attribute access (i.severity) in the COL_ISSUES rendering +
+            # worst_severity does not crash the panel.
             fresh_issues = payload.get("validator_issues")
             if fresh_issues is not None:
+                fresh_issues = _issues_from_json(fresh_issues)
                 r["issues"] = fresh_issues
                 from converter.wikidata.item_validator import worst_severity  # noqa: PLC0415
                 r["severity"] = worst_severity(fresh_issues)
