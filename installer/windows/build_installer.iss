@@ -19,8 +19,13 @@ DefaultDirName={autopf}\MHMPipeline
 DefaultGroupName=MHM Pipeline
 OutputDir=dist
 OutputBaseFilename=MHMPipeline-Setup-0.1.0
-Compression=lzma2/ultra64
+; lzma2/normal is ~3x faster than ultra64 on UTM ARM-emulated x86
+; (single-threaded LZMA hits the emulation tax hard); installer grows
+; from ~4 GB to ~5 GB. Switch back to ultra64 only when bandwidth /
+; storage on the supervisor side is critical.
+Compression=lzma2/normal
 SolidCompression=yes
+LZMAUseSeparateProcess=yes
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
 LicenseFile=installer\windows\LICENSE.rtf
