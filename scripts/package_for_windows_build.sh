@@ -93,6 +93,23 @@ cp -R "$JOINT_SRC" "$STAGING/models/hebrew-manuscript-joint-ner-v2"
 echo "  Copying dictabert..."
 cp -R "$DICTA_SRC" "$STAGING/models/dictabert"
 
+# `cp -R` on macOS BSD dereferences HF cache symlinks: each blob ends up on
+# disk twice — once at `blobs/<sha>` and once at `snapshots/<rev>/<file>`
+# (formerly a symlink → blob). PyInstaller then bundles BOTH copies, doubling
+# the joint-NER (2.1 GB → 4.2 GB) and DictaBERT (709 MB → 1.4 GB) payloads
+# and pushing the Inno Setup output past its 4.2 GB single-file ceiling.
+#
+# Drop `blobs/` since the snapshot files already contain the actual content.
+# Transformers' loader resolves via `snapshots/<rev>/<filename>` and is happy
+# without `blobs/`. Saves ~3 GB on the staged tree, ~1.5 GB on the final
+# Setup.exe, and lets faster compression levels fit under the ceiling.
+echo "  Deduplicating HF cache (dropping blobs/ — snapshot copies suffice)..."
+for hf_dir in "$STAGING/models/hebrew-manuscript-joint-ner-v2" "$STAGING/models/dictabert"; do
+  if [ -d "$hf_dir/blobs" ]; then
+    rm -rf "$hf_dir/blobs"
+  fi
+done
+
 echo
 echo "[4/4] Zipping (fastest compression — final compression happens in Inno Setup)..."
 cd "${ROOT}/dist"
