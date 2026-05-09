@@ -281,8 +281,21 @@ _GENRE_CLASSIFIER: object | None = "unloaded"
 def _get_genre_classifier() -> object | None:
     global _GENRE_CLASSIFIER
     if _GENRE_CLASSIFIER == "unloaded":
-        model_path = Path(__file__).resolve().parent.parent.parent / "ner" / "genre_classifier_model.pt"
-        if model_path.exists():
+        # PyInstaller-frozen exe stages the .pt under sys._MEIPASS/ner/;
+        # the dev / .app fallback is the repo-relative path.
+        model_path: Path | None = None
+        try:
+            from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+            frozen = bundled_resource_root() / "ner" / "genre_classifier_model.pt"
+            if frozen.exists():
+                model_path = frozen
+        except Exception:
+            pass
+        if model_path is None:
+            dev = Path(__file__).resolve().parent.parent.parent / "ner" / "genre_classifier_model.pt"
+            if dev.exists():
+                model_path = dev
+        if model_path is not None:
             try:
                 from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
                 _GENRE_CLASSIFIER = GenreClassifier(str(model_path))

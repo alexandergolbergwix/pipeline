@@ -25,16 +25,28 @@ logger = logging.getLogger(__name__)
 def _find_classifier_weights(filename: str) -> Path | None:
     """Locate a ``.pt`` file for one of the sentence / genre classifiers.
 
-    Search order: repo layout (``<repo>/ner/<filename>``) → bundle layout
-    (``.app/Contents/Resources/pipeline/ner/<filename>`` or
-    ``…/Contents/Resources/models/<filename>``). Returns None if missing.
+    Search order:
+      1. PyInstaller frozen bundle: ``sys._MEIPASS/ner/<filename>``.
+      2. Repo / pipeline layout: ``<repo>/ner/<filename>``.
+      3. macOS .app bundle: ``.app/Contents/Resources/pipeline/ner/<filename>``
+         or ``…/Contents/Resources/models/<filename>``.
+    Returns None if not found anywhere.
     """
-    # Repo / pipeline layout
+    from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+
+    # 1. PyInstaller-frozen Windows / Linux exe — the spec bundles the .pt
+    #    files into _internal/ner/, which bundled_resource_root() resolves to.
+    bundled = bundled_resource_root() / "ner" / filename
+    if bundled.exists():
+        return bundled
+
+    # 2. Repo / pipeline layout (development, or when launched from source).
     here = Path(__file__).resolve()
     primary = here.parents[3] / "ner" / filename
     if primary.exists():
         return primary
-    # macOS bundle: walk up to find .app
+
+    # 3. macOS .app bundle (Resources/pipeline or Resources/models layout).
     for parent in Path(__file__).parents:
         if parent.name.endswith(".app"):
             for rel in (
@@ -337,11 +349,23 @@ class NerWorker(StageWorker):
         if from_env and Path(from_env).exists():
             return from_env
 
+        filename = Path(fallback).name
+
+        # PyInstaller-frozen Windows / Linux bundle. The spec stages the
+        # NER weights into _internal/ner/<filename>; bundled_resource_root()
+        # returns sys._MEIPASS so this resolves correctly inside the .exe.
+        try:
+            from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+            frozen = bundled_resource_root() / "ner" / filename
+            if frozen.exists():
+                return str(frozen)
+        except Exception:
+            pass
+
         # Auto-discover from the macOS .app bundle. We walk up from
         # ``__file__`` (never resolved — so symlinks into Homebrew don't
         # escape the bundle) looking for the first ``.app`` ancestor,
         # then try ``Contents/Resources/models/<filename>`` there.
-        filename = Path(fallback).name
         try:
             here = Path(__file__)
             for parent in here.parents:

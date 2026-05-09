@@ -72,6 +72,20 @@ class NerPanel(QWidget):
         layout.addWidget(self._output_selector)
 
         # ── NER Models — stored as instance fields, shown in popup ────
+        # All four .pt classifiers are resolved through bundled_resource_root()
+        # so detection works in PyInstaller-frozen mode (where __file__-based
+        # parents[4] traversal lands one directory off because frozen has no
+        # `src/` layer). Hardcoded `setChecked(True)` for Provenance / Contents
+        # was lying when the bundle was missing those weights — they now use
+        # the real existence check, same as Genre / MARC500.
+        from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+
+        _ner_root = bundled_resource_root() / "ner"
+        _prov_path = _ner_root / "provenance_ner_model.pt"
+        _cont_path = _ner_root / "contents_ner_model.pt"
+        _marc500_path = _ner_root / "marc500_classifier_model.pt"
+        _genre_path = _ner_root / "genre_classifier_model.pt"
+
         person_default = os.environ.get("MHM_BUNDLED_NER_MODEL", "")
         self._person_check = QCheckBox()
         self._person_check.setChecked(True)
@@ -79,22 +93,28 @@ class NerPanel(QWidget):
 
         prov_default = os.environ.get("MHM_BUNDLED_PROVENANCE_MODEL", "")
         self._prov_check = QCheckBox()
-        self._prov_check.setChecked(True)
-        self._prov_model_edit = QLineEdit(prov_default if prov_default else "(auto-detect)")
+        self._prov_check.setChecked(_prov_path.exists() or bool(prov_default))
+        self._prov_model_edit = QLineEdit(
+            prov_default if prov_default
+            else str(_prov_path) if _prov_path.exists()
+            else "(not found — provenance NER unavailable)"
+        )
 
         cont_default = os.environ.get("MHM_BUNDLED_CONTENTS_MODEL", "")
         self._cont_check = QCheckBox()
-        self._cont_check.setChecked(True)
-        self._cont_model_edit = QLineEdit(cont_default if cont_default else "(auto-detect)")
+        self._cont_check.setChecked(_cont_path.exists() or bool(cont_default))
+        self._cont_model_edit = QLineEdit(
+            cont_default if cont_default
+            else str(_cont_path) if _cont_path.exists()
+            else "(not found — contents NER unavailable)"
+        )
 
-        _marc500_path = Path(__file__).resolve().parents[4] / "ner" / "marc500_classifier_model.pt"
         self._marc500_check = QCheckBox()
         self._marc500_check.setChecked(_marc500_path.exists())
         self._marc500_model_edit = QLineEdit(
             str(_marc500_path) if _marc500_path.exists() else "(not found — keyword fallback)"
         )
 
-        _genre_path = Path(__file__).resolve().parents[4] / "ner" / "genre_classifier_model.pt"
         self._genre_check = QCheckBox()
         self._genre_check.setChecked(_genre_path.exists())
         self._genre_model_edit = QLineEdit(
