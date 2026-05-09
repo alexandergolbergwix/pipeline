@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
-import datetime
-import logging
 import os
 import sys
-from pathlib import Path
 
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication
+# PyInstaller windowed builds (`console=False`) have `sys.stdout` and
+# `sys.stderr` set to `None`. tqdm / transformers / huggingface_hub call
+# `.isatty()` on them, which crashes Stage 2 with
+# "'NoneType' object has no attribute 'isatty'". Replace both with
+# `os.devnull` writers so every standard file method (write, flush,
+# isatty, fileno) is safe. Must happen before importing PyQt or anything
+# that may pull in transformers / torch.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+
+import datetime  # noqa: E402
+import logging  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from PyQt6.QtGui import QIcon  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from mhm_pipeline.platform_.paths import app_log_dir, ensure_app_dirs
 from mhm_pipeline.settings.settings_manager import SettingsManager
