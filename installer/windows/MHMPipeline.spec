@@ -141,6 +141,14 @@ hiddenimports = [
     'certifi',
     'charset_normalizer',
     'idna',
+
+    # ner/ is not a package (no __init__.py) — these are loose modules that
+    # the inference pipeline imports without the `ner.` prefix when frozen.
+    'postprocessing_rules',
+    'entity_normalize',
+    'inference_pipeline',
+    'ner_inference_pipeline',
+    'marc500_sentence_model',
 ]
 
 
@@ -178,7 +186,7 @@ block_cipher = None
 
 a = Analysis(
     [str(_REPO / 'src' / 'mhm_pipeline' / 'app.py')],
-    pathex=[str(_REPO), str(_REPO / 'src')],
+    pathex=[str(_REPO), str(_REPO / 'src'), str(_REPO / 'ner')],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

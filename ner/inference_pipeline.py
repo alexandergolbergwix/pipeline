@@ -5,15 +5,16 @@ Unified interface for NER and role classification with post-processing
 
 import torch
 from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoModelForSequenceClassification
-from postprocessing_rules import PostProcessingRules
 import argparse
 from typing import List, Dict, Tuple
 import json
 
 try:
     # Source-tree layout (PYTHONPATH=src:. or installed package).
+    from ner.postprocessing_rules import PostProcessingRules
     from ner.entity_normalize import normalize_entity_text
 except ImportError:  # pragma: no cover — bundle layout where ner/ is sys.path[0]
+    from postprocessing_rules import PostProcessingRules
     from entity_normalize import normalize_entity_text
 
 
