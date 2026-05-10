@@ -15,6 +15,8 @@ try:
 except ImportError:  # pragma: no cover - only true outside PyInstaller
     pass
 
+from PyInstaller.utils.hooks import copy_metadata
+
 # ---------------------------------------------------------------------------
 # Bundled data — mirrors installer/macos/build_app.sh asset list.
 # Each tuple is (source_path_relative_to_repo_root, dest_path_inside_bundle).
@@ -40,6 +42,27 @@ def _opt_dir(src: str, dst: str) -> list:
 
 
 datas = []
+
+# Package distribution metadata (.dist-info/METADATA).
+# Without these, `importlib.metadata.version("foo")` returns None inside the
+# frozen bundle, which crashes transformers' compatibility checks at startup
+# with "Unable to compare versions for huggingface-hub>=1.5.0,<2.0:
+# need=1.5.0 found=None". Every package whose version is read at runtime by
+# transformers, huggingface_hub, tokenizers, pyshacl, etc. needs its metadata
+# bundled. Use copy_metadata() so PyInstaller resolves the .dist-info path
+# against the build venv automatically.
+for _pkg in (
+    'transformers', 'huggingface_hub', 'tokenizers', 'safetensors',
+    'torch', 'numpy', 'requests', 'tqdm', 'packaging', 'filelock',
+    'PyYAML', 'regex', 'pyshacl', 'rdflib', 'pymarc', 'wikibaseintegrator',
+):
+    try:
+        datas += copy_metadata(_pkg)
+    except Exception:
+        # Package not installed in the build venv — skip silently. The
+        # runtime importer will only ask for metadata if the import path
+        # is reachable, so a missing optional package is harmless.
+        pass
 
 # Authority databases (required for Stage 3).
 datas += _opt('converter/authority/mazal_index.db', 'converter/authority')
