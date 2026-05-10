@@ -272,6 +272,7 @@ class JointNERPipeline:
     _DROPOUT = 0.3
 
     def __init__(self, model_path: str, device: str = 'auto') -> None:
+        import os as _os
         import sys as _sys
         import torch
         from pathlib import Path as _Path
@@ -292,12 +293,18 @@ class JointNERPipeline:
         else:
             self.device = torch.device(device)
 
-        print(f"Loading tokenizer from {self._BASE_MODEL}")
-        self.tokenizer = AutoTokenizer.from_pretrained(self._BASE_MODEL)
+        # Honour MHM_BUNDLED_DICTABERT — set by app.py / launcher.sh / launcher.m
+        # to a local flat directory containing config.json + model.safetensors so
+        # transformers reads off disk and never goes to the network. Falls back
+        # to the HF repo id when the env var is unset (development).
+        bert_path = _os.environ.get("MHM_BUNDLED_DICTABERT", self._BASE_MODEL)
 
-        print(f"Initialising JointModel ({self._BASE_MODEL})")
+        print(f"Loading tokenizer from {bert_path}")
+        self.tokenizer = AutoTokenizer.from_pretrained(bert_path)
+
+        print(f"Initialising JointModel ({bert_path})")
         self.model = JointModel(
-            bert_model_name=self._BASE_MODEL,
+            bert_model_name=bert_path,
             num_ner_labels=self._NUM_NER_LABELS,
             num_class_labels=self._NUM_CLASS_LABELS,
             dropout=self._DROPOUT,
