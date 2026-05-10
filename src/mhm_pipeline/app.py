@@ -73,11 +73,40 @@ def _set_macos_process_name() -> None:
         pass
 
 
+def _set_bundled_model_env_if_frozen() -> None:
+    """When frozen, point the inference wrappers at the bundled local model
+    directories (so `transformers.from_pretrained(...)` reads files off disk
+    and never goes to the network). Runs unconditionally on every launch —
+    env vars are not persisted between processes, and the macOS launcher
+    does the equivalent in shell.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+
+    root = bundled_resource_root()
+    bundle_paths = {
+        "MHM_BUNDLED_DICTABERT": root / "models" / "dictabert",
+        "MHM_BUNDLED_NER_MODEL": root / "models" / "hebrew-manuscript-joint-ner-v2",
+        "MHM_BUNDLED_PROVENANCE_MODEL": root / "ner" / "provenance_ner_model.pt",
+        "MHM_BUNDLED_CONTENTS_MODEL": root / "ner" / "contents_ner_model.pt",
+    }
+    for var, path in bundle_paths.items():
+        if path.exists():
+            os.environ.setdefault(var, str(path))
+
+    # Belt-and-braces: even if a wrapper still uses the HF model id,
+    # force transformers to look in the bundle's models/ dir (with HF
+    # cache layout) and never go online.
+    if (root / "models").exists():
+        os.environ.setdefault("HF_HOME", str(root / "models"))
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+
 def _auto_complete_first_run_if_bundled(settings: SettingsManager) -> None:
     """Skip the first-run wizard if the app is frozen by PyInstaller and all
-    bundled models are present at the expected paths. Sets HF offline env vars
-    so transformers / huggingface_hub never try to fetch from the network.
-    """
+    bundled models are present at the expected paths."""
     if not getattr(sys, "frozen", False):
         return
     if settings.first_run_done:
@@ -95,9 +124,6 @@ def _auto_complete_first_run_if_bundled(settings: SettingsManager) -> None:
     ]
     if all(p.exists() for p in required):
         settings.first_run_done = True
-        os.environ["HF_HOME"] = str(root / "models")
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        os.environ["HF_HUB_OFFLINE"] = "1"
 
 
 def _append_crash_log(traceback_text: str) -> None:
@@ -128,6 +154,7 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(_ICON_PATH)))
 
     settings = SettingsManager()
+    _set_bundled_model_env_if_frozen()
     _auto_complete_first_run_if_bundled(settings)
     _configure_logging(settings.log_level)
 

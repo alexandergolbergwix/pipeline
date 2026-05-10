@@ -88,27 +88,35 @@ if [ ! -d "$DICTA_SRC" ]; then
 fi
 
 mkdir -p "$STAGING/models"
-echo "  Copying hebrew-manuscript-joint-ner-v2..."
-cp -R "$JOINT_SRC" "$STAGING/models/hebrew-manuscript-joint-ner-v2"
-echo "  Copying dictabert..."
-cp -R "$DICTA_SRC" "$STAGING/models/dictabert"
 
-# `cp -R` on macOS BSD dereferences HF cache symlinks: each blob ends up on
-# disk twice — once at `blobs/<sha>` and once at `snapshots/<rev>/<file>`
-# (formerly a symlink → blob). PyInstaller then bundles BOTH copies, doubling
-# the joint-NER (2.1 GB → 4.2 GB) and DictaBERT (709 MB → 1.4 GB) payloads
-# and pushing the Inno Setup output past its 4.2 GB single-file ceiling.
+# Flatten the HF cache snapshot into a top-level model directory so that
+# `transformers.from_pretrained("models/<name>")` finds config.json /
+# model.safetensors at the root — the same layout the macOS .app uses.
 #
-# Drop `blobs/` since the snapshot files already contain the actual content.
-# Transformers' loader resolves via `snapshots/<rev>/<filename>` and is happy
-# without `blobs/`. Saves ~3 GB on the staged tree, ~1.5 GB on the final
-# Setup.exe, and lets faster compression levels fit under the ceiling.
-echo "  Deduplicating HF cache (dropping blobs/ — snapshot copies suffice)..."
-for hf_dir in "$STAGING/models/hebrew-manuscript-joint-ner-v2" "$STAGING/models/dictabert"; do
-  if [ -d "$hf_dir/blobs" ]; then
-    rm -rf "$hf_dir/blobs"
+# This (a) fixes the Windows-only bug where transformers couldn't locate
+# the model files inside the HF-cache snapshot/blobs structure, and
+# (b) implicitly drops blobs/, which would otherwise double the payload
+# after `cp -R` dereferences symlinks (saves ~3 GB on the bundle and
+# keeps the Inno Setup payload under its 4.2 GB single-file ceiling).
+flatten_hf_snapshot() {
+  local src="$1"   # source HF cache dir, e.g. ~/.cache/huggingface/hub/models--owner--name
+  local dest="$2"  # flattened destination, e.g. .../models/name
+  local snapshot_dir
+  snapshot_dir=$(ls -d "$src/snapshots/"*/ 2>/dev/null | head -1)
+  if [ -z "$snapshot_dir" ]; then
+    echo "ERROR: no snapshot directory under $src/snapshots/" >&2
+    return 1
   fi
-done
+  mkdir -p "$dest"
+  # cp -L follows symlinks (HF cache snapshot files are symlinks to blobs/),
+  # producing a real flat directory of model files at $dest.
+  cp -RL "$snapshot_dir"/. "$dest/"
+}
+
+echo "  Flattening hebrew-manuscript-joint-ner-v2 snapshot..."
+flatten_hf_snapshot "$JOINT_SRC" "$STAGING/models/hebrew-manuscript-joint-ner-v2"
+echo "  Flattening dictabert snapshot..."
+flatten_hf_snapshot "$DICTA_SRC" "$STAGING/models/dictabert"
 
 echo
 echo "[4/4] Zipping (fastest compression — final compression happens in Inno Setup)..."
