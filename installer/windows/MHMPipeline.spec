@@ -52,9 +52,19 @@ datas = []
 # bundled. Use copy_metadata() so PyInstaller resolves the .dist-info path
 # against the build venv automatically.
 for _pkg in (
+    # Transformers' import-time hard-checks (all 9 mandatory):
     'transformers', 'huggingface_hub', 'tokenizers', 'safetensors',
-    'torch', 'numpy', 'requests', 'tqdm', 'packaging', 'filelock',
-    'PyYAML', 'regex', 'pyshacl', 'rdflib', 'pymarc', 'wikibaseintegrator',
+    'torch', 'numpy', 'tqdm', 'packaging', 'filelock', 'PyYAML', 'regex',
+    # Pyshacl / rdflib pipeline deps:
+    'pyshacl', 'rdflib', 'owlrl', 'isodate', 'pyparsing',
+    # MARC + Wikidata:
+    'pymarc', 'wikibaseintegrator',
+    # HTTP / SSL / encoding chain (requests + urllib3):
+    'requests', 'urllib3', 'certifi', 'charset_normalizer', 'idna',
+    # Optional ML deps that transformers may probe at runtime:
+    'jinja2', 'scipy', 'pandas', 'protobuf', 'sentencepiece',
+    # GUI + platform dirs:
+    'PyQt6', 'platformdirs',
 ):
     try:
         datas += copy_metadata(_pkg)
