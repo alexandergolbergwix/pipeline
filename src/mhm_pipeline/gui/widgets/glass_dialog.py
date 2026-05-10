@@ -76,12 +76,17 @@ class GlassDialog(QDialog):
 
 
 def glass_table_style(theme_mod: Any) -> str:
-    """Translucent QTableView QSS so the backdrop reads through the table."""
+    """Translucent QTableView QSS so the backdrop reads through the table.
+
+    Text is hard-coded light (#e5e7eb) because the ``GraphBackdrop`` is
+    always dark — using ``theme.ui('text')`` would return dark in OS-light
+    mode and produce invisible text on the dark glass backdrop.
+    """
     return (
         f"QTableView {{"
         f" background: rgba(0,0,0, 90);"
         f" alternate-background-color: rgba(255,255,255, 10);"
-        f" color: {theme_mod.ui('text')};"
+        f" color: #e5e7eb;"
         f" gridline-color: rgba(255,255,255, 18);"
         f" border: 1px solid rgba(255,255,255, 22);"
         f" border-radius: {theme_mod.RADIUS_MD}px;"
@@ -90,7 +95,7 @@ def glass_table_style(theme_mod: Any) -> str:
         f" }}"
         f"QHeaderView::section {{"
         f" background: rgba(255,255,255, 12);"
-        f" color: {theme_mod.ui('text')};"
+        f" color: #e5e7eb;"
         f" padding: 6px 8px;"
         f" border: none;"
         f" border-bottom: 1px solid rgba(255,255,255, 22);"
@@ -99,6 +104,10 @@ def glass_table_style(theme_mod: Any) -> str:
         f"QTableView::item {{"
         f" padding: 4px 8px;"
         f" border: none;"
+        f" color: #e5e7eb;"
+        f" }}"
+        f"QTableView::item:selected {{"
+        f" color: white;"
         f" }}"
         f"QTableCornerButton::section {{"
         f" background: rgba(255,255,255, 10);"

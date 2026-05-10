@@ -1151,11 +1151,23 @@ QHeaderView::section {{
 QTableView {{
     background: transparent;
     alternate-background-color: {tab_bg};
+    color: {input_text};
     gridline-color: {rim};
     border: 1px solid {rim};
     border-radius: {RADIUS_LG}px;
     selection-background-color: {sidebar_sel_t};
     selection-color: white;
+}}
+/* Default delegate honours `color:` from the table rule, so cells without
+   an explicit ForegroundRole on the model render with the theme's input_text
+   colour — matching the dialog/window gradient. Without this rule the cell
+   falls back to QPalette.text() which on Windows light mode is dark, and
+   the QSS-driven dialog background is dark, producing invisible cells.   */
+QTableView::item {{
+    color: {input_text};
+}}
+QTableView::item:selected {{
+    color: white;
 }}
 
 /* ─── Checkboxes (subtle 14-px square, accent only on checked) ─── */
