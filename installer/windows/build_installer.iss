@@ -34,8 +34,14 @@ ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
 LicenseFile=installer\windows\LICENSE.rtf
 SetupIconFile=installer\windows\mhm_pipeline.ico
-WizardStyle=modern
-DiskSpanning=no
+; The bundle now includes the full HF model weights (joint-ner-v2 ~2.2 GB +
+; dictabert ~738 MB + four ~700 MB classifier .pt files + ~1 GB Mazal DB),
+; so the LZMA-compressed payload may exceed the 4.2 GB single-file Setup.exe
+; ceiling. DiskSpanning=yes lets Inno Setup split into Setup.exe + Setup-1.bin
+; (etc.) when needed; if the payload still fits in one file, only Setup.exe
+; is produced — so this is a safe, no-downside enabler.
+DiskSpanning=yes
+DiskSliceSize=4000000000
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\MHMPipeline.exe
 UninstallDisplayName=MHM Pipeline
