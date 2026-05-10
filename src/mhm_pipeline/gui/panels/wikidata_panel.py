@@ -51,7 +51,8 @@ def _check_existing_items(input_path: Path, token: str) -> dict:
     import sys  # noqa: PLC0415
     from pathlib import Path as _Path  # noqa: PLC0415
 
-    repo_root = _Path(__file__).resolve().parents[4]
+    from mhm_pipeline.platform_.paths import bundled_resource_root as _root  # noqa: PLC0415
+    repo_root = _root()
     for p in (str(repo_root), str(repo_root / "src")):
         if p not in sys.path:
             sys.path.insert(0, p)

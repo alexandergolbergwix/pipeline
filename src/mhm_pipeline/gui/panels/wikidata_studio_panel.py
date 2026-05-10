@@ -90,7 +90,8 @@ class _BuildWorker(QThread):
             import sys as _sys  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
 
-            _repo = _Path(__file__).resolve().parents[4]
+            from mhm_pipeline.platform_.paths import bundled_resource_root as _root  # noqa: PLC0415
+            _repo = _root()
             if str(_repo) not in _sys.path:
                 _sys.path.insert(0, str(_repo))
 
@@ -159,7 +160,8 @@ class _ValidationWorker(QThread):
             import time as _time  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
 
-            _repo = _Path(__file__).resolve().parents[4]
+            from mhm_pipeline.platform_.paths import bundled_resource_root as _root  # noqa: PLC0415
+            _repo = _root()
             if str(_repo) not in _sys.path:
                 _sys.path.insert(0, str(_repo))
             if str(_repo / "src") not in _sys.path:
@@ -871,7 +873,8 @@ class WikidataStudioPanel(QWidget):
             import sys as _sys  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
 
-            _repo = _Path(__file__).resolve().parents[4]
+            from mhm_pipeline.platform_.paths import bundled_resource_root as _root  # noqa: PLC0415
+            _repo = _root()
             if str(_repo) not in _sys.path:
                 _sys.path.insert(0, str(_repo))
             from converter.transformer.mapper import MarcToRdfMapper  # noqa: PLC0415

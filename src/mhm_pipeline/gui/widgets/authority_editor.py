@@ -1426,12 +1426,9 @@ class AuthorityEditor(QWidget):
         on the steady state this only fires on the first miss per
         authority ID.
         """
-        from pathlib import Path as _Path  # noqa: PLC0415
+        from mhm_pipeline.platform_.paths import bundled_resource_root as _root  # noqa: PLC0415
 
-        db_path = str(
-            _Path(__file__).resolve().parents[4]
-            / "converter/authority/mazal_index.db"
-        )
+        db_path = str(_root() / "converter" / "authority" / "mazal_index.db")
 
         def _fetch(auth_id: str) -> dict | None:
             try:

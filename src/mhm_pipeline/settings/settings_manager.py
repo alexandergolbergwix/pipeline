@@ -31,8 +31,12 @@ class SettingsManager:
     KIMA_TSV_DIR = "authority/kima_tsv_dir"
 
     # Repo-relative defaults (resolved at class definition time so they survive
-    # being imported from any working directory).
-    _REPO_ROOT = Path(__file__).parents[3]
+    # being imported from any working directory). When frozen by PyInstaller
+    # the data files live inside sys._MEIPASS, not relative to this source
+    # file — bundled_resource_root() handles both layouts.
+    from mhm_pipeline.platform_.paths import bundled_resource_root as _bundled_root_fn
+    _REPO_ROOT = _bundled_root_fn()
+    del _bundled_root_fn
     _DEFAULT_MAZAL_DB = _REPO_ROOT / "converter" / "authority" / "mazal_index.db"
     _DEFAULT_MAZAL_XML = _REPO_ROOT / "data" / "NLI_AUTHORITY_XML"
     _DEFAULT_KIMA_DB = _REPO_ROOT / "data" / "kima" / "kima_index.db"

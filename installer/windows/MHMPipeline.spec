@@ -149,6 +149,8 @@ hiddenimports = [
     'inference_pipeline',
     'ner_inference_pipeline',
     'marc500_sentence_model',
+    'genre_classifier_model',
+    'train_ner_model_kfold',
 ]
 
 

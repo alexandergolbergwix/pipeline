@@ -33,7 +33,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-_repo = Path(__file__).resolve().parents[4]
+from mhm_pipeline.platform_.paths import bundled_resource_root as _root_fn  # noqa: E402
+_repo = _root_fn()
 for _p in (str(_repo), str(_repo / "src")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
