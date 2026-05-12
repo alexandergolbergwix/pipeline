@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QLabel,
     QListWidget,
@@ -102,12 +103,186 @@ class MainWindow(QMainWindow):
         cancel_action.triggered.connect(self._controller.cancel)
         pipeline_menu.addAction(cancel_action)
 
+        # Settings
+        self._build_settings_menu(menu_bar)
+
         # Help
         help_menu = menu_bar.addMenu("&Help")
         assert help_menu is not None
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+
+    def _build_settings_menu(self, menu_bar: object) -> None:
+        """Settings menu — Appearance / Log level / GPU device / utilities.
+
+        Keep it a top-level menu (not under File or Help) per the user's
+        explicit request that it sits next to "File" on both macOS and
+        Windows. macOS will still let users press the standard Cmd+, but
+        the menu remains visible in the global menu bar.
+        """
+        settings_menu = menu_bar.addMenu("&Settings")  # type: ignore[attr-defined]
+        assert settings_menu is not None
+
+        # ── Appearance ──────────────────────────────────────────────────
+        appearance_menu = settings_menu.addMenu("&Appearance")
+        assert appearance_menu is not None
+        self._appearance_group = QActionGroup(self)
+        self._appearance_group.setExclusive(True)
+        current_theme = self._settings.theme
+        for label, value in (
+            ("&System Default", "system"),
+            ("&Dark", "dark"),
+            ("&Light", "light"),
+        ):
+            action = QAction(label, self, checkable=True)
+            action.setData(value)
+            action.setChecked(current_theme == value)
+            action.triggered.connect(
+                lambda _checked=False, v=value: self._on_theme_change(v)
+            )
+            self._appearance_group.addAction(action)
+            appearance_menu.addAction(action)
+
+        # ── Log level ───────────────────────────────────────────────────
+        log_menu = settings_menu.addMenu("&Log Level")
+        assert log_menu is not None
+        self._log_level_group = QActionGroup(self)
+        self._log_level_group.setExclusive(True)
+        current_log = self._settings.log_level
+        for level in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            action = QAction(level, self, checkable=True)
+            action.setData(level)
+            action.setChecked(current_log == level)
+            action.triggered.connect(
+                lambda _checked=False, lv=level: self._on_log_level_change(lv)
+            )
+            self._log_level_group.addAction(action)
+            log_menu.addAction(action)
+
+        # ── GPU device ──────────────────────────────────────────────────
+        gpu_menu = settings_menu.addMenu("&GPU Device")
+        assert gpu_menu is not None
+        self._gpu_device_group = QActionGroup(self)
+        self._gpu_device_group.setExclusive(True)
+        current_gpu = self._settings.gpu_device
+        for label, value in (
+            ("&Auto-detect", "auto"),
+            ("&MPS (Apple Silicon)", "mps"),
+            ("&CUDA (NVIDIA)", "cuda"),
+            ("&CPU only", "cpu"),
+        ):
+            action = QAction(label, self, checkable=True)
+            action.setData(value)
+            action.setChecked(current_gpu == value)
+            action.triggered.connect(
+                lambda _checked=False, v=value: self._on_gpu_device_change(v)
+            )
+            self._gpu_device_group.addAction(action)
+            gpu_menu.addAction(action)
+
+        settings_menu.addSeparator()
+
+        # ── Utilities ───────────────────────────────────────────────────
+        open_settings_action = QAction("&Open Settings File…", self)
+        open_settings_action.triggered.connect(self._on_open_settings_file)
+        settings_menu.addAction(open_settings_action)
+
+        open_log_dir_action = QAction("Open &Log Folder…", self)
+        open_log_dir_action.triggered.connect(self._on_open_log_dir)
+        settings_menu.addAction(open_log_dir_action)
+
+        reset_wizard_action = QAction("&Reset First-Run Wizard", self)
+        reset_wizard_action.triggered.connect(self._on_reset_first_run)
+        settings_menu.addAction(reset_wizard_action)
+
+    # ── Settings handlers ─────────────────────────────────────────────
+
+    def _on_theme_change(self, value: str) -> None:
+        """Persist the theme choice and re-apply the global stylesheet."""
+        self._settings.theme = value
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        theme.invalidate_cache()
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply_stylesheet(app)
+        # Force every widget tree to repaint with new colours
+        self.update()
+        for child in self.findChildren(QWidget):
+            child.update()
+
+    def _on_log_level_change(self, level: str) -> None:
+        """Persist log level and apply it to the root logger."""
+        import logging  # noqa: PLC0415
+
+        self._settings.log_level = level
+        logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
+
+    def _on_gpu_device_change(self, device: str) -> None:
+        """Persist the GPU device choice. Takes effect on the next Stage 2 run."""
+        self._settings.gpu_device = device
+        QMessageBox.information(
+            self,
+            "GPU Device Changed",
+            f"GPU device set to '{device}'. The change applies to the next NER run.",
+        )
+
+    def _on_open_settings_file(self) -> None:
+        """Open the QSettings INI file in the platform's default editor."""
+        import os  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        path = self._settings._qs.fileName()  # noqa: SLF001
+        if not path:
+            QMessageBox.warning(self, "Settings", "Could not locate settings file.")
+            return
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", path], check=False)
+            elif sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Settings", f"Could not open file:\n{exc}")
+
+    def _on_open_log_dir(self) -> None:
+        """Reveal the platform log directory in the file manager."""
+        import os  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+        from mhm_pipeline.platform_.paths import app_log_dir  # noqa: PLC0415
+
+        log_dir = app_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", str(log_dir)], check=False)
+            elif sys.platform == "win32":
+                os.startfile(str(log_dir))  # type: ignore[attr-defined]
+            else:
+                subprocess.run(["xdg-open", str(log_dir)], check=False)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Logs", f"Could not open folder:\n{exc}")
+
+    def _on_reset_first_run(self) -> None:
+        """Clear first_run_done so the wizard reappears on next launch."""
+        reply = QMessageBox.question(
+            self,
+            "Reset First-Run Wizard",
+            "Reset the first-run wizard? It will run again the next time "
+            "you start MHM Pipeline.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._settings.first_run_done = False
+            QMessageBox.information(
+                self,
+                "Reset",
+                "First-run wizard reset. Restart the app to see it.",
+            )
 
     # ── Central widget ────────────────────────────────────────────────
 

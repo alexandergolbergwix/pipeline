@@ -25,6 +25,7 @@ class SettingsManager:
     WIKIDATA_TOKEN = "tokens/wikidata_token"
     LOG_LEVEL = "logging/log_level"
     FIRST_RUN_DONE = "app/first_run_done"
+    THEME = "display/theme"
     MAZAL_DB_PATH = "authority/mazal_db_path"
     MAZAL_XML_DIR = "authority/mazal_xml_dir"
     KIMA_DB_PATH = "authority/kima_db_path"
@@ -146,6 +147,18 @@ class SettingsManager:
     @log_level.setter
     def log_level(self, value: str) -> None:
         self.set(self.LOG_LEVEL, value)
+
+    # theme
+    @property
+    def theme(self) -> str:
+        """Appearance: 'system' (auto-detect), 'dark', or 'light'."""
+        return str(self.get(self.THEME, "system"))
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        if value not in ("system", "dark", "light"):
+            value = "system"
+        self.set(self.THEME, value)
 
     # first_run_done
     @property
