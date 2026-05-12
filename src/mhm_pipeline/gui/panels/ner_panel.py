@@ -217,11 +217,17 @@ class NerPanel(QWidget):
         time.
         """
         from mhm_pipeline.gui.widgets.toggle_switch import ToggleSwitch  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
 
         dlg = QDialog(self)
         dlg.setWindowTitle("NER Models")
         dlg.setMinimumWidth(460)
-        dlg_layout = QVBoxLayout(dlg)
+        # Per Rule 37, install the adaptive GraphBackdrop on every popup so
+        # the dialog tracks light/dark mode along with the main window.
+        # Layouts and widgets attach to the returned `_content`, never to
+        # `dlg` directly (install_glass_backdrop owns `dlg`'s root layout).
+        _content = install_glass_backdrop(dlg)
+        dlg_layout = QVBoxLayout(_content)
         dlg_layout.setSpacing(theme.SPACE_MD)
         dlg_layout.setContentsMargins(
             theme.SPACE_XL, theme.SPACE_LG, theme.SPACE_XL, theme.SPACE_LG,
