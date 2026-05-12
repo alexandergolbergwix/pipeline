@@ -965,6 +965,8 @@ class NerPanel(QWidget):
             )
             return
 
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle(
             f"Edit Entities — {len(self._current_records)} records, "
@@ -977,7 +979,8 @@ class NerPanel(QWidget):
         else:
             dialog.resize(1200, 800)
 
-        dlg_layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        dlg_layout = QVBoxLayout(_content)
         dlg_layout.setContentsMargins(0, 0, 0, 0)
         dlg_layout.setSpacing(0)
 

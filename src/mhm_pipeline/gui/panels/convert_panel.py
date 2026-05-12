@@ -140,6 +140,8 @@ class ConvertPanel(QWidget):
 
     def _on_fullscreen(self) -> None:
         """Open MARC field visualizer in a full-screen dialog."""
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle("MARC Field Visualizer")
         screen = self.screen()
@@ -148,7 +150,8 @@ class ConvertPanel(QWidget):
             dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
         else:
             dialog.resize(1200, 800)
-        dlg_layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        dlg_layout = QVBoxLayout(_content)
         full_viz = MarcFieldVisualizer()
         # Copy data from the panel's visualizer if possible
         dlg_layout.addWidget(full_viz, stretch=1)

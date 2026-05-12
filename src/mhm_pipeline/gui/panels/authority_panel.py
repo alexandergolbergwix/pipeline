@@ -275,12 +275,14 @@ class AuthorityPanel(QWidget):
         """
         from mhm_pipeline.gui import theme  # noqa: PLC0415
         from mhm_pipeline.gui.widgets.toggle_switch import ToggleSwitch  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Authority Sources")
         dialog.setMinimumWidth(420)
 
-        layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        layout = QVBoxLayout(_content)
         layout.setContentsMargins(
             theme.SPACE_XL, theme.SPACE_LG, theme.SPACE_XL, theme.SPACE_LG,
         )
@@ -518,6 +520,7 @@ class AuthorityPanel(QWidget):
             return
 
         from mhm_pipeline.gui import theme  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
 
         dialog = QDialog(self)
         dialog.setWindowTitle(
@@ -531,7 +534,8 @@ class AuthorityPanel(QWidget):
         else:
             dialog.resize(1200, 800)
 
-        dlg_layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        dlg_layout = QVBoxLayout(_content)
         dlg_layout.setContentsMargins(0, 0, 0, 0)
         dlg_layout.setSpacing(0)
 

@@ -145,6 +145,8 @@ class RdfPanel(QWidget):
             )
             return
 
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"RDF Knowledge Graph — {self._current_ttl_path.name}")
 
@@ -155,7 +157,8 @@ class RdfPanel(QWidget):
         else:
             dialog.resize(1200, 800)
 
-        dlg_layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        dlg_layout = QVBoxLayout(_content)
 
         # Reuse the existing SQLite store via its DB path (avoids re-parsing TTL)
         from mhm_pipeline.gui.widgets.graph_store import GraphStore  # noqa: PLC0415

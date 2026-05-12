@@ -304,10 +304,13 @@ class WikidataPanel(QWidget):
 
     def _on_configure(self) -> None:
         """Open configuration dialog."""
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Upload Configuration")
         dialog.setMinimumWidth(400)
-        form = QFormLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        form = QFormLayout(_content)
 
         dry_run = QCheckBox("Dry run (QuickStatements export)")
         dry_run.setChecked(self._dry_run_cb.isChecked())
@@ -413,10 +416,13 @@ class WikidataPanel(QWidget):
         )
 
         # Show results dialog
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dlg = QDialog(self)
         dlg.setWindowTitle("Existing Wikidata Items")
         dlg.resize(700, 500)
-        layout = QVBoxLayout(dlg)
+        _content = install_glass_backdrop(dlg)
+        layout = QVBoxLayout(_content)
 
         summary = QLabel(
             f"<b>Authenticated as:</b> {auth_user or '(unknown)'}<br>"
@@ -553,6 +559,8 @@ class WikidataPanel(QWidget):
 
     def _on_fullscreen(self) -> None:
         """Open upload progress in a full-screen dialog with live stats."""
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Wikidata Upload Progress")
         screen = self.screen()
@@ -561,7 +569,8 @@ class WikidataPanel(QWidget):
             dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
         else:
             dialog.resize(1200, 800)
-        dlg_layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        dlg_layout = QVBoxLayout(_content)
 
         # Stats summary at top
         stats = self._compute_upload_stats()
