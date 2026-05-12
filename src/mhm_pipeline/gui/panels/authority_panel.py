@@ -589,6 +589,8 @@ class AuthorityPanel(QWidget):
             )
             return
 
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Authority Match Results")
         screen = self.screen()
@@ -598,7 +600,8 @@ class AuthorityPanel(QWidget):
         else:
             dialog.resize(1200, 800)
 
-        layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        layout = QVBoxLayout(_content)
 
         # Create a larger matcher view
         full_view = AuthorityMatcherView()

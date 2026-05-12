@@ -161,6 +161,8 @@ class ValidatePanel(QWidget):
 
     def _on_fullscreen(self) -> None:
         """Open validation results in a full-screen dialog."""
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         dialog = QDialog(self)
         dialog.setWindowTitle("SHACL Validation Results")
         screen = self.screen()
@@ -169,7 +171,8 @@ class ValidatePanel(QWidget):
             dialog.resize(geom.width() * 9 // 10, geom.height() * 9 // 10)
         else:
             dialog.resize(1200, 800)
-        dlg_layout = QVBoxLayout(dialog)
+        _content = install_glass_backdrop(dialog)
+        dlg_layout = QVBoxLayout(_content)
         full_view = ValidationResultView()
         dlg_layout.addWidget(full_view, stretch=1)
         close_btn = QPushButton("Close")
