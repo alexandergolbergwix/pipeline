@@ -1278,12 +1278,75 @@ QMenuBar::item:selected {{
     background: {sidebar_hover};
     border-radius: {RADIUS_SM}px;
 }}
+/* ─── Labels (default fallback) ─── */
+/* Without this rule QLabel inherits QPalette.windowText() which on some Mac
+   builds reports white even when the user picks Light mode — producing
+   invisible white-on-white labels. Setting it here keeps labels readable
+   regardless of palette weirdness. Widgets that need a different colour
+   (e.g. minicaps subtext, group-box title) can still override via their own
+   setStyleSheet.                                                            */
+QLabel {{
+    color: {input_text};
+    background: transparent;
+}}
 """
 
 
 def apply_stylesheet(app: object) -> None:
-    """Apply the current theme stylesheet to a QApplication instance."""
+    """Apply the current theme stylesheet AND palette to a QApplication.
+
+    The palette sync is essential: Qt's QPalette is independent from the
+    QSS, and on some Macs `QApplication.palette()` reports a dark
+    Window/WindowText pair even when the user picked Light. Widgets that
+    fall back to QPalette (bare QLabels, default QDialog backgrounds,
+    QToolTip) then look wrong against the QSS-coloured surroundings.
+    Updating the palette to match the active theme variant keeps every
+    surface consistent regardless of what the OS reports.
+    """
     app.setStyleSheet(generate_app_stylesheet())  # type: ignore[union-attr]
+    _apply_palette(app)
+
+
+def _apply_palette(app: object) -> None:
+    """Mirror the active theme onto the QApplication palette."""
+    from PyQt6.QtGui import QColor, QPalette  # noqa: PLC0415
+
+    dark = is_dark()
+    pal = QPalette()
+    if dark:
+        window = QColor(20, 22, 28)
+        base = QColor(28, 30, 36)
+        text = QColor(229, 231, 235)
+        subtle = QColor(156, 163, 175)
+        tooltip_bg = QColor(30, 32, 40)
+        tooltip_text = QColor(243, 244, 246)
+    else:
+        window = QColor(250, 250, 252)
+        base = QColor(255, 255, 255)
+        text = QColor(31, 41, 55)
+        subtle = QColor(107, 114, 128)
+        tooltip_bg = QColor(252, 252, 254)
+        tooltip_text = QColor(31, 41, 55)
+
+    # Top-level surfaces
+    pal.setColor(QPalette.ColorRole.Window, window)
+    pal.setColor(QPalette.ColorRole.Base, base)
+    pal.setColor(QPalette.ColorRole.AlternateBase, base)
+    # Text colours — covers QLabel, QToolButton, QLineEdit text default
+    pal.setColor(QPalette.ColorRole.WindowText, text)
+    pal.setColor(QPalette.ColorRole.Text, text)
+    pal.setColor(QPalette.ColorRole.ButtonText, text)
+    pal.setColor(QPalette.ColorRole.PlaceholderText, subtle)
+    # Buttons (Qt-native, not our QSS-styled ones)
+    pal.setColor(QPalette.ColorRole.Button, window)
+    # Tooltips (QSS rule sets these too but palette is the fallback)
+    pal.setColor(QPalette.ColorRole.ToolTipBase, tooltip_bg)
+    pal.setColor(QPalette.ColorRole.ToolTipText, tooltip_text)
+    # Selection (matches QSS sidebar_sel_t indigo)
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(99, 102, 241))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+
+    app.setPalette(pal)  # type: ignore[union-attr]
 
 
 def invalidate_cache() -> None:
