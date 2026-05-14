@@ -1081,6 +1081,7 @@ QComboBox::drop-down {{
    click target, which makes the combo feel unresponsive. */
 QComboBox QAbstractItemView {{
     background: {input_focus_bg};
+    color: {input_text};
     border: 1px solid {rim};
     border-radius: {RADIUS_MD}px;
     selection-background-color: {sidebar_sel_t};
@@ -1093,9 +1094,15 @@ QComboBox QAbstractItemView::item {{
     padding: 5px 10px;
     min-height: 22px;
     border-radius: 3px;
+    color: {input_text};
 }}
 QComboBox QAbstractItemView::item:hover {{
     background: {tab_hover};
+    color: {input_text};
+}}
+QComboBox QAbstractItemView::item:selected {{
+    background: {sidebar_sel_t};
+    color: white;
 }}
 
 /* ─── Group boxes (glass card with embedded caption) ─── */

@@ -676,11 +676,13 @@ class SourceViewDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         from mhm_pipeline.gui import theme  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
 
         self.setWindowTitle(f"Source — {control_number}")
         self.resize(760, 520)
 
-        layout = QVBoxLayout(self)
+        _content = install_glass_backdrop(self)
+        layout = QVBoxLayout(_content)
         layout.setContentsMargins(theme.SPACE_LG, theme.SPACE_LG,
                                   theme.SPACE_LG, theme.SPACE_LG)
         layout.setSpacing(theme.SPACE_MD)
@@ -794,11 +796,13 @@ class EntityTextEditDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         from mhm_pipeline.gui import theme  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
 
         self.setWindowTitle(f"Edit entity text — {control_number}")
         self.resize(620, 360)
 
-        layout = QVBoxLayout(self)
+        _content = install_glass_backdrop(self)
+        layout = QVBoxLayout(_content)
         layout.setContentsMargins(
             theme.SPACE_LG, theme.SPACE_LG, theme.SPACE_LG, theme.SPACE_LG,
         )
@@ -1328,10 +1332,13 @@ class AddEntityDialog(QDialog):
 
     def __init__(self, control_numbers: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        from mhm_pipeline.gui.widgets.glass_dialog import install_glass_backdrop  # noqa: PLC0415
+
         self.setWindowTitle("Add Entity")
         self.setMinimumWidth(400)
 
-        layout = QFormLayout(self)
+        _content = install_glass_backdrop(self)
+        layout = QFormLayout(_content)
 
         self.record_combo = QComboBox()
         self.record_combo.addItems(control_numbers)

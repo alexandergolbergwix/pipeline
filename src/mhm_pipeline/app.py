@@ -57,6 +57,17 @@ def _configure_logging(log_level: str) -> None:
             file_handler,
         ],
     )
+    # Silence transformers' noisy MLM-head / pooler load reports. They always
+    # fire when loading DictaBERT for non-MLM tasks (the MLM head and pooler
+    # weights are present in the pretrained checkpoint but our custom heads
+    # don't use them). The warnings are harmless; suppressing them keeps the
+    # log readable. Real loading errors still surface as exceptions.
+    logging.getLogger("transformers.utils.loading_report").setLevel(logging.ERROR)
+    logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+    # HuggingFace Hub progress bars / unauthenticated-request warnings are also
+    # noise in normal operation. The user knows they have no HF token set.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
 
 
 def _set_macos_process_name() -> None:
@@ -74,14 +85,16 @@ def _set_macos_process_name() -> None:
 
 
 def _set_bundled_model_env_if_frozen() -> None:
-    """When frozen, point the inference wrappers at the bundled local model
-    directories (so `transformers.from_pretrained(...)` reads files off disk
-    and never goes to the network). Runs unconditionally on every launch —
-    env vars are not persisted between processes, and the macOS launcher
-    does the equivalent in shell.
+    """Point the inference wrappers at local model directories when they
+    exist, so `transformers.from_pretrained(...)` reads files off disk and
+    never goes to the network.
+
+    Runs on every launch (env vars don't persist between processes). Fires
+    in BOTH frozen and dev mode: frozen mode uses ``sys._MEIPASS``, dev mode
+    uses the repo root. If the bundled paths don't exist (no models on
+    disk yet), the function is a no-op and inference wrappers fall back
+    to HF Hub download.
     """
-    if not getattr(sys, "frozen", False):
-        return
     from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
 
     root = bundled_resource_root()

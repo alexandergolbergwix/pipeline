@@ -88,23 +88,26 @@ class NerPanel(QWidget):
         self._person_check.setChecked(True)
         self._person_model_edit = QLineEdit(person_default if person_default else _DEFAULT_MODEL)
 
+        # Note: when no model file is found we leave the line-edit EMPTY (not
+        # a sentinel string). The worker's `_resolve_model_path` then falls
+        # through to env var → bundle path → repo fallback. Using a sentinel
+        # as the line-edit value caused the worker to pass it through as if
+        # it were a real path and crash with FileNotFoundError.
         prov_default = os.environ.get("MHM_BUNDLED_PROVENANCE_MODEL", "")
+        prov_value = prov_default if prov_default else (str(_prov_path) if _prov_path else "")
         self._prov_check = QCheckBox()
-        self._prov_check.setChecked(bool(_prov_path) or bool(prov_default))
-        self._prov_model_edit = QLineEdit(
-            prov_default if prov_default
-            else str(_prov_path) if _prov_path
-            else "(not found — provenance NER unavailable)"
-        )
+        self._prov_check.setChecked(bool(prov_value))
+        self._prov_model_edit = QLineEdit(prov_value)
+        if not prov_value:
+            self._prov_model_edit.setPlaceholderText("(not found — provenance NER unavailable)")
 
         cont_default = os.environ.get("MHM_BUNDLED_CONTENTS_MODEL", "")
+        cont_value = cont_default if cont_default else (str(_cont_path) if _cont_path else "")
         self._cont_check = QCheckBox()
-        self._cont_check.setChecked(bool(_cont_path) or bool(cont_default))
-        self._cont_model_edit = QLineEdit(
-            cont_default if cont_default
-            else str(_cont_path) if _cont_path
-            else "(not found — contents NER unavailable)"
-        )
+        self._cont_check.setChecked(bool(cont_value))
+        self._cont_model_edit = QLineEdit(cont_value)
+        if not cont_value:
+            self._cont_model_edit.setPlaceholderText("(not found — contents NER unavailable)")
 
         self._marc500_check = QCheckBox()
         self._marc500_check.setChecked(bool(_marc500_path))
