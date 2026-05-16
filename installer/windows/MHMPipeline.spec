@@ -111,6 +111,13 @@ hiddenimports = [
     'PyQt6.QtPrintSupport',
     'PyQt6.QtSvg',
     'PyQt6.QtNetwork',
+    # WebEngine — required by knowledge_graph_view.py (Cytoscape.js viewer).
+    # The PyQt6 hook bundles the QtWebEngineProcess helper, but the Python
+    # modules themselves are statically reachable only via a lazy import
+    # so we need explicit hidden-imports.
+    'PyQt6.QtWebEngineWidgets',
+    'PyQt6.QtWebEngineCore',
+    'PyQt6.QtWebChannel',
 
     # Hugging Face Transformers — loaded dynamically by AutoModel/AutoTokenizer.
     'transformers',

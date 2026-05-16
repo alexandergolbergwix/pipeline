@@ -17,6 +17,13 @@ dependencies = [
     "numpy>=1.26",
     "pandas>=2.2",
     "PyQt6>=6.7",
+    # PyQt6-WebEngine ships its own bundled Qt6 (PyQt6-WebEngine-Qt6) that must
+    # match the runtime PyQt6 ABI exactly. Without an explicit cap, pip
+    # resolves to the latest WebEngine (e.g. 6.11.x) which links against Qt
+    # 6.11 and crashes at import with "Symbol not found: _qt_version_tag_6_11"
+    # on environments whose PyQt6 is 6.10.x. Keep the upper bound at
+    # whatever PyQt6 series this venv installs.
+    "PyQt6-WebEngine>=6.7,<6.11",
     "platformdirs>=4.2",
     "requests>=2.31",
     "protobuf>=7.34.1",
