@@ -1938,10 +1938,18 @@ class RdfBuildWorker(StageWorker):
 
     def run(self) -> None:
         try:
-            from converter.transformer.mapper import MarcToRdfMapper
+            from converter.transformer.mapper import MarcToRdfMapper, select_rdf_source_path
 
             self.log_line.emit("Building RDF graph")
-            self.substep.emit(f"Loading {self._input_path.name}")
+            source_path, source_marker = select_rdf_source_path(self._input_path)
+            self.substep.emit(f"Loading {source_path.name}")
+            if source_path != self._input_path:
+                self.log_line.emit(
+                    f"Using {source_path.name} for RDF "
+                    f"({source_marker}; requested {self._input_path.name})"
+                )
+            else:
+                self.log_line.emit(f"RDF source provenance: {source_marker}")
 
             mapper = MarcToRdfMapper()
 
@@ -1959,7 +1967,7 @@ class RdfBuildWorker(StageWorker):
                     else:
                         self.substep.emit(f"Mapping record {i} to RDF")
 
-            graph = mapper.map_file(self._input_path, progress_cb=_progress_cb)
+            graph = mapper.map_file(source_path, progress_cb=_progress_cb)
 
             fmt_map = {"Turtle": "turtle", "JSON-LD": "json-ld", "N-Triples": "nt"}
             fmt = fmt_map.get(self._rdf_format, "turtle")
@@ -1973,6 +1981,21 @@ class RdfBuildWorker(StageWorker):
 
             self.substep.emit(f"Writing {output_path.name}")
             self.log_line.emit(f"RDF graph built — {len(graph)} triples")
+            report_path = self._output_dir / "rdf_source_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "requested_input": str(self._input_path),
+                        "actual_input": str(source_path),
+                        "provenance_marker": source_marker,
+                        "output": str(output_path),
+                        "triple_count": len(graph),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             self.progress.emit(100)
             self.finished.emit(output_path)
         except Exception as exc:
@@ -2032,10 +2055,11 @@ class ShaclValidateWorker(StageWorker):
 
 
 class WikidataUploadWorker(StageWorker):
-    """Build Wikidata items from authority-enriched JSON and upload.
+    """Build/export/upload Wikidata items from HMO RDF or approved Studio rows.
 
     Two-phase pipeline:
-    1. Build WikidataItem objects from authority_enriched.json
+    1. Build WikidataItem objects from validated HMO RDF, legacy JSON, or
+       reuse the approved items already built by Wikidata Studio
     2. Upload to Wikidata (live, with OAuth 2.0 / bot password) or
        export QuickStatements (dry run)
 
@@ -2052,6 +2076,7 @@ class WikidataUploadWorker(StageWorker):
         token: str = "",
         dry_run: bool = True,
         batch_mode: bool = False,
+        approved_items: list[Any] | None = None,
     ) -> None:
         super().__init__()
         self._input_path = input_path
@@ -2059,6 +2084,7 @@ class WikidataUploadWorker(StageWorker):
         self._token = token
         self._dry_run = dry_run
         self._batch_mode = batch_mode
+        self._approved_items = approved_items
 
     def run(self) -> None:  # noqa: C901
         # SAFETY: Force dry_run in CI environments to prevent accidental uploads
@@ -2067,35 +2093,79 @@ class WikidataUploadWorker(StageWorker):
             self._dry_run = True
 
         try:
-            from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
             from converter.wikidata.quickstatements import QuickStatementsExporter  # noqa: PLC0415
 
-            records: list[dict[str, Any]] = json.loads(
-                self._input_path.read_text(encoding="utf-8"),
-            )
-            total = len(records)
-            if total == 0:
-                self.error.emit("No records to process")
-                return
+            items: list[Any]
+            source_marker = "raw authority enriched"
+            source_sidecar = ""
+            if self._approved_items is not None:
+                items = list(self._approved_items)
+                if not items:
+                    self.error.emit("No approved Wikidata Studio items to process")
+                    return
+                source_marker = "Wikidata reviewed"
+                self.log_line.emit(
+                    f"Phase 1/2: Using {len(items)} approved Wikidata Studio items "
+                    "(Wikidata reviewed)"
+                )
+                self.progress.emit(45)
+            elif self._input_path.suffix.lower() in {".ttl", ".nt", ".jsonld", ".rdf"}:
+                from converter.wikidata.hmo_crosswalk import (  # noqa: PLC0415
+                    build_items_from_hmo_ttl,
+                )
 
-            # Phase 1: Build Wikidata items
-            self.log_line.emit(f"Phase 1/2: Building items from {total} records...")
-            builder = WikidataItemBuilder()
-            build_substep_every = max(1, total // 100)
+                self.log_line.emit(
+                    f"Phase 1/2: Building Wikidata projection from HMO RDF "
+                    f"({self._input_path.name})..."
+                )
 
-            def _build_progress(i: int, t: int) -> None:
-                self.progress.emit(int(i / t * 40))
-                if i % build_substep_every == 0 or i == t:
-                    self.substep.emit(f"Building items for record {i}/{t}")
+                def _build_progress(i: int, t: int) -> None:
+                    self.progress.emit(int(i / max(1, t) * 40))
+                    self.substep.emit(f"Projecting HMO RDF record {i}/{t}")
 
-            items = builder.build_all(
-                records,
-                progress_cb=_build_progress,
-            )
-            self.log_line.emit(
-                f"Built {len(items)} items ({builder.person_count} persons, "
-                f"{len(items) - builder.person_count} manuscripts)"
-            )
+                result = build_items_from_hmo_ttl(
+                    self._input_path,
+                    progress_cb=_build_progress,
+                )
+                items = result.items
+                source_marker = result.provenance_marker
+                source_sidecar = str(result.sidecar_path or "")
+                self.log_line.emit(
+                    f"Built {len(items)} items from {result.provenance_marker}"
+                )
+            else:
+                from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
+
+                if self._input_path.name == "authority_enriched_reviewed.json":
+                    source_marker = "user-reviewed authority enriched"
+                records: list[dict[str, Any]] = json.loads(
+                    self._input_path.read_text(encoding="utf-8"),
+                )
+                total = len(records)
+                if total == 0:
+                    self.error.emit("No records to process")
+                    return
+
+                self.log_line.emit(
+                    f"Phase 1/2: Building items from {total} JSON records "
+                    "(compatibility fallback)..."
+                )
+                builder = WikidataItemBuilder()
+                build_substep_every = max(1, total // 100)
+
+                def _build_progress(i: int, t: int) -> None:
+                    self.progress.emit(int(i / t * 40))
+                    if i % build_substep_every == 0 or i == t:
+                        self.substep.emit(f"Building items for record {i}/{t}")
+
+                items = builder.build_all(
+                    records,
+                    progress_cb=_build_progress,
+                )
+                self.log_line.emit(
+                    f"Built {len(items)} items ({builder.person_count} persons, "
+                    f"{len(items) - builder.person_count} manuscripts)"
+                )
 
             # Phase 1.5: Reconciliation — find existing Wikidata items to avoid duplicates
             self.log_line.emit("Reconciling against Wikidata...")
@@ -2158,6 +2228,21 @@ class WikidataUploadWorker(StageWorker):
             self.progress.emit(45)
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
+            source_report_path = self._output_dir / "wikidata_source_report.json"
+            source_report_path.write_text(
+                json.dumps(
+                    {
+                        "input": str(self._input_path),
+                        "provenance_marker": source_marker,
+                        "sidecar": source_sidecar,
+                        "approved_items_passed": self._approved_items is not None,
+                        "items_count": len(items),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
 
             # Emit total count so the panel sets the overall progress bar
             self.entity_status.emit("__total__", "total", str(len(items)), "")

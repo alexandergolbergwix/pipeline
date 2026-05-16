@@ -469,8 +469,9 @@ class MainWindow(QMainWindow):
             self._ner_panel.show_review_banner()
         elif index == 2:
             self._authority_panel.show_review_banner()
-            # Pre-fill the studio's input selector with the authority output
-            # so the user can immediately click "Load & Build Items".
+            # Pre-fill with the authority output for compatibility. After
+            # RDF build finishes, the Studio selector is replaced with
+            # output.ttl, which is the preferred Stage 6 input.
             self._wikidata_studio_panel._input_selector.path = output
 
     def _load_stage_results(self, index: int, output: Path) -> None:
@@ -614,14 +615,17 @@ class MainWindow(QMainWindow):
             self._authority_panel._ner_selector.path = output
         elif completed == 2:
             # Stage 2 (Authority enriched) output feeds the RDF panel AND
-            # the merged Wikidata Studio (which reads authority_enriched.json
-            # directly and builds Wikidata items offline).
+            # temporarily feeds the Studio as a compatibility fallback. If the
+            # user saves reviewed authority data beside it, the RDF worker
+            # prefers authority_enriched_reviewed.json automatically.
             self._rdf_panel._input_selector.path = output
             self._rdf_panel._output_selector.path = out_dir
             self._wikidata_studio_panel._input_selector.path = output
         elif completed == 3:
-            # Stage 3 (RDF) output feeds SHACL
+            # Stage 3 (RDF) output feeds SHACL and is the preferred Stage 6
+            # Wikidata Studio input.
             self._validate_panel._ttl_selector.path = output
+            self._wikidata_studio_panel._input_selector.path = output
 
     def _on_stage_error(self, index: int, message: str) -> None:
         self._update_stage_state(index, "error")

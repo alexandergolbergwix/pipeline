@@ -64,9 +64,20 @@ rsync -a --delete \
     --exclude='tests' \
     --exclude='scripts' \
     --exclude='modifications' \
+    --exclude='docs' \
+    --exclude='paper' \
+    --exclude='processed-data' \
     --exclude='*.tex' \
+    --exclude='*.aux' \
+    --exclude='*.out' \
+    --exclude='*.toc' \
+    --exclude='*.log' \
+    --exclude='*.pdf' \
     --exclude='ner/raw-data' \
     --exclude='ner/processed-data' \
+    --exclude='ner/*_model_kfold' \
+    --exclude='ner/*_fold_*.pt' \
+    --exclude='ner/*_head.pt' \
     --exclude='ner/*.pt' \
     --exclude='ner/*.bin' \
     --exclude='ner/*.pdf' \
@@ -82,6 +93,7 @@ rsync -a --delete \
     --exclude='data/output' \
     --exclude='data/samples' \
     --exclude='data/pilot-sample' \
+    --exclude='data/tsvs' \
     --exclude='data/annotation_templates' \
     --exclude='data/*.csv' \
     --exclude='data/*.ttl' \
@@ -286,20 +298,46 @@ DMG_PATH="$DIST_DIR/$DMG_NAME"
 echo ""
 echo "Creating DMG (this may take a few minutes for large bundles)..."
 
-DMG_STAGING="$DIST_DIR/dmg_staging"
-rm -rf "$DMG_STAGING"
-mkdir -p "$DMG_STAGING"
-cp -R "$APP_DIR" "$DMG_STAGING/"
-ln -sf /Applications "$DMG_STAGING/Applications"
+WORK_IMAGE="$DIST_DIR/MHMPipeline-${VERSION}-work.sparseimage"
+MOUNT_POINT=""
+
+cleanup_dmg_build() {
+    if [ -n "$MOUNT_POINT" ] && mount | grep -q "on $MOUNT_POINT "; then
+        hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$WORK_IMAGE"
+}
+trap cleanup_dmg_build EXIT
+
+rm -rf "$WORK_IMAGE" "$DMG_PATH"
+
+APP_SIZE_KB=$(du -sk "$APP_DIR" | cut -f1)
+# Add generous headroom for filesystem metadata and future bundled assets.
+IMAGE_SIZE_MB=$((APP_SIZE_KB / 1024 + 4096))
 
 hdiutil create \
+    -size "${IMAGE_SIZE_MB}m" \
+    -fs "HFS+" \
     -volname "MHM Pipeline" \
-    -srcfolder "$DMG_STAGING" \
+    -type SPARSE \
     -ov \
-    -format UDZO \
-    "$DMG_PATH"
+    "$WORK_IMAGE"
 
-rm -rf "$DMG_STAGING"
+ATTACH_OUTPUT=$(hdiutil attach "$WORK_IMAGE" -nobrowse)
+MOUNT_POINT=$(printf "%s\n" "$ATTACH_OUTPUT" | awk -F '\t' '/\/Volumes\// {print $NF; exit}')
+if [ -z "$MOUNT_POINT" ]; then
+    echo "ERROR: Could not find mounted DMG volume." >&2
+    exit 1
+fi
+
+ditto "$APP_DIR" "$MOUNT_POINT/$APP_NAME.app"
+ln -sf /Applications "$MOUNT_POINT/Applications"
+hdiutil detach "$MOUNT_POINT"
+MOUNT_POINT=""
+
+hdiutil convert "$WORK_IMAGE" -format UDZO -o "$DMG_PATH"
+rm -rf "$WORK_IMAGE"
+trap - EXIT
 
 echo ""
 echo "Build complete:"

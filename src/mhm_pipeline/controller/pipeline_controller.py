@@ -172,7 +172,10 @@ class PipelineController(QObject):
             )
 
         if stage_index == 3:
-            # Stage 3 (was Stage 4) — RDF build from authority_enriched.json
+            # Stage 3 (was Stage 4) — RDF build from authority-enriched data.
+            # RdfBuildWorker prefers authority_enriched_reviewed.json when it
+            # exists beside authority_enriched.json, and rejects Wikidata Studio
+            # review-state JSON.
             if "output_dir" in kwargs:
                 output_dir = Path(str(kwargs["output_dir"]))
             return RdfBuildWorker(
@@ -196,16 +199,26 @@ class PipelineController(QObject):
             )
 
         if stage_index == 5:
-            # Stage 5 (was Stage 6) — Wikidata upload (studio tab)
+            # Stage 5 (was Stage 6) — Wikidata projection/upload. Prefer the
+            # Stage 3 HMO RDF output, but accept explicit Studio inputs and
+            # pre-approved items.
             token = str(kwargs.get("token", ""))
             output_dir = Path(str(kwargs.get("output_dir", self._settings.output_dir)))
+            if kwargs.get("input_path") is not None:
+                input_path = Path(str(kwargs["input_path"]))
+            elif self._stage_outputs.get(3) is not None:
+                input_path = self._stage_outputs[3]
+            else:
+                input_path = self._resolve_input(2, kwargs)
+            approved_raw = kwargs.get("approved_items")
+            approved_items = approved_raw if isinstance(approved_raw, list) else None
             return WikidataUploadWorker(
-                # Reads authority_enriched.json directly (Stage 2 output)
-                input_path=self._resolve_input(2, kwargs),
+                input_path=input_path,
                 output_dir=output_dir,
                 token=token,
                 dry_run=bool(kwargs.get("dry_run", True)),
                 batch_mode=bool(kwargs.get("batch_mode", False)),
+                approved_items=approved_items,
             )
 
         raise ValueError(f"Unknown stage index: {stage_index}")

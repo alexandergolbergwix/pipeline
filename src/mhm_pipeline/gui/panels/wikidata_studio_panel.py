@@ -3,9 +3,9 @@
 Replaces the separate WikidataPreviewPanel (Stage 3 review) and
 WikidataPanel (Stage 6 upload) with one progressive workflow:
 
-    Load authority_enriched.json
+    Load validated output.ttl (preferred) or authority_enriched*.json
         ↓
-    Build Wikidata items (offline via WikidataItemBuilder)
+    Build Wikidata items (offline via HMO crosswalk / compatibility builder)
         ↓
     Browse
         · Q/P entity browser (editable, approvable rows per item)
@@ -74,15 +74,20 @@ logger = logging.getLogger(__name__)
 
 
 class _BuildWorker(QThread):
-    """Runs WikidataItemBuilder.build_all in the background."""
+    """Build Wikidata items from HMO RDF or legacy authority JSON."""
 
     finished_items = pyqtSignal(list)
     failed = pyqtSignal(str)
     progress = pyqtSignal(int)
+    log_line = pyqtSignal(str)
 
-    def __init__(self, records: list[dict], parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        source: list[dict] | Path,
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._records = records
+        self._source = source
 
     def run(self) -> None:
         try:
@@ -95,15 +100,30 @@ class _BuildWorker(QThread):
             if str(_repo) not in _sys.path:
                 _sys.path.insert(0, str(_repo))
 
-            from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
-
-            builder = WikidataItemBuilder(reconciler=None)  # offline
-
             def _cb(n_done: int, n_total: int) -> None:
                 pct = int(n_done / max(1, n_total) * 100)
                 self.progress.emit(pct)
 
-            items = builder.build_all(self._records, progress_cb=_cb)
+            if isinstance(self._source, Path) and self._source.suffix.lower() in {
+                ".ttl", ".nt", ".jsonld", ".rdf",
+            }:
+                from converter.wikidata.hmo_crosswalk import (  # noqa: PLC0415
+                    build_items_from_hmo_ttl,
+                )
+
+                result = build_items_from_hmo_ttl(self._source, progress_cb=_cb)
+                sidecar = f" using {result.sidecar_path.name}" if result.sidecar_path else ""
+                self.log_line.emit(
+                    f"Wikidata source provenance: {result.provenance_marker}{sidecar}"
+                )
+                items = result.items
+            else:
+                from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
+
+                builder = WikidataItemBuilder(reconciler=None)  # offline
+                records = self._source if isinstance(self._source, list) else []
+                self.log_line.emit("Wikidata source provenance: raw authority enriched")
+                items = builder.build_all(records, progress_cb=_cb)
             self.finished_items.emit(list(items))
         except Exception as exc:  # noqa: BLE001
             logger.error("Wikidata build failed: %s", exc, exc_info=True)
@@ -429,16 +449,18 @@ class WikidataStudioPanel(QWidget):
         layout.addWidget(self._stepper)
         self._update_stepper(step=1)
 
-        # ── Step 1: Load authority_enriched.json ───────────────────────
+        # ── Step 1: Load HMO RDF / authority JSON ─────────────────────
         load_row = QHBoxLayout()
         load_row.setSpacing(theme.SPACE_MD)
         self._input_selector = FileSelector(
-            "Authority JSON:", mode="open", filter="JSON files (*.json)",
+            "HMO RDF / JSON:",
+            mode="open",
+            filter="RDF / JSON files (*.ttl *.nt *.jsonld *.rdf *.json)",
         )
         self._input_selector.setToolTip(
-            "authority_enriched.json — Stage 2 output containing MARC + all-5-NER + "
-            "authority data (VIAF/Mazal/KIMA). The studio builds Wikidata-shaped "
-            "items from this file entirely offline."
+            "Preferred: output.ttl from Stage 4/5, built from reviewed authority data. "
+            "Compatibility: authority_enriched.json / authority_enriched_reviewed.json, "
+            "or *_wikidata_verified.json to resume a saved Studio review."
         )
         load_row.addWidget(self._input_selector, stretch=1)
         self._load_btn = QPushButton("Load & Build Items")
@@ -708,18 +730,27 @@ class WikidataStudioPanel(QWidget):
             + "&nbsp;·&nbsp; ".join(parts)
         )
 
-    # ── Step 1+2: Load authority_enriched.json + build items ──────────
+    # ── Step 1+2: Load HMO RDF / authority JSON + build items ────────
 
     def _on_load_and_build(self) -> None:
         path = self._input_selector.path
         if path is None:
             QMessageBox.information(
                 self, "Pick a file",
-                "Select authority_enriched.json  —  or a previously saved "
+                "Select output.ttl, authority_enriched_reviewed.json, "
+                "authority_enriched.json, or a previously saved "
                 "*_wikidata_verified.json file to resume validation review.",
             )
             return
         self._input_path = path
+        if path.suffix.lower() in {".ttl", ".nt", ".jsonld", ".rdf"}:
+            self._records = []
+            self._log_viewer.append_line(
+                f"Loaded HMO RDF from {path.name}. Building Wikidata projection…"
+            )
+            self._start_build_worker(path)
+            return
+
         try:
             with open(path, encoding="utf-8") as f:
                 raw = json.load(f)
@@ -750,16 +781,19 @@ class WikidataStudioPanel(QWidget):
         self._log_viewer.append_line(
             f"Loaded {len(raw)} records from {path.name}. Building Wikidata items…"
         )
+        self._start_build_worker(raw)
+
+    def _start_build_worker(self, source: list[dict] | Path) -> None:
+        """Start the background Wikidata item build."""
         self._update_stepper(step=2)
         self._progress.reset()
         self._load_btn.setEnabled(False)
-
         # Build in a background thread so the UI stays responsive.
         # ``connect_progress_signals`` auto-wires the standard ``progress``
         # signal; the build worker uses non-standard ``finished_items`` /
         # ``failed`` names, so we still attach those manually for routing
         # to the UI handlers (which themselves drive the bar finish state).
-        self._build_worker = _BuildWorker(raw, parent=self)
+        self._build_worker = _BuildWorker(source, parent=self)
         connect_progress_signals(
             self._progress,
             self._build_worker,
@@ -770,6 +804,7 @@ class WikidataStudioPanel(QWidget):
         self._progress.set_total(100)
         self._build_worker.finished_items.connect(self._on_items_built)
         self._build_worker.failed.connect(self._on_build_failed)
+        self._build_worker.log_line.connect(self._log_viewer.append_line)
         self._build_worker.start()
 
     def _load_validated_file(self, path: Path, raw: list[dict]) -> None:
@@ -867,6 +902,16 @@ class WikidataStudioPanel(QWidget):
 
     def _refresh_rdf_preview(self) -> None:
         """Rebuild the Turtle preview from the currently-loaded records."""
+        if self._input_path is not None and self._input_path.suffix.lower() in {
+            ".ttl", ".nt", ".jsonld", ".rdf",
+        }:
+            try:
+                self._rdf_preview.setPlainText(
+                    self._input_path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._rdf_preview.setPlainText(f"(could not read RDF: {exc})")
+            return
         if not self._records:
             return
         try:

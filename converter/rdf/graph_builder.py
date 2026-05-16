@@ -173,6 +173,14 @@ class GraphBuilder:
                 )
             structural_cu_uris.append(cu_uri)
 
+        if not work_expression_pairs:
+            fallback_content = self._add_unidentified_textual_content(
+                graph, ms_uri, control_number
+            )
+            work_uri = fallback_content["work"]
+            expression_uri = fallback_content["expression"]
+            work_expression_pairs.append(fallback_content)
+
         if not structural_cu_uris:
             default_cu_uri = URIRef(f"{HM}CU_{control_number}_01")
             graph.add((default_cu_uri, RDF.type, HM.Codicological_Unit))
@@ -225,7 +233,7 @@ class GraphBuilder:
             graph.add((pu_uri, HM.has_scribe, scribe_uri))
             graph.add((prod_uri, HM.has_scribe, scribe_uri))
 
-        if data.is_multi_volume:
+        if data.is_multi_volume and self._has_enough_volume_evidence(data):
             self._add_multi_volume_set(graph, ms_uri, data, control_number)
 
         if data.is_anthology and len(data.contents) > 1:
@@ -450,6 +458,7 @@ class GraphBuilder:
         graph.add((expression_uri, RDFS.label, Literal(expr_label, lang="he")))
 
         graph.add((expression_uri, LRMOO.R3_is_realised_in, work_uri))
+        graph.add((expression_uri, LRMOO.R3i_realises, work_uri))
 
         for lang_code in data.languages:
             lang_name = LANGUAGE_CODES.get(lang_code, lang_code)
@@ -721,6 +730,7 @@ class GraphBuilder:
             )
         )
         graph.add((expression_uri, LRMOO.R3_is_realised_in, work_uri))
+        graph.add((expression_uri, LRMOO.R3i_realises, work_uri))
 
         if content.get("folio_range"):
             graph.add(
@@ -754,6 +764,40 @@ class GraphBuilder:
             "folio_range": content.get("folio_range"),
         }
 
+    def _add_unidentified_textual_content(
+        self, graph: Graph, ms_uri: URIRef, control_number: str
+    ) -> dict[str, Any]:
+        """Add a generic Work/Expression when MARC lacks a usable title.
+
+        The manuscript still embodies textual content even when the catalog record
+        does not expose a title or contents entry that can be mapped to a named
+        Work. This fallback keeps the LRMoo chain explicit without inventing a
+        scholarly identification for the text.
+        """
+        safe_control_number = re.sub(r"[^A-Za-z0-9_-]+", "_", control_number)
+        work_uri = URIRef(f"{HM}Work_unidentified_{safe_control_number}")
+        expression_uri = URIRef(f"{HM}Expression_unidentified_{safe_control_number}")
+        title = f"Unidentified textual content of MS {control_number}"
+
+        graph.add((work_uri, RDF.type, LRMOO.F1_Work))
+        graph.add((work_uri, RDFS.label, Literal(title, lang="en")))
+        graph.add((work_uri, HM.has_title, Literal(title, lang="en")))
+
+        graph.add((expression_uri, RDF.type, LRMOO.F2_Expression))
+        graph.add((expression_uri, RDFS.label, Literal(f"{title} (expression)", lang="en")))
+        graph.add((expression_uri, LRMOO.R3_is_realised_in, work_uri))
+        graph.add((expression_uri, LRMOO.R3i_realises, work_uri))
+
+        graph.add((ms_uri, LRMOO.R4_embodies, expression_uri))
+        graph.add((ms_uri, HM.has_expression, expression_uri))
+        graph.add((ms_uri, HM.has_work, work_uri))
+
+        return {
+            "work": work_uri,
+            "expression": expression_uri,
+            "title": title,
+        }
+
     def _add_multi_volume_set(
         self, graph: Graph, ms_uri: URIRef, data: ExtractedData, control_number: str
     ):
@@ -773,6 +817,21 @@ class GraphBuilder:
 
         if data.volume_info:
             graph.add((set_uri, RDFS.comment, Literal(data.volume_info, lang="he")))
+
+    @staticmethod
+    def _has_enough_volume_evidence(data: ExtractedData) -> bool:
+        """Return True only when a MultiVolumeSet can satisfy its SHACL shape.
+
+        NLI extent strings may say that a manuscript is part of a multi-volume
+        work while the current record still represents only one physical volume.
+        The ontology class requires at least two explicit hm:has_volume links, so
+        the RDF builder should not instantiate hm:MultiVolumeSet until sibling
+        volume records are available.
+        """
+        volume_members = getattr(data, "volume_members", None)
+        if isinstance(volume_members, list | tuple):
+            return len(volume_members) >= 2
+        return False
 
     def _add_anthology_structure(
         self, graph: Graph, ms_uri: URIRef, control_number: str, works_count: int
@@ -914,6 +973,26 @@ class GraphBuilder:
             graph.add((iv_uri, RDF.type, HM.ScribalIntervention))
             label_en = iv_type.replace("_type", "").replace("_", " ")
             graph.add((iv_uri, RDFS.label, Literal(label_en, lang="en")))
+            location_uri = self.uri_gen.text_location_uri(control_number, "unspecified")
+            graph.add((location_uri, RDF.type, HM.TextLocation))
+            graph.add(
+                (
+                    location_uri,
+                    HM.location_string,
+                    Literal("Unspecified location", datatype=XSD.string),
+                )
+            )
+            graph.add(
+                (
+                    location_uri,
+                    RDFS.label,
+                    Literal(
+                        f"Unspecified intervention location in MS {control_number}",
+                        lang="en",
+                    ),
+                )
+            )
+            graph.add((iv_uri, HM.intervention_location, location_uri))
             if iv.get("source_note"):
                 graph.add(
                     (iv_uri, HM.intervention_description, Literal(iv["source_note"], lang="he"))
@@ -950,6 +1029,9 @@ class GraphBuilder:
             graph.add((ref_uri, RDF.type, rdf_class))
             graph.add((ref_uri, RDF.type, HM.CanonicalReference))
             graph.add((ref_uri, RDFS.label, Literal(f"{hier}: {book_id}", lang="en")))
+            hierarchy_uri = getattr(HM, f"{hier}_hierarchy", HM.Bible_hierarchy)
+            graph.add((hierarchy_uri, RDF.type, HM.CanonicalHierarchyType))
+            graph.add((ref_uri, HM.canonical_hierarchy, hierarchy_uri))
             # Specific datatype properties
             if ref.get("book"):
                 graph.add((ref_uri, HM.book_name, Literal(ref["book"], datatype=XSD.string)))
@@ -1091,6 +1173,26 @@ class GraphBuilder:
             )
             graph.add((ms_uri, HM.has_scribal_intervention, hc_uri))
             graph.add((hc_uri, HM.is_intervention_in, ms_uri))
+            location_uri = self.uri_gen.text_location_uri(control_number, "unspecified")
+            graph.add((location_uri, RDF.type, HM.TextLocation))
+            graph.add(
+                (
+                    location_uri,
+                    HM.location_string,
+                    Literal("Unspecified location", datatype=XSD.string),
+                )
+            )
+            graph.add(
+                (
+                    location_uri,
+                    RDFS.label,
+                    Literal(
+                        f"Unspecified hand-change location in MS {control_number}",
+                        lang="en",
+                    ),
+                )
+            )
+            graph.add((hc_uri, HM.intervention_location, location_uri))
 
         if data.has_vocalization:
             graph.add((ms_uri, HM.has_vocalization, Literal(True, datatype=XSD.boolean)))
@@ -1681,6 +1783,29 @@ class GraphBuilder:
 
         if location:
             location_uri = self.uri_gen.text_location_uri(control_number, location)
+            graph.add((location_uri, RDF.type, HM.TextLocation))
+            graph.add((location_uri, HM.location_string, Literal(location, datatype=XSD.string)))
+            graph.add((intervention_uri, HM.intervention_location, location_uri))
+        else:
+            location_uri = self.uri_gen.text_location_uri(control_number, "unspecified")
+            graph.add((location_uri, RDF.type, HM.TextLocation))
+            graph.add(
+                (
+                    location_uri,
+                    HM.location_string,
+                    Literal("Unspecified location", datatype=XSD.string),
+                )
+            )
+            graph.add(
+                (
+                    location_uri,
+                    RDFS.label,
+                    Literal(
+                        f"Unspecified intervention location in MS {control_number}",
+                        lang="en",
+                    ),
+                )
+            )
             graph.add((intervention_uri, HM.intervention_location, location_uri))
 
         if description:

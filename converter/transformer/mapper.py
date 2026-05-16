@@ -1,9 +1,10 @@
 """Main mapper that orchestrates MARC to RDF transformation."""
 
+import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from rdflib import Graph
 
@@ -17,6 +18,54 @@ if TYPE_CHECKING:
     from ..authority.mazal_matcher import MazalMatcher
 
 logger = logging.getLogger(__name__)
+
+
+RAW_AUTHORITY_FILENAME = "authority_enriched.json"
+REVIEWED_AUTHORITY_FILENAME = "authority_enriched_reviewed.json"
+WIKIDATA_VERIFIED_SUFFIX = "_wikidata_verified.json"
+
+
+def is_wikidata_verified_json(path: Path) -> bool:
+    """Return True for Wikidata Studio review-state JSON files."""
+    return path.name.endswith(WIKIDATA_VERIFIED_SUFFIX)
+
+
+def select_rdf_source_path(input_path: Path) -> tuple[Path, str]:
+    """Choose the safest/richest manuscript-source file for Stage 4 RDF.
+
+    If the user points Stage 4 at ``authority_enriched.json`` and the
+    user-reviewed sibling exists, the reviewed file is preferred.  A
+    ``*_wikidata_verified.json`` file is already a Wikidata Studio review
+    state, not manuscript-source data, and must never feed RDF construction.
+    """
+    if is_wikidata_verified_json(input_path):
+        raise ValueError(
+            f"{input_path.name} is a Wikidata Studio review file, not a "
+            "manuscript-source file. Build RDF from authority_enriched.json "
+            "or authority_enriched_reviewed.json instead."
+        )
+    if input_path.name == RAW_AUTHORITY_FILENAME:
+        reviewed = input_path.with_name(REVIEWED_AUTHORITY_FILENAME)
+        if reviewed.exists():
+            return reviewed, "user-reviewed authority enriched"
+        return input_path, "raw authority enriched"
+    if input_path.name == REVIEWED_AUTHORITY_FILENAME:
+        return input_path, "user-reviewed authority enriched"
+    if input_path.suffix.lower() == ".json":
+        return input_path, "raw authority enriched"
+    return input_path, "direct MARC/CSV/TSV source"
+
+
+def validate_rdf_json_records(raw: object, source_path: Path) -> list[dict]:
+    """Validate JSON input shape before converting authority data to RDF."""
+    if not isinstance(raw, list):
+        raise ValueError(f"Expected JSON array, got {type(raw).__name__}")
+    if raw and isinstance(raw[0], dict) and "item" in raw[0] and "validation" in raw[0]:
+        raise ValueError(
+            f"{source_path.name} is a Wikidata Studio review file. Use "
+            "authority_enriched.json or authority_enriched_reviewed.json for RDF."
+        )
+    return raw
 
 
 class MarcToRdfMapper:
@@ -89,20 +138,19 @@ class MarcToRdfMapper:
 
         bind_namespaces(combined_graph)
 
-        if file_path.suffix == ".json":
-            # JSON input: authority_enriched.json from Stage 2
-            import json
+        source_path, _source_marker = select_rdf_source_path(file_path)
 
-            raw = json.loads(file_path.read_text(encoding="utf-8"))
-            if not isinstance(raw, list):
-                raise ValueError(f"Expected JSON array, got {type(raw).__name__}")
-            combined_graph = self.map_json_records(raw, progress_cb=progress_cb)
+        if source_path.suffix == ".json":
+            # JSON input: authority_enriched.json or authority_enriched_reviewed.json
+            raw = json.loads(source_path.read_text(encoding="utf-8"))
+            records = validate_rdf_json_records(raw, source_path)
+            combined_graph = self.map_json_records(records, progress_cb=progress_cb)
             from ..config.namespaces import bind_namespaces
 
             bind_namespaces(combined_graph)
         else:
             # MARC/CSV/TSV input via UnifiedReader
-            reader = UnifiedReader(file_path)
+            reader = UnifiedReader(source_path)
             for i, record in enumerate(reader.read_file()):
                 try:
                     record_graph = self.map_record(record)

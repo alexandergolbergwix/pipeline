@@ -234,13 +234,14 @@ The pipeline consists of six sequential stages, each feeding its output to the n
   Extracted entity names (persons, places, works) are matched against multiple authority sources: the NLI Mazal authority file (local SQLite database with fuzzy matching), VIAF (public SRU API, persons), and KIMA --- an open, attestation-based database of 48,128 Hebrew historical place names, 100\% Wikidata-linked, queried via a local SQLite index. Matched entities receive stable global identifiers.
 
 \item[Stage 4: RDF Graph Construction]
-  The \code{GraphBuilder} assembles an RDF graph from the enriched extracted data. The \code{UriGenerator} creates stable URIs for each entity. The builder implements the HMO three-layer architecture: creating F4\_Manifestation\_Singleton instances, Work-Expression pairs, BU-CU-PU composition structures, production and transfer events, text traditions, and epistemological annotations.
+  The \code{GraphBuilder} assembles an RDF graph from the enriched extracted data. When curator-reviewed authority data are available, Stage~4 uses \code{authority\_enriched\_reviewed.json}; otherwise it falls back to \code{authority\_enriched.json}. The later \code{*\_wikidata\_verified.json} files are Wikidata Studio review state and are never used as manuscript-source input for RDF construction. The \code{UriGenerator} creates stable URIs for each entity. The builder implements the HMO three-layer architecture: creating F4\_Manifestation\_Singleton instances, Work-Expression pairs, BU-CU-PU composition structures, production and transfer events, text traditions, and epistemological annotations.
+  Stage~4 emits both \code{lrmoo:R3\_is\_realised\_in} and its inverse \code{lrmoo:R3i\_realises} for Work--Expression links, creates an explicit unidentified Work--Expression pair when the MARC record lacks a usable title or contents entry, attaches \code{hm:canonical\_hierarchy} to generated canonical references, and supplies explicit \code{hm:TextLocation} nodes for detected scribal interventions when the source record does not provide a folio-level location. \code{hm:MultiVolumeSet} is emitted only when at least two volume members can be asserted, preserving the ontology's SHACL cardinality requirement.
 
 \item[Stage 5: SHACL Validation]
-  The generated graph is validated against \code{shacl-shapes.ttl} using PyShacl. Violations are reported with severity levels (Violation, Warning, Info) and specific focus nodes, enabling quality assurance before publication.
+  The generated graph is validated against \code{shacl-shapes.ttl} using PyShacl. Violations are reported with severity levels (Violation, Warning, Info) and specific focus nodes, enabling quality assurance before publication. Optional descriptive details such as folio ranges on expressions and mentioned scribes in colophons are type-checked when present, but are not required for every record because MARC source data do not consistently expose them.
 
 \item[Stage 6: Wikidata Upload]
-  Validated RDF data are transformed into Wikidata statements and uploaded via the Wikidata API and/or QuickStatements. This includes creating and linking Wikidata items for manuscripts, persons, places, and works, with proper qualifiers for dates, sources, and certainty levels.
+  The validated HMO RDF graph is projected into Wikidata statements and uploaded via the Wikidata API and/or QuickStatements. The RDF graph remains the full scholarly representation, while Wikidata is the richest safe public projection. For backward compatibility the legacy JSON-based builder remains available, but the preferred Stage~6 input is the Stage~4/5 \code{output.ttl} generated from reviewed authority data.
 \end{description}
 
 \subsection{Data Flow Diagram}
@@ -1672,7 +1673,7 @@ Wikidata Upload & API error & Queue for retry with exponential backoff \\
 
 \subsection{Objective}
 
-The final stage of the pipeline uploads validated RDF data to Wikidata, making Hebrew manuscript metadata accessible as part of the global LOD ecosystem. This enables:
+The final stage of the pipeline projects validated HMO RDF data to Wikidata, making Hebrew manuscript metadata accessible as part of the global LOD ecosystem while preserving the richer ontology-native graph as the scholarly master output. This enables:
 
 \begin{itemize}
 \item Cross-referencing Hebrew manuscripts with items in other languages and collections already on Wikidata
@@ -1748,7 +1749,7 @@ LAST  P8189  "990000623390205171"
 
 \begin{enumerate}
 \item \textbf{Authority-based reconciliation:} Instead of SPARQL reconciliation (which proved too slow and unreliable at scale), items with existing QIDs from authority matching (VIAF P214, NLI P8189) are updated; items without authority-linked QIDs are created as new entities.
-\item \textbf{Two-phase pipeline:} Phase~1 builds \code{WikidataItem} objects from authority-enriched JSON via \code{WikidataItemBuilder} (persons first, then manuscripts that reference them). Phase~2 uploads to Wikidata or exports QuickStatements.
+\item \textbf{Two-phase pipeline:} Phase~1 preferably builds \code{WikidataItem} objects from the validated HMO \code{output.ttl} via the HMO-to-Wikidata crosswalk. When \code{authority\_enriched\_reviewed.json} exists beside the RDF file, it is used as a reviewed provenance sidecar so the projection preserves curator-approved authority matches and the current rich Wikidata mappings. The older JSON-only \code{WikidataItemBuilder} path remains as a compatibility fallback. Phase~2 uploads to Wikidata or exports QuickStatements.
 \item \textbf{Interactive validation workbench:} Between Phase~1 (build) and Phase~2 (upload) the \emph{Wikidata Studio} exposes a curator-facing review step: every item is run through the \code{\_ValidationWorker} (reconciler + per-PID collision + SPARQL existence + three-channel creator check + in-process validator re-run), and the curator approves each row individually. A ``💾 Save validation'' action exports \code{<input\_stem>\_wikidata\_verified.json}, which round-trips through the Load field so multi-session review is supported on large corpora. Pagination (25/50/100 per page) keeps the table responsive at 5\,000+ items.
 \item \textbf{Source statements:} Every claim includes a reference (P248 = stated in, P854 = reference URL) pointing to the NLI catalog.
 \item \textbf{Incremental upload:} Start with pilot manuscripts, then expand to the full catalog.
