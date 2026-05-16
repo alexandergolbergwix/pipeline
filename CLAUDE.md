@@ -68,6 +68,22 @@ Project-specific slash commands are stored in `.claude/commands/`. Use them with
 | `/check-coverage` | Measure ontology class/property coverage over 200 TSV records |
 | `/launch-app` | Launch the PyQt6 GUI (opens a new Terminal window) |
 | `/update-docs` | Check and update `SystemDesignDocument.tex` / `ProjectDefinitionDocument.tex` |
+| `/generate-presentation-audio` | Generate Hebrew TTS audio from the Bar-Ilan speaker notes with Gemini or local macOS speech |
+
+## Presentation Audio / Gemini TTS Rule
+
+When asked to create text-to-speech audio for the Bar-Ilan presentation, use
+`docs/presentations/generate_hebrew_speaker_audio.py` instead of writing a new
+TTS script. The script extracts the Hebrew speaker notes from
+`docs/presentations/bar-ilan-phd-pipeline-speaker-notes-he.tex`, keeps one
+Gemini request per slide, supports parallel generation with `--parallel`, and
+combines the resulting WAV files in slide order.
+
+Never print or store API keys. Prefer the script's hidden prompt for the Gemini
+API key; only use `API_KEY` if it is already set in the shell. Start Gemini TTS
+with `--parallel 4` unless the user asks for a different concurrency. If Gemini
+fails because Hebrew is unsupported or rate-limited, explain that limitation and
+offer the local macOS `Carmit` fallback.
 
 ## Code Standards
 
