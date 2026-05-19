@@ -64,3 +64,75 @@ secrets/
 /tmp/wd_token.txt
 audit_*.json.bak
 revert_*.log
+
+
+# ─── Added 2026-05-19 ─────────────────────────────────────────────────
+
+# Presentation materials (private to the speaker — slides, speaker notes,
+# Q&A notes, generated audio, TTS scripts). Not for the public repo.
+docs/presentations/
+
+# Personal supervisor / user guides (work-in-progress documents)
+/MHM_Pipeline_User_Guide_he.*
+docs/MHM_Pipeline_Supervisor_Guide_he.*
+*Supervisor_Guide*
+*User_Guide*
+
+# Audio (recordings, TTS output, intermediate uncompressed wavs)
+*.wav
+*.aiff
+*.mp3
+*.m4a
+*.aac
+*.ogg
+
+# Screenshots (personal/draft documentation)
+docs/Screenshot*.png
+
+# LaTeX build artifacts at ANY depth (was only paper/ before)
+*.aux
+*.toc
+*.out
+*.fls
+*.fdb_latexmk
+*.xdv
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+*.bbl
+*.blg
+
+# Generated PDFs at repo root (compiled docs)
+/*.pdf
+
+# Paper draft / verification artifacts (not for public until accepted)
+paper/SWJ_claim_ledger_and_revision_plan.md
+paper/verification/CLAIMS.yaml
+paper/verification/CLAIMS_yaml_drift_*.md
+paper/verification/HOW_TO_RUN.md
+paper/verification/PROTOCOL.md
+paper/verification/README.md
+paper/verification/DRIFT_LOG.md
+paper/verification/fixtures/
+paper/verification/reports/
+paper/verification/tools/
+paper/verification/verifiers/
+paper/verification/verify_paper.py
+paper/figures/
+
+# Large training data (regenerable from source TSVs; ~900 MB)
+processed-data/
+
+# Large authority DB (bundled inside .app; rebuilt by build_mazal_index.py)
+converter/authority/mazal_index.db
+
+# IDE / editor local config (machine-specific paths)
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Profile / trace dumps
+*.prof
+*.trace
