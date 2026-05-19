@@ -316,7 +316,7 @@ def connect_progress_signals(
     * ``worker.error(str)`` →  ``bar.finish(failure_label, success=False)``
 
     Use ``success_label`` / ``failure_label`` to override the default
-    end-of-job text per panel (e.g. ``"Stage 3 complete"``).
+    end-of-job text per panel (e.g. ``"Authority resolution complete"``).
     """
 
     def _connect(signal_name: str, slot: object) -> None:

@@ -1,4 +1,4 @@
-"""MARC field visualization widget for Stage 1.
+"""MARC field visualization widget for the MARC Parsing stage.
 
 Displays extracted MARC fields in a tree view with color-coded field types,
 making it immediately clear which bibliographic elements were successfully parsed.
@@ -79,7 +79,7 @@ class MarcFieldVisualizer(BaseVisualizationWidget):
 
     def _get_placeholder_text(self) -> str:
         """Return placeholder text for when no data is loaded."""
-        return "No MARC data loaded. Run Stage 1 to see extracted fields."
+        return "No MARC data loaded. Run MARC Parsing to see extracted fields."
 
     def _setup_ui(self) -> None:
         """Set up the tree widget UI."""

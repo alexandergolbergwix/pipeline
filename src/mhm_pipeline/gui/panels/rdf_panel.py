@@ -1,4 +1,4 @@
-"""Stage 4 — RDF serialisation panel with interactive graph viewer."""
+"""RDF Construction panel with interactive graph viewer."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from mhm_pipeline.gui.widgets.ttl_preview import TtlPreview
 
 
 class RdfPanel(QWidget):
-    """Panel for Stage 4: RDF graph serialisation with interactive viewer."""
+    """RDF construction panel — serialises records to the HMO graph with an interactive viewer."""
 
     run_requested = pyqtSignal(Path, Path, str)
 

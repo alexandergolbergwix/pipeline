@@ -39,6 +39,11 @@ PIPELINE="$RESOURCES/pipeline"
 HF_CACHE="$HOME/.cache/huggingface/hub"
 NER_MODEL_ID="models--alexgoldberg--hebrew-manuscript-joint-ner-v2"
 DICTABERT_MODEL_ID="models--dicta-il--dictabert"
+# Rule 46 (2026-05-18, fourth iteration): TaatikNet ByT5 seq2seq model
+# powers the hebrew_translit Tier 4 ML transliteration (replaced the
+# broken DICTA Nakdan). Must be bundled identically on macOS and
+# Windows so the app behaves the same on both platforms.
+TAATIKNET_MODEL_ID="models--malper--taatiknet"
 
 echo "Building $APP_NAME.app (version $VERSION)..."
 
@@ -180,6 +185,25 @@ if [ -d "$DICTA_CACHE/snapshots" ]; then
     fi
 else
     echo "  WARNING: DictaBERT base model not found in HuggingFace cache."
+fi
+
+# Rule 46 (2026-05-18, fourth iteration): Bundle the TaatikNet ByT5
+# transliteration model (~1.1 GB) used by hebrew_translit Tier 4.
+# Replaced the broken DICTA Nakdan. The Windows build (MHMPipeline.spec)
+# bundles this same model — keep both installers in sync.
+TAATIKNET_CACHE="$HF_CACHE/$TAATIKNET_MODEL_ID"
+if [ -d "$TAATIKNET_CACHE/snapshots" ]; then
+    TAATIKNET_SNAPSHOT=$(ls -1 "$TAATIKNET_CACHE/snapshots/" | head -1)
+    if [ -n "$TAATIKNET_SNAPSHOT" ]; then
+        TAATIKNET_DEST="$MODELS_DIR/taatiknet"
+        mkdir -p "$TAATIKNET_DEST"
+        cp -L "$TAATIKNET_CACHE/snapshots/$TAATIKNET_SNAPSHOT/"* "$TAATIKNET_DEST/" 2>/dev/null || true
+        echo "  TaatikNet (Hebrew->Latin): $(du -sh "$TAATIKNET_DEST" | cut -f1)"
+    fi
+else
+    echo "  TaatikNet model not found in HuggingFace cache — Tier 4 falls"
+    echo "  through; the en label falls back to 'NLI <control_number>'."
+    echo "  To bundle TaatikNet: run 'huggingface-cli download malper/taatiknet'."
 fi
 
 # Bundle provenance NER model (best fold, ~704 MB)

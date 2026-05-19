@@ -24,6 +24,10 @@ rsync -a \
   --exclude='__pycache__' \
   --exclude='*.pyc' \
   --exclude='.venv*' \
+  --exclude='.mypy_cache' \
+  --exclude='.ruff_cache' \
+  --exclude='.pytest_cache' \
+  --exclude='.coverage' \
   --exclude='dist' \
   --exclude='build' \
   --exclude='paper' \
@@ -75,6 +79,11 @@ echo "[3/4] Bundling Hugging Face snapshots..."
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
 JOINT_SRC="${HF_CACHE}/models--alexgoldberg--hebrew-manuscript-joint-ner-v2"
 DICTA_SRC="${HF_CACHE}/models--dicta-il--dictabert"
+# Rule 46 (2026-05-18, fourth iteration): TaatikNet for hebrew_translit
+# Tier 4 (replaces the broken Nakdan). Both macOS and Windows installers
+# must bundle this model so the app behaves identically. If absent,
+# the work-label falls back to "NLI <control_number>" on either platform.
+TAATIKNET_SRC="${HF_CACHE}/models--malper--taatiknet"
 
 if [ ! -d "$JOINT_SRC" ]; then
   echo "ERROR: HF snapshot not found at: $JOINT_SRC" >&2
@@ -85,6 +94,14 @@ if [ ! -d "$DICTA_SRC" ]; then
   echo "ERROR: HF snapshot not found at: $DICTA_SRC" >&2
   echo "Run the app once on this machine to populate the HF cache, then retry." >&2
   exit 1
+fi
+if [ ! -d "$TAATIKNET_SRC" ]; then
+  echo "WARNING: TaatikNet model not found at $TAATIKNET_SRC — Tier 4 fall-through" >&2
+  echo "  To bundle TaatikNet, run on this machine first:" >&2
+  echo "    .venv/bin/python -c \"from huggingface_hub import snapshot_download;\\" >&2
+  echo "      snapshot_download('malper/taatiknet')\"" >&2
+  echo "  Continuing without TaatikNet — the work-label falls back to" >&2
+  echo "  'NLI <control_number>' offline." >&2
 fi
 
 mkdir -p "$STAGING/models"
@@ -117,6 +134,12 @@ echo "  Flattening hebrew-manuscript-joint-ner-v2 snapshot..."
 flatten_hf_snapshot "$JOINT_SRC" "$STAGING/models/hebrew-manuscript-joint-ner-v2"
 echo "  Flattening dictabert snapshot..."
 flatten_hf_snapshot "$DICTA_SRC" "$STAGING/models/dictabert"
+if [ -d "$TAATIKNET_SRC" ]; then
+  echo "  Flattening TaatikNet snapshot..."
+  flatten_hf_snapshot "$TAATIKNET_SRC" "$STAGING/models/taatiknet"
+else
+  echo "  Skipping TaatikNet flatten — snapshot not in HF cache (see warning above)."
+fi
 
 echo
 echo "[4/4] Zipping (fastest compression — final compression happens in Inno Setup)..."

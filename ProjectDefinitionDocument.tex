@@ -105,7 +105,7 @@ This document defines the Mapping Hebrew Manuscripts (MHM) MARC-to-RDF Conversio
 \item \textbf{RDF Graph Builder with SHACL Validation} --- constructing an OWL/RDF graph aligned with CIDOC CRM and LRMoo, implementing HMO's three-layer architecture (cataloging-bibliographic, philological, epistemological) and BU-CU-PU structural model, with constraint validation via SHACL shapes.
 \end{enumerate}
 
-The pipeline's final stage will upload the validated RDF data to Wikidata, making Hebrew manuscript metadata accessible as part of the global Linked Open Data (LOD) ecosystem.
+The pipeline's canonical scholarly output is the validated Stage~4/5 HMO Turtle graph (\code{output.ttl}). The final stage projects that graph to Wikidata, making a safe public subset of Hebrew manuscript metadata accessible as part of the global Linked Open Data (LOD) ecosystem. An optional HMO Wikibase export can also deploy the full scholarly model in a browsable and editable interface, but it is a deployment layer rather than a replacement for the ontology-native TTL graph.
 
 \subsection{Scope}
 
@@ -158,7 +158,7 @@ The result is a gap between the research potential embedded in the metadata and 
 
 The MHM project addresses this gap by developing an end-to-end pipeline that transforms MARC records into semantically rich Linked Open Data (LOD). The pipeline is not merely a format conversion tool; it performs conceptual decomposition---breaking flat records into entities and relationships---enriched by machine learning (NER for name extraction) and authority file resolution (for entity disambiguation), producing an RDF graph that conforms to the Hebrew Manuscripts Ontology (HMO) and aligns with international standards (CIDOC CRM, LRMoo).
 
-The pipeline's final output will be uploaded to Wikidata, making Hebrew manuscript metadata discoverable and queryable within the global knowledge graph, alongside data from museums, archives, and libraries worldwide.
+The pipeline's canonical output is the validated HMO RDF graph. That graph can be published in three complementary ways: retained as \code{output.ttl} for ontology-native research and preservation, exported optionally to an HMO Wikibase instance for browsable/editable scholarly curation, and projected conservatively to Wikidata so metadata are discoverable and queryable within the global knowledge graph alongside data from museums, archives, and libraries worldwide.
 
 \subsection{Connection to Prior Research Outputs}
 
@@ -236,13 +236,19 @@ The pipeline consists of six sequential stages, each feeding its output to the n
 \item[Stage 4: RDF Graph Construction]
   The \code{GraphBuilder} assembles an RDF graph from the enriched extracted data. When curator-reviewed authority data are available, Stage~4 uses \code{authority\_enriched\_reviewed.json}; otherwise it falls back to \code{authority\_enriched.json}. The later \code{*\_wikidata\_verified.json} files are Wikidata Studio review state and are never used as manuscript-source input for RDF construction. The \code{UriGenerator} creates stable URIs for each entity. The builder implements the HMO three-layer architecture: creating F4\_Manifestation\_Singleton instances, Work-Expression pairs, BU-CU-PU composition structures, production and transfer events, text traditions, and epistemological annotations.
   Stage~4 emits both \code{lrmoo:R3\_is\_realised\_in} and its inverse \code{lrmoo:R3i\_realises} for Work--Expression links, creates an explicit unidentified Work--Expression pair when the MARC record lacks a usable title or contents entry, attaches \code{hm:canonical\_hierarchy} to generated canonical references, and supplies explicit \code{hm:TextLocation} nodes for detected scribal interventions when the source record does not provide a folio-level location. \code{hm:MultiVolumeSet} is emitted only when at least two volume members can be asserted, preserving the ontology's SHACL cardinality requirement.
+  The resulting \code{output.ttl} is the canonical full HMO scholarly graph. Downstream Wikibase or Wikidata exports are projections/deployments of this graph and must not become the source of record for HMO semantics.
 
 \item[Stage 5: SHACL Validation]
   The generated graph is validated against \code{shacl-shapes.ttl} using PyShacl. Violations are reported with severity levels (Violation, Warning, Info) and specific focus nodes, enabling quality assurance before publication. Optional descriptive details such as folio ranges on expressions and mentioned scribes in colophons are type-checked when present, but are not required for every record because MARC source data do not consistently expose them.
 
 \item[Stage 6: Wikidata Upload]
-  The validated HMO RDF graph is projected into Wikidata statements and uploaded via the Wikidata API and/or QuickStatements. The RDF graph remains the full scholarly representation, while Wikidata is the richest safe public projection. For backward compatibility the legacy JSON-based builder remains available, but the preferred Stage~6 input is the Stage~4/5 \code{output.ttl} generated from reviewed authority data.
+  The validated HMO RDF graph is projected into Wikidata statements and uploaded via the Wikidata API and/or QuickStatements. The RDF graph remains the full scholarly representation, while Wikidata is the richest safe public projection. A projection coverage report records which HMO structures were mapped directly, summarised, or intentionally kept ontology-native. For backward compatibility the legacy JSON-based builder remains available, but the preferred Stage~6 input is the Stage~4/5 \code{output.ttl} generated from reviewed authority data.
+
+  English labels for work items and Hebrew-only person aliases go through a five-tier transliteration waterfall (Rule~46 in \filepath{CLAUDE.md}): a curated override dictionary for famous figures (\textit{Maimonides}, \textit{Rashi}, \textit{Ibn Ezra}, \textit{Joseph Karo}, …), then NLI ALA-LC romanizations read from the MARC source record (fields 246, 880), then a cached Wikidata SPARQL reverse-lookup that finds the community-consensus English label when one exists, then ML-based transliteration via TaatikNet\footnote{\code{malper/taatiknet} \textemdash{} a ByT5-small seq2seq Hebrew\,$\leftrightarrow$\,Latin transliterator by Morris Alper trained on $\sim$15k Wiktionary pairs.}, and finally a deterministic ALA-LC consonantal fallback. Work items with Hebrew-only titles get a compound label of the form \code{"\textless translit\textgreater{} (NLI \textless control\_number\textgreater)"}, pairing a readable transliteration with an unambiguous identifier back to the source record. The labels and TaatikNet inference are fully offline-capable; the model ($\sim$1.1\,GB) is bundled identically on macOS and Windows, with cross-platform parity enforced by an integration test class.
 \end{description}
+
+\paragraph{Optional HMO Wikibase deployment.}
+In addition to the six-stage MARC-to-Wikidata flow, the desktop application exposes an optional \emph{HMO Wikibase} workbench fed by the same canonical \code{output.ttl}. This workbench builds offline project-Wikibase drafts (\code{wikibase\_entities.json}, \code{wikibase\_quickstatements.txt}, and \code{wikibase\_export\_report.json}) and can test the read-only API endpoint of the project Wikibase instance. It performs no upload in its initial form. Its purpose is to prepare a project-controlled Wikibase representation that can preserve HMO classes and relationships that Wikidata cannot natively express. The current export audit confirms one draft entity per typed HMO node and preservation of all RDF-derived non-\code{rdf:type}/non-\code{rdfs:label} statements; \code{rdf:type} and \code{rdfs:label} are represented as entity class metadata and multilingual labels. Nodes with multiple RDF classes currently expose one preferred \code{class\_uri}; a future \code{class\_uris} field is planned so secondary type assertions are also explicit in the JSON draft.
 
 \subsection{Data Flow Diagram}
 
@@ -1082,6 +1088,8 @@ The completed graph is serialised to Turtle format using \code{rdflib}'s seriali
 combined_graph.serialize(destination="output.ttl", format='turtle')
 \end{lstlisting}
 
+\noindent The \code{output.ttl} file is the canonical full HMO scholarly graph. Optional publication targets, including an HMO Wikibase deployment and the public Wikidata projection, are generated from this TTL representation and do not replace it as the ontology-native source of record.
+
 \subsection{LOD Integration Properties}
 
 The graph builder generates the following LOD integration triples at the schema level:
@@ -1682,6 +1690,8 @@ The final stage of the pipeline projects validated HMO RDF data to Wikidata, mak
 \item Integration with tools built on Wikidata (Scholia, Histropedia, Reasonator, etc.)
 \end{itemize}
 
+Stage~6 is therefore a publication/projection stage, not a redefinition of the HMO graph. The Stage~4/5 \code{output.ttl} remains canonical for the complete HMO scholarly model. A project-controlled HMO Wikibase export exposes the same model through Wikibase pages, statements, and edit workflows for curation, but it remains a browsable/editable deployment layer over the ontology graph, not a replacement for \code{hebrew-manuscripts.ttl} or the generated \code{output.ttl}. The current desktop implementation first creates offline Wikibase drafts and a schema bootstrap rather than writing directly to the cloud instance; live upload is deliberately gated behind schema review, connection testing, and later curator approval. The export is full at the entity/statement level, while multi-class RDF typing remains a known schema-fidelity improvement: the JSON draft records a preferred \code{class\_uri} today and should add \code{class\_uris} before treating the draft as a complete type-level mirror of the ontology. Wikidata remains the richest safe public projection because it must conform to Wikidata's community data model, property constraints, notability expectations, and upload safety rules.
+
 \subsection{Entity Mapping: HMO to Wikidata}
 
 \begin{longtable}{|l|l|l|}
@@ -1732,9 +1742,22 @@ Rate limiting is enforced at two levels:
 
 \subsubsection{QuickStatements (Dry Run)}
 
-For batch review before upload, the dry-run mode exports a QuickStatements-format text file:
+For batch review before upload, the dry-run mode exports a QuickStatements-format text file. The exporter emits three section banners in strict dependency order---\textbf{persons first} (because work items reference them via P50), \textbf{works second} (because manuscripts reference them via P1574 \textit{exemplar of}), \textbf{manuscripts last}---so QuickStatements can resolve every \code{LAST} back-reference within the same batch:
 
 \begin{lstlisting}[basicstyle=\ttfamily\small, frame=single]
+/* Persons (create first; works and manuscripts reference them) */
+CREATE
+LAST  Lhe   "משה בן מימון"
+LAST  Len   "Maimonides"
+LAST  P31   Q5
+
+/* Works (create second; manuscripts P1574 them) */
+CREATE
+LAST  Lhe   "תקנות רבנו גרשם מאור הגולה"
+LAST  Len   "Takanut rivno gereshem meor hagola (NLI 990001801390205171)"
+LAST  P31   Q47461344
+
+/* Manuscripts */
 CREATE
 LAST  Len    "Barberini Or. 82"
 LAST  Den    "Hebrew manuscript, Vatican Library"
@@ -1750,6 +1773,7 @@ LAST  P8189  "990000623390205171"
 \begin{enumerate}
 \item \textbf{Authority-based reconciliation:} Instead of SPARQL reconciliation (which proved too slow and unreliable at scale), items with existing QIDs from authority matching (VIAF P214, NLI P8189) are updated; items without authority-linked QIDs are created as new entities.
 \item \textbf{Two-phase pipeline:} Phase~1 preferably builds \code{WikidataItem} objects from the validated HMO \code{output.ttl} via the HMO-to-Wikidata crosswalk. When \code{authority\_enriched\_reviewed.json} exists beside the RDF file, it is used as a reviewed provenance sidecar so the projection preserves curator-approved authority matches and the current rich Wikidata mappings. The older JSON-only \code{WikidataItemBuilder} path remains as a compatibility fallback. Phase~2 uploads to Wikidata or exports QuickStatements.
+\item \textbf{Projection coverage reporting:} Stage~6 emits a coverage report that distinguishes HMO nodes projected directly to Wikidata items/statements, nodes represented indirectly through qualifiers or summaries, and ontology-native structures intentionally omitted from Wikidata.
 \item \textbf{Interactive validation workbench:} Between Phase~1 (build) and Phase~2 (upload) the \emph{Wikidata Studio} exposes a curator-facing review step: every item is run through the \code{\_ValidationWorker} (reconciler + per-PID collision + SPARQL existence + three-channel creator check + in-process validator re-run), and the curator approves each row individually. A ``💾 Save validation'' action exports \code{<input\_stem>\_wikidata\_verified.json}, which round-trips through the Load field so multi-session review is supported on large corpora. Pagination (25/50/100 per page) keeps the table responsive at 5\,000+ items.
 \item \textbf{Source statements:} Every claim includes a reference (P248 = stated in, P854 = reference URL) pointing to the NLI catalog.
 \item \textbf{Incremental upload:} Start with pilot manuscripts, then expand to the full catalog.
@@ -1763,6 +1787,7 @@ LAST  P8189  "990000623390205171"
 \item \textbf{Duplicate detection:} Some Hebrew manuscripts may already have Wikidata items; authority-based reconciliation via VIAF and NLI identifiers is the primary deduplication method.
 \item \textbf{Hebrew labels:} Wikidata supports multilingual labels; both Hebrew and English labels should be provided.
 \item \textbf{Complex structures:} Wikidata's data model does not natively support the BU-CU-PU hierarchy; creative use of qualifiers and item relationships will be needed.
+\item \textbf{Full-model deployment:} Project-controlled HMO Wikibase can represent the full scholarly model more completely than Wikidata. The pipeline therefore exports full-HMO Wikibase drafts from \code{output.ttl} and keeps a separate Wikidata projection for the public global graph.
 \item \textbf{Community standards:} Upload must conform to Wikidata's notability guidelines and data quality expectations.
 \item \textbf{Rate limiting:} The Wikidata API enforces strict rate limits; the pipeline uses per-edit delays and batch pauses to stay within limits.
 \end{itemize}

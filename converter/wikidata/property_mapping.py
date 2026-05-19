@@ -149,12 +149,52 @@ P_SIGNIFICANT_PLACE = "P7153"
 # Epistemological provenance
 P_BASED_ON_HEURISTIC = "P887"
 
+# ── Phase 1 HMO-fidelity enrichment (Rule 42) ────────────────────────
+# Added 2026-05-17. See plans/smooth-humming-feather.md.
+
+P_NATURE_OF_STATEMENT = "P5102"      # nature of statement (hypothesis, dubious, ...)
+P_APPLIES_TO_PART = "P518"           # applies to part / sub-section scoping
+P_STATEMENT_SUPPORTED_BY = "P3680"   # supported by (claim-level evidence)
+P_REASON_DEPRECATED_RANK = "P2241"   # reason for deprecated rank
+P_EXACT_MATCH = "P2888"              # exact match (URI; bridge to HMO IRI)
+
+# Fallback HMO IRI template for the sidecar path in hmo_crosswalk._records_from_rdf.
+# The canonical HMO namespace lives in converter.config.namespaces.HM; this is
+# only used when the RDF graph isn't loaded and we need to synthesize an IRI
+# from a control number. A warning is logged when this path fires.
+# This is the INTERNAL graph identifier used by output.ttl for RDF traversal;
+# it is NOT the URL emitted into Wikidata P2888 (see HMO_WIKIBASE_BASE_URL).
+HMO_NS_TEMPLATE = "http://www.ontology.org.il/HebrewManuscripts/2025-12-06#MS_{control_number}"
+
+# Project-owned Wikibase Cloud instance hosting the HMO graph entities. This
+# is the public, resolvable URI that Wikidata P2888 (exact match) points at.
+# The slug URL pattern `/wiki/MS_<control_number>` is stable and project-
+# controlled; Phase 3 (HMO Wikibase upload) creates a `#REDIRECT [[Item:Q<n>]]`
+# page at this slug so the URL resolves to the canonical Wikibase item.
+HMO_WIKIBASE_BASE_URL = "https://mhm-hmo.wikibase.cloud"
+
+
+def hmo_wikibase_page_url(control_number: str) -> str:
+    """Build the project-owned Wikibase Cloud page URL for a manuscript.
+
+    Used as the value of Wikidata P2888 (exact match). Stable and
+    resolvable once Phase 3 uploads the HMO entities and creates the
+    matching redirect pages. Empty / falsy input returns an empty
+    string, signalling "do not emit P2888".
+    """
+    cn = (control_number or "").strip()
+    if not cn:
+        return ""
+    return f"{HMO_WIKIBASE_BASE_URL}/wiki/MS_{cn}"
+
 # ── Wikidata QIDs ────────────────────────────────────────────────────
 
 # Type classifications
 Q_MANUSCRIPT = "Q87167"
 Q_CODEX = "Q213924"
 Q_ILLUMINATED_MANUSCRIPT = "Q48498"
+Q_COMPOSITE_MANUSCRIPT = "Q33308141"  # multi-text codex with distinct production strata
+Q_PALIMPSEST = "Q179808"              # manuscript reused after scraping
 Q_HUMAN = "Q5"
 Q_WRITTEN_WORK = "Q47461344"
 Q_ORGANIZATION = "Q43229"
@@ -170,6 +210,8 @@ Q_HEBREW_ALPHABET = "Q33513"
 Q_CIRCA = "Q5727902"
 Q_PRESUMABLY = "Q18122778"  # presumably — uncertain attribution (e.g. NER-identified scribe)
 Q_POSSIBLY = "Q21857942"    # possibly — very uncertain attribution
+Q_HYPOTHESIS = "Q41719"     # hypothesis — used as P5102 value for inferred claims
+Q_DUBIOUS = "Q104378399"    # dubious — used as P5102 value for contested claims
 
 # WikiProject
 Q_WIKIPROJECT_MANUSCRIPTS = "Q123078816"

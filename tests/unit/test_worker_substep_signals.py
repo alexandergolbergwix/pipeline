@@ -128,13 +128,13 @@ class TestMarcParseWorkerSubsteps:
         ), f"expected 'Writing marc_extracted.json' substep, got {captured!r}"
 
 
-# ── Test 2: AuthorityWorker emits Stage 3.1 / 3.2 / 3.3 substeps ─────────────
+# ── Test 2: AuthorityWorker emits Mazal / VIAF / Wikidata substeps ───────────
 
 
 class TestAuthorityWorkerSubsteps:
-    """``AuthorityWorker`` emits at least Stage 3.1, 3.2, and 3.3 labels."""
+    """``AuthorityWorker`` emits at least the Mazal, VIAF, and Wikidata substep labels."""
 
-    def test_authority_worker_emits_stage_3_1_through_3_5_substeps(
+    def test_authority_worker_emits_named_substeps(
         self, _qt_app: QCoreApplication, tmp_path: Path
     ) -> None:
         # Single-record fixture: one MARC author with name → triggers all matchers.
@@ -178,7 +178,7 @@ class TestAuthorityWorkerSubsteps:
         mock_wd_class.return_value = mock_wd_inst
 
         # NLI strict mode: return None so the fallback path runs and the
-        # 'Stage 3.1 — Mazal lookup' substep fires.
+        # 'Mazal authority lookup' substep fires.
         from converter.authority import nli_strict_mode
 
         with (
@@ -210,9 +210,15 @@ class TestAuthorityWorkerSubsteps:
 
         assert errors == [], f"unexpected errors: {errors}"
         joined = "\n".join(captured)
-        assert "Stage 3.1" in joined, f"missing Stage 3.1 in {captured!r}"
-        assert "Stage 3.2" in joined, f"missing Stage 3.2 in {captured!r}"
-        assert "Stage 3.3" in joined, f"missing Stage 3.3 in {captured!r}"
+        assert "Mazal authority lookup" in joined, (
+            f"missing 'Mazal authority lookup' substep in {captured!r}"
+        )
+        assert "VIAF cluster lookup" in joined, (
+            f"missing 'VIAF cluster lookup' substep in {captured!r}"
+        )
+        assert "Wikidata SPARQL lookup" in joined, (
+            f"missing 'Wikidata SPARQL lookup' substep in {captured!r}"
+        )
 
 
 # ── Test 3: NerWorker emits Loading substeps before NER inference ────────────

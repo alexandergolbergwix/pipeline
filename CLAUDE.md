@@ -939,3 +939,501 @@ Stage 2 (`NerWorker`) emits a per-record JSON with the following invariants. Eac
 Adding a new false-positive class is a one-line denylist extension followed by a unit test. The two surname allowlists in B2 and the two topic denylists in B4 are documented inline in `ner_post_filters.py` with rationale + how to add an entry.
 
 **Tests**: `tests/unit/test_safety_guards.py::TestNerPostFilters` (17 tests), `TestNerEntitySchemaCleanliness` (4), `TestMarc500ProvenanceRouting` (6), `TestNerOffsetRebasing` (5), `TestPersonNerModelConfidence` (2), `TestRoleToLabelIncludesTranscriber` (3). The wiring tests in `test_entity_normalize.py` (4) guard the normaliser invocation. Total: **545 unit tests passing**.
+
+### 42. HMO-faithful Wikidata projection — Phase 1 enrichment (added 2026-05-17)
+
+Phase 1 of the three-phase plan (see `plans/smooth-humming-feather.md`) that
+lifts the Wikidata projection's HMO accessibility from ~25% to ~82%. This
+phase covers the Wikidata-internal mechanisms only — no community property
+proposals, no live writes (Rule 25 moratorium remains in force), and no
+weakening of Rules 23, 24, 26, or 38.
+
+| Change | File | Invariant |
+|---|---|---|
+| #1 Multi-P31 per manuscript (illuminated + codex + composite + palimpsest + base Q87167) | `converter/wikidata/item_builder.py:_determine_instance_type` | Returns `list[str]` most-specific-first; base `Q_MANUSCRIPT` always last; deduped |
+| #2 P31 emission loop: specific QIDs get `rank="preferred"` when ≥ 2 emitted; base stays `"normal"` | `item_builder.py:build_manuscript_item` | Driven by record flags `has_decoration`, `is_multi_volume`, `is_anthology`, `is_composite`, `is_palimpsest` |
+| #3 `WikidataStatement.rank ∈ {"preferred","normal","deprecated"}` plumbed through QS exporter and WBI uploader | `item_builder.py`, `quickstatements.py`, `uploader.py` | Default `"normal"`. QS v2 has no native rank syntax — exporter emits a `/* RANK: x (set via WBI; not expressible in QS v2) */` comment line preceding the statement. WBI uses `WikibaseRank` enum on every `datatypes.*` call |
+| #4 `value_type ∈ {"somevalue","novalue"}` with `value=None` for known-anonymous authors | `item_builder.py`, `quickstatements.py`, `uploader.py` | QS emits literal `somevalue`/`novalue` tokens (no quotes). WBI sets `mainsnak.snaktype` and clears `datavalue`. Anonymous-author branch emits `P50 somevalue + P3831 (Q_AUTHOR_OCCUPATION) + P2093 (name string) + P5102=Q_HYPOTHESIS` on the **manuscript**; Rule 28 still blocks the person-item creation |
+| #5 P2888 (exact match) to HMO IRI on every manuscript | `item_builder.py`, `hmo_crosswalk.py:_records_from_rdf`, `_load_authority_records` | One P2888 url claim per manuscript when `record["hmo_iri"]` is set. RDF path reads `str(ms_uri)`. Sidecar-fallback synthesizes from `HMO_NS_TEMPLATE` + control number with a `logger.warning` |
+| #6 P31 leaves `_IDENTITY_PROPS`, joins `_MULTI_VALUE_IDENTITY_PROPS`; P569/P570/P19/P20/P227/P214/P8189/P213/P244/P21 unchanged | `uploader.py:_would_create_identity_conflict` | Rule 23 still strict for the other ten identity properties |
+| #7 Genre classifier predictions carry both `P1480=Q_PRESUMABLY` and `P5102=Q_HYPOTHESIS` qualifiers; `P887` stays in reference position | `item_builder.py:_add_title_and_genres` | MARC-sourced genres carry neither qualifier. Rule 28 #3 regress: `P887` must NEVER appear in a `qualifiers=[...]` block (structural test grep-guard) |
+| #8 Optional `P7416` (folios) qualifier on `P1684` (inscription) when upstream surfaces `colophon_folio` or `intervention.folio` | `item_builder.py` | Gate behind presence; never invent folio data |
+
+**New constants** in `property_mapping.py`:
+`P_NATURE_OF_STATEMENT=P5102`, `P_APPLIES_TO_PART=P518`,
+`P_STATEMENT_SUPPORTED_BY=P3680`, `P_REASON_DEPRECATED_RANK=P2241`,
+`P_EXACT_MATCH=P2888`, `Q_COMPOSITE_MANUSCRIPT=Q33308141`,
+`Q_PALIMPSEST=Q179808`, `Q_HYPOTHESIS=Q41719`, `Q_DUBIOUS=Q104378399`,
+`HMO_NS_TEMPLATE` for sidecar IRI synthesis.
+
+**Safety invariants preserved:**
+
+- Rule 23 identity guards (the remaining ten properties) — `TestUploaderIdentityConflict` plus the new `TestP31MultiValueGuardRelaxed::test_p214_conflict_still_blocks`.
+- Rule 28 #3 — `TestP887EmittedAtClaimLevelForGenreClassifier::test_p887_never_appears_as_qualifier` (structural grep).
+- Rule 31 #6 — `TestRankSlotOrderingInQs::test_qualifiers_precede_references`. Rank comment lines do NOT count as qualifiers/references — they sit on their own line preceding the statement.
+- Rule 38 four-stage uploader guard — untouched.
+
+**Audit-response defense-in-depth on the P31 multi-value relaxation (2026-05-17)**: even though P31 is now multi-value, the conflict guard refuses any P31 value outside a closed manuscript-class allowlist (`Q87167`, `Q213924`, `Q48498`, `Q33308141`, `Q179808` + a small set of book/codex synonyms). This blocks two failure modes that recurred on the talk-page incidents:
+
+1. **Wrong class on existing item** — refusing to add `P31=Q87167` (manuscript) when the existing item already carries `P31=Q5` (human) or `P31=Q43229` (org). This is the structural barrier against the Geagea/Kolja21/Epìdosis wrong-type complaints (J9U on humans, manuscript class on band, etc.).
+
+2. **Pipeline bug emitting wrong P31** — refusing any non-manuscript P31 reaching the uploader, even if upstream code emits one by mistake. Pipeline emission is already disciplined (`_determine_instance_type` returns from a closed set), but this is the final structural guard.
+
+Verified on the 68-MS test corpus: manuscript items emit only `Q87167`, `Q213924`, `Q48498` — no incoherent classes. Person items (Q5) and work items (Q47461344) come from separate builder paths (`_get_or_create_person`, `_get_or_create_work`) that have never used the manuscript allowlist.
+
+**Smoke result** on the 68-MS test corpus (`/Users/alexandergo/Desktop/test_sub2/output.ttl`): 193 items / 68 manuscripts, 98 P31 lines (multi-P31 firing on 30 manuscripts, ~44%), 68 P2888 lines (every manuscript bridged to its HMO IRI), preferred-rank comments on every multi-P31 emission. No regressions in 491 safety-guard tests.
+
+Tests added (31): `TestMultiP31Emission` (4), `TestP31MultiValueGuardRelaxed` (7 — base 3 + 3 audit-response + 1 positive), `TestQualifierStackOnInscription` (3), `TestStatementRankSerialization` (3), `TestSomevalueNovalueSerialization` (3), `TestP2888EmitsHmoIri` (3), `TestP887EmittedAtClaimLevelForGenreClassifier` (3), `TestRankSlotOrderingInQs` (3), `TestAnonymousAuthorSomevalueEncoding` (3). Total: 460 → 491 safety-guard tests.
+
+**Audit checklist against the recurring talk-page incidents** — none recur because:
+
+| Incident class (talk page) | Phase 1 surface | Why it cannot recur |
+|---|---|---|
+| Duplicate persons from missing LCCN/GND/ISNI check (Dcflyer, MSGJ) | None — Phase 1 doesn't touch person reconciliation | Rule 26 cross-identifier check unchanged; anonymous-author somevalue branch lands on the manuscript, never as a new person item |
+| Wrong mass-merges with too-broad filters (Jcb, Pallor) | None — Phase 1 doesn't merge | Rule 24 two-layer revert check + merge_duplicates conflict check unchanged |
+| Two lawyers merged with different identifiers (Kolja21) | None | Rule 23 identity guard strict for the ten properties |
+| Empty items with no labels/statements (Q139095809) | None — `build_manuscript_item` always sets labels and P31 | `TestEmptyItemNotExported` still active |
+| Wrong language tag on P1559 (Latin labelled Hebrew) | None — Phase 1 doesn't touch P1559 | Rule 27 fixes unchanged |
+| Institution mis-typed as human (Q139231608) | None — multi-P31 only emits manuscript classes from a closed set; person builder path unchanged | New `TestP31MultiValueGuardRelaxed::test_p31_refuses_manuscript_on_non_manuscript_item` + `test_p31_refuses_non_manuscript_value` |
+| Low-notability persons (Q139231258) | None — anonymous-author branch goes on the manuscript, never creates a person item | `TestAnonymousAuthorSomevalueEncoding::test_rule_28_anonymous_filter_still_blocks_person_item` |
+| P3959 instead of P8189 (Geagea) | None | `TestP3959NotEmittedByPipeline` structural grep passing |
+| "קובץ." generic placeholder labels (Geagea) | None — Phase 1 doesn't touch labels | Rule 27 `_is_placeholder_title` filter unchanged |
+| Wrong VIAF on org items (Q138937383) | None — Phase 1 doesn't touch VIAF assignment | Rule 30 nameType cross-validation unchanged |
+| Misattributed Hebrew name forms (Q139230386) | None — Phase 1 doesn't touch name extraction | Existing label hygiene unchanged |
+| P244/LCCN duplicates (Mcampany) | None — reconciler unchanged | Rule 26 active |
+| Bulk operations during moratorium | None — Phase 1 produces richer dry-run output only | Rule 25 `_check_moratorium_for_live` unchanged; live uploads still refused without `MORATORIUM_LIFTED=true` |
+
+### 44. HMO bridge — Phase 2 (added 2026-05-17)
+
+Phase 2 of the three-phase plan (see `plans/smooth-humming-feather.md`).
+Adds the **bridge layer** between Wikidata and the HMO scholarly graph:
+P973 (described at URL) direct link, an extended projection-coverage
+report, and a static SKOS crosswalk TTL for external consumers.
+
+| Change | File | Invariant |
+|---|---|---|
+| #1 P973 (described at URL) emitted on every manuscript with a control number, pointing at `https://mhm-hmo.wikibase.cloud/wiki/MS_<cn>` | `converter/wikidata/item_builder.py:build_manuscript_item` | P2888 (academic permalink, switches to w3id.org once perma-id PR #6081 merges) and P973 (live direct link) coexist with distinct semantics. Both gated on `control_number` being present |
+| #2 `STRATEGY_BY_LOCAL_NAME` in `projection_coverage.py` extended with 23 new entries covering the previously-unmapped HMO classes (AnthologyPosition, SubjectType, E52_Time-Span, CanonicalReference, BiblicalReference, TalmudicReference, MishnaicReference, HalachicReference, F27_Work_Creation, E56_Language, E57_Material, Decoration, CodicologicalHierarchy, HandChange, Marginalia, MarginalAddition, TextCorrection, TypeScriptType, HebrewScriptType, ModeScriptType, ConditionType, ParticipationRole, AnthologyStructure, CanonicalHierarchyType) | `converter/wikidata/projection_coverage.py` | After Phase 2 the test corpus has ≤3 `unknown` projection statuses (schema/owl-metadata classes only). 23 added strategies are tracked structurally |
+| #3 `WikidataUploadWorker` already writes `wikidata_projection_coverage.json` alongside the other Stage 6 outputs (prior session work; not new in Phase 2) | `src/mhm_pipeline/controller/workers.py:2377-2378` | One JSON file per Stage 6 run; `substep("Writing HMO projection reports")` emits per Rule 39 |
+| #4 Static SKOS crosswalk TTL at `ontology/hmo-wikidata-crosswalk.ttl` (143 triples, 39 SKOS-match assertions: 13 exact + 9 close + 17 related) | `ontology/hmo-wikidata-crosswalk.ttl` | Documents 4 Tier-D HMO-only classes (ParadigmBridge, PhilologicalView, TextTradition, TransmissionWitness) explicitly so external consumers understand the design choice |
+
+**Bridge semantics**:
+
+- `P2888 (exact match)` — academic permalink. Today `https://mhm-hmo.wikibase.cloud/wiki/MS_<cn>`; switches to `https://w3id.org/mhm/manuscript/<cn>` once perma-id/w3id.org PR #6081 merges and the redirect goes live.
+- `P973 (described at URL)` — live direct link to the wikibase.cloud browse page. Stays as the direct URL even after the P2888 swap; lets a human reader click through immediately.
+- Both URLs currently coincide; the two-property split prepares the projection for the permalink switch without further pipeline churn.
+
+**Coverage report shape** (`wikidata_projection_coverage.json`):
+
+- `classes[]` — one entry per HMO class in the input graph with `class_uri`, `class_local_name`, `hmo_node_count`, `projection_status ∈ {direct_wikidata_item, summarized_in_wikidata, hmo_or_wikibase_only, unknown}`, `wikidata_representation`, `wikidata_properties`, `projected_item_count`, `notes`.
+- Top-level: `rdf_class_count`, `wikidata_item_count`, `wikidata_item_counts_by_type`, `strategy_source`, `ttl_path`.
+- Verified on the 68-MS test corpus: 39 RDF classes total → 3 `direct_wikidata_item` + 36 `summarized_in_wikidata` + 4 `hmo_or_wikibase_only` after Phase 2 strategy additions, with `unknown` reduced from 19 to ≤3.
+
+**Tests added (10)**: `TestP973ToWikibaseCloud` (3 — emission, absence without control number, coexistence with P2888); `TestProjectionCoverageReport` (4 — shape, Phase-2 strategies cover corpus, no-`unknown` invariant, worker wiring); `TestHmoWikidataCrosswalkTtl` (3 — TTL parses, F4→Q87167 exact match present, Tier-D classes documented). Total: 491 → 502 safety-guard tests.
+
+**Safety invariants preserved**: Rules 23, 24, 25, 26, 28, 38, 42 all unchanged. P973 emission is gated identically to P2888 (control number must be present), inherits the same NLI reference block, and writes to items the Rule-38 four-stage guard already protects.
+
+### 45. IIIF manifest generation and Wikibase Cloud writer — Phase 3 (added 2026-05-17)
+
+Phase 3 of the three-phase plan (see `plans/smooth-humming-feather.md`). The
+final piece that lifts HMO reachability from Wikidata to ~82%: every
+manuscript gets a hosted IIIF manifest carrying the folio-granular HMO
+structure (Codicological_Unit Ranges, ScribalIntervention/Colophon/Marginalia
+AnnotationCollections, seeAlso to the canonical HMO graph). The manifests
+are published to the project-owned Wikibase Cloud and referenced via
+Wikidata P6108 (IIIF manifest URL).
+
+| Change | File | Invariant |
+|---|---|---|
+| #1 New: `IiifManifestBuilder` builds IIIF Presentation API 3.0 manifests from the HMO graph | `converter/wikidata/iiif_manifest_builder.py` | Pure function (no I/O, no network). One Canvas per parsed folio; placeholder Canvas when no folio data. One Range per Codicological_Unit covering its Canvas span. One AnnotationPage per intervention class (Colophon / ScribalIntervention / Marginalia / MarginalAddition). `seeAlso` points at the w3id.org permalink + the HMO RDF graph IRI |
+| #2 New: `IiifManifestUploader` glues builder → writer with dry-run support | `converter/wikidata/iiif_uploader.py` | Page title pattern `IIIF:MS_<cn>/manifest.json`. Edit summary includes canvas/range/annotation counts |
+| #3 New: `WikibaseCloudWriter` extends `cloud_client.py` with an authenticated MediaWiki API surface | `converter/wikibase/cloud_client.py` | (a) `assert=bot` + `bot=1` on every edit, (b) idempotent — read-and-SHA-256-compare before writing, skip if identical, (c) 6-attempt exponential-backoff retry capped at 30s, (d) CSRF token cached and refreshed on `badtoken`, (e) password redacted from `__repr__`. Bot credentials injected via constructor, never hardcoded. Separate class from read-only `WikibaseCloudClient` to keep the surface unambiguous |
+| #4 SettingsManager extended with `WIKIBASE_CLOUD_{URL,BOT_USERNAME,BOT_NAME,BOT_PASSWORD}` keys plus a `wikibase_cloud_credentials` property | `src/mhm_pipeline/settings/settings_manager.py` | Password lives in OS keychain via QSettings native backend (macOS Keychain / Windows Credential Manager) — same pattern as `wikidata_token`. Plaintext disk storage forbidden |
+| #5 Stage 6.5 wired into `WikidataUploadWorker._write_iiif_manifests` | `src/mhm_pipeline/controller/workers.py` | (a) ALWAYS writes manifests to `iiif_manifests/MS_<cn>.json` (review surface), (b) ONLY uploads when bot credentials present AND not dry-run, (c) writes `iiif_upload_report.json` with per-manifest status, (d) emits `substep("Stage 6.5 — Generating IIIF manifests")` per Rule 39, (e) graceful failure: a failed manifest does not stop the worker |
+| #6 P6108 URL precedence in `item_builder.py` | `converter/wikidata/item_builder.py:870-879` | `record["iiif_manifest_published_url"]` (Stage 6.5 result) takes precedence over `record["iiif_manifest_url"]` (MARC-derived). When upload fails or is skipped, MARC URL is the fallback |
+
+**Trust-boundary distinction**: Rule 25 moratorium and Rule 38 four-stage
+guard apply only to `wikidata.org` writes. `mhm-hmo.wikibase.cloud` is a
+separate project-owned Wikibase; the `WikibaseCloudWriter` is its
+authenticated surface. Even so, the writer enforces:
+
+- `assert=bot` — refuses if the session is not bot-flagged
+- idempotency — the same content cannot be re-written more than once
+- reversibility — all writes are page edits (never page deletes); the
+  page-history UI on wikibase.cloud is the audit/rollback path
+
+**Tests added (50 across Phase 3 unit + integration files)**:
+
+- `tests/unit/test_iiif_phase3.py` (22 tests):
+  - `TestIiifManifestBuilder` (8): IIIF 3.0 context, canvas count from
+    folio range, Range per CU, colophon annotation, intervention
+    annotation, placeholder canvas fallback, seeAlso URIs, builder
+    purity (no network)
+  - `TestWikibaseCloudWriter` (7): password redaction, two-step login,
+    CSRF token caching, idempotency on unchanged content, `assert=bot`
+    on every edit POST, retry on transient 503, structural credential
+    secrecy
+  - `TestIiifManifestUploader` (4): dry-run short-circuit, routing to
+    writer, edit-summary shape, raw-URL pattern
+  - `TestP6108Precedence` (3): published URL beats MARC, MARC URL used
+    when published absent, no P6108 when neither present
+
+- `tests/integration/test_rules_end_to_end.py` (28 tests, all rules):
+  - Rule 23: manuscript P31s in allowlist, no manuscript P31 on persons,
+    `_IDENTITY_PROPS` retains the ten strict properties
+  - Rule 25: moratorium refuses live, lift flag allows live, test-mode
+    bypass
+  - Rule 28: no anonymous person items, no role-descriptor person items,
+    P50 somevalue carries P3831 + P2093 when present
+  - Rule 31: no empty CREATE blocks, no MARC filenames in P7535,
+    qualifiers precede references on every statement line
+  - Rule 38: `_is_our_item` called at upload entry, `_assert_modifiable`
+    called at ≥2 sites, identity-conflict guard strict for ten props
+  - Rule 39: `StageWorker.substep` exists, `WikidataUploadWorker` emits
+    ≥4 substeps including Stage 6.5
+  - Rule 42: multi-P31 firing on corpus, P2888 uses project URI, rank
+    comments present for non-normal ranks, no synthetic HMO IRI in QS
+  - Rule 44: P973 ≥ manuscript count, projection coverage has ≤3
+    unknowns, crosswalk TTL has ≥30 SKOS matches
+  - Rule 45: one IIIF manifest per manuscript, seeAlso has w3id.org +
+    HMO TTL, writer redacts password, P6108 precedence
+  - Cross-cutting: `build_items_from_hmo_ttl` + IIIF builder make zero
+    HTTP calls
+
+Total: 502 → 552 tests (28 integration + 22 unit + 0 regressions).
+
+**Operator workflow** (once bot credentials are configured):
+
+1. Visit `https://mhm-hmo.wikibase.cloud/wiki/Special:BotPasswords`
+2. Create a bot password with the `edit` grant (only — no creation needed
+   for IIIF pages because the IIIF namespace uses standard editing)
+3. Open MHM Pipeline → Settings → enter the bot username, bot name, and
+   bot password (stored in OS keychain)
+4. Run Stage 6 with dry-run UNCHECKED → manifests upload and Wikidata
+   QS export carries the live `?action=raw&ctype=application/json` URLs
+   in P6108
+
+**Rollback procedure**:
+
+- For an individual manifest: visit the page history on
+  `mhm-hmo.wikibase.cloud`, click "Restore this version" on the prior
+  good revision.
+- For a Wikidata P6108 claim pointing at a now-removed manifest: the
+  next Stage 6 dry-run produces a corrected QS file (or falls back to
+  the MARC-derived URL when `iiif_manifest_published_url` is absent).
+
+#### P6108 coexistence (added 2026-05-18)
+
+The original Rule 45 specification treated the published-on-wikibase.cloud
+manifest URL as a *replacement* for NLI's MARC-derived IIIF manifest URL:
+`item_builder.py` used a single `or` precedence and emitted only one
+P6108 statement. Audit on 2026-05-18 found this was wrong:
+
+- **NLI's manifest** (`iiif_manifest_url`, from MARC 856) is image-rich:
+  it hosts the actual high-resolution Canvas image bodies.
+- **Our manifest** (`iiif_manifest_published_url`, on
+  `mhm-hmo.wikibase.cloud`) is metadata-rich but image-poor: its Canvases
+  are placeholders that carry the HMO scholarly overlay
+  (Codicological_Unit Ranges, ScribalIntervention / Colophon / Marginalia
+  AnnotationCollections, seeAlso to the HMO graph node).
+
+The two manifests have **different responsibilities** — images vs.
+scholarly overlay — and a Wikidata consumer that clicks P6108 must be
+able to reach both. The fix replaces the single-value precedence with a
+multi-value emission pattern:
+
+| URLs present | P6108 statements emitted | Ranks |
+|---|---|---|
+| NLI only | one P6108 → NLI URL | `normal` |
+| ours only | one P6108 → our URL | `normal` |
+| BOTH | two P6108 statements | NLI = `preferred`, ours = `normal` |
+
+The `preferred` rank on NLI's manifest ensures image-only IIIF consumers
+(typical viewers) pick the right one by default; our overlay manifest
+stays at `normal` rank and remains discoverable for consumers that
+follow every P6108 value. The QuickStatements exporter at
+`converter/wikidata/quickstatements.py:165-171` already emits a
+`/* RANK: preferred */` comment line for non-normal ranks (Rule 42 /
+Phase 1 mechanism); no exporter changes were required.
+
+To complete the coupling, generated manifests now declare a IIIF 3.0
+`partOf` reference pointing at NLI's manifest URL when that URL is
+present on the manuscript's `hm:DigitalAccess` node. This signals to
+IIIF consumers that ours is a **companion overlay** of NLI's manifest,
+not an independent or competing one. The traversal lives in
+`IiifManifestBuilder._nli_iiif_url(ms_uri)` which walks
+`manuscript hm:has_digital_access → da hm:iiif_manifest_url`; absent NLI
+URL → no `partOf` key emitted (legacy shape preserved).
+
+Files touched:
+
+- `converter/wikidata/item_builder.py` ~870-895 — single `or` precedence
+  replaced with the multi-value pattern documented above.
+- `converter/wikidata/iiif_manifest_builder.py` — new `_nli_iiif_url`
+  method; `build_for_manuscript` emits `partOf` when the NLI URL is
+  reachable in the source graph.
+
+**Tests added (3 to existing `TestP6108Precedence`)**:
+
+- `test_both_urls_present_emits_two_p6108_statements` — when both URLs
+  are present, exactly two P6108 statements are emitted with the right
+  rank assignment and `value_type="url"`.
+- `test_nli_url_gets_preferred_rank` — NLI alone gets `normal` rank
+  (single-value case); both present → NLI gets `preferred`.
+- `test_iiif_manifest_emits_partof_when_nli_url_in_graph` — generated
+  manifest declares `partOf` pointing at the NLI URL; absent NLI URL →
+  no `partOf` key on the manifest.
+
+Total `TestP6108Precedence` grows from 3 → 6 tests. The previously
+existing test `test_published_url_takes_precedence` was updated to
+match the new contract (asserts both statements, not single
+precedence-winner); the corresponding integration test
+`test_p6108_precedence_in_item_builder` in
+`tests/integration/test_rules_end_to_end.py` was updated the same way.
+
+### 46. Smart Hebrew→Latin transliteration (added 2026-05-18)
+
+Before Rule 46, work items whose only title was Hebrew received the
+synthetic English label `"work from Hebrew manuscript <shelfmark>"` —
+visually ugly, useless for search, and called out repeatedly in the
+Wikidata talk threads. Rule 46 replaces that single fallback with a
+three-tier smart waterfall implemented in
+`converter/wikidata/hebrew_translit.py` and consumed by
+`converter/wikidata/item_builder.py` at two call sites: the work-label
+emit in `_get_or_create_work` (the original motivation) and the P2093
+fallback in `_add_person_claims` (Hebrew-only person names get the
+transliterated Latin form as a P1810 / "object named as" qualifier so
+curators searching Wikidata in English can find the fallback).
+
+**Waterfall**:
+
+| Tier | Source | Behaviour |
+|---|---|---|
+| 1 | Curated override dict in `hebrew_translit.py` | ~33 entries: canonical Wikipedia-style English labels for famous figures (Maimonides, Rashi, Nahmanides, Abraham ibn Ezra, Yehuda HaLevi, Baal Shem Tov, Isaac Luria, Joseph Karo, …) plus common manuscript references (Torah, Talmud, Mishnah, Zohar, Siddur, Haggadah, …). Both full patronymic and acronym variants point at the same canonical label. Strips ISBD terminators and collapses internal whitespace before lookup. |
+| 2 | NLI ALA-LC romanization on the source record | Probes the record dict for `title_romanized`, `marc_880`, `marc_246`, `name_romanized`, etc. Librarian-quality ALA-LC romanization always beats machine transliteration. Pure-Hebrew "romanizations" (importer error) are rejected. List and dict-of-langs shapes are unwrapped. |
+| 3 | Deterministic ALA-LC-inspired character map | 27-entry consonantal Hebrew→Latin table (אבגדהוזחטיכךלמםנןסעפףצץקרשת). Final-form letters mapped distinctly (ך→kh, ם→m, ן→n, ף→f, ץ→ts). Silent letters (א, ע) drop to empty. ש→sh, צ→ts. Nikud is stripped before mapping. First alphabetic char gets capitalised. Pass-through of non-Hebrew characters preserves mixed-script embeds. |
+
+**Refusals** — the function returns `None` (so the caller omits the `en`
+slot rather than upload a synthetic value) when input is empty,
+whitespace-only, a non-string, or Latin-only. The synthetic
+`"work from Hebrew manuscript ..."` placeholder is structurally gone
+from `item_builder.py` and the source check is pinned by
+`tests/unit/test_safety_guards.py::TestWorkItemEnglishLabel::test_shelfmark_fallback_in_source`.
+
+**No new runtime dependencies**. `phonikud` was evaluated and rejected:
+it produces IPA phonemes (`ʔ`, `ʃ`, `χ`) rather than Latin letters, so
+adopting it would still leave us writing an IPA→Latin mapping; and its
+`requires_python = <3.13` would couple our floor to its ceiling.
+Wikidata reverse-lookup (search by `rdfs:label@he`, read `rdfs:label@en`)
+is intentionally out of scope — Rule 46 requires offline behaviour from
+the upload hot path. Both are documented in the module docstring as
+possible future extensions.
+
+**Tests added (36) in `tests/unit/test_hebrew_translit.py`**:
+
+- `TestCuratedOverrides` (9): canonical names hit, gershayim variants
+  collapse (ASCII `"` ↔ Unicode `״`), ISBD terminators stripped,
+  internal whitespace collapsed.
+- `TestNliRomanizationRead` (8): every documented romanization key,
+  list shape, dict-of-langs shape, pure-Hebrew rejection, Tier 1 beats
+  Tier 2.
+- `TestAlgorithmicTransliteration` (7): final letters, silent letters,
+  sh / ts digraphs, nikud stripped, first letter capitalised.
+- `TestEdgeCases` (6): empty / whitespace / non-string / Latin-only all
+  return `None`; mixed Hebrew+Latin preserves the Latin embed.
+- `TestKeyNormalisation` (3): override-key normalisation contract.
+- `TestWaterfallIntegration` (4): tier order Tier 1 > Tier 2 > Tier 3,
+  Tier 3 never returns `None` for Hebrew input, the synthetic
+  placeholder is never emitted by any path.
+
+Total grows from 502 → 538 unit tests.
+
+**Touched files**:
+
+- NEW `converter/wikidata/hebrew_translit.py` — the module.
+- MOD `converter/wikidata/item_builder.py` — work-label fallback now
+  routes through `english_label_for_hebrew(title, source_record)`; the
+  P2093 person fallback adds a P1810 qualifier with the transliterated
+  Latin form when the name is Hebrew-only.
+- NEW `tests/unit/test_hebrew_translit.py` — 36 tests.
+- MOD `tests/unit/test_safety_guards.py::TestWorkItemEnglishLabel::test_shelfmark_fallback_in_source` — was pinning the dead synthetic
+  fallback; now pins the new wired-up `english_label_for_hebrew` call
+  AND asserts the old `"work from Hebrew manuscript"` string is gone
+  from the source.
+
+#### Upgrade to a 5-tier waterfall + cross-platform parity (added 2026-05-18, same day)
+
+After the initial 3-tier ship, two more tiers were inserted between
+Tier 2 (NLI MARC) and Tier 3 (consonantal ALA-LC):
+
+| New tier | Source | Behaviour |
+|---|---|---|
+| **3 (new)** | Wikidata SPARQL reverse-lookup | When Wikidata already has an `en` label for the exact Hebrew string, prefer it (community consensus form, e.g. "Maimonides" rather than algorithmic). Implemented in `converter/wikidata/wikidata_reverse_lookup.py`. Cached on disk at `platformdirs.user_cache_dir("MHMPipeline")/wikidata_reverse_label_cache.json` (positive 30 days, negative 24 h). Honours `MHM_NO_NETWORK` env var. Never raises — any failure returns `None`. |
+| **4 (new)** | DICTA Nakdan vowel adder + vowel-aware ALA-LC | Adds Hebrew vowel marks (nikud) via the `dicta-il/dictabert-large-char-menaked` HF model (~1.1 GB), then applies a deterministic vowel-aware ALA-LC table that produces `Rikardo` rather than the consonantal `Rikrdo`. Lazy-loaded with MPS→CUDA→CPU device fallthrough; graceful `None` return when torch/transformers/model files are absent. Implemented in `converter/wikidata/nakdan_translit.py`. |
+
+Tier numbering after the upgrade: 1 override · 2 NLI MARC · 3 Wikidata SPARQL · 4 Nakdan + vowel-aware ALA-LC · 5 consonantal ALA-LC fallback. The orchestrator in `english_label_for_hebrew` catches any exception from Tier 3/4 modules and falls through — a corrupted cache, broken model file, or transient SPARQL outage must never break the upload pipeline.
+
+**Cross-platform installer parity** (the user explicitly flagged 2026-05-18): the macOS .app and the Windows installer MUST bundle the exact same set of ML model directories so the app behaves identically on both platforms.
+
+- `installer/macos/build_app.sh` line 46: `NAKDAN_MODEL_ID="models--dicta-il--dictabert-large-char-menaked"`, copies the HF snapshot to `models/nakdan/` inside the .app.
+- `installer/windows/MHMPipeline.spec` line 92: `datas += _opt_dir('models/nakdan', 'models/nakdan')`.
+- `scripts/package_for_windows_build.sh` line 82: `NAKDAN_SRC="${HF_CACHE}/models--dicta-il--dictabert-large-char-menaked"`, flattens it into `models/nakdan/`.
+
+Nakdan absence is **graceful on both platforms** (warning, not hard error). With Nakdan present, Tier 4 unlocks vowel precision; without it, the same input falls through to Tier 5's consonantal output. Other waterfall tiers don't depend on the model so Tier 1/2/3/5 all keep working.
+
+**Cross-platform parity tests** in `tests/integration/test_rules_end_to_end.py::TestMacOsWindowsInstallerParity` (7 tests) lock in the bundle parity: every required HF model directory and every `.pt` classifier checkpoint must be referenced by BOTH installers; the Nakdan HF model ID must match verbatim; absence is graceful on both sides.
+
+**Integration tests** in `tests/integration/test_hebrew_translit_e2e.py` (18) + `tests/integration/test_rules_end_to_end.py::TestRule46TransliterationEndToEnd` (7) cover: tier priority (each tier wins over lower tiers), Stage 6 pipeline integration (legacy synthetic label structurally absent), cache hit/miss + format, graceful degradation (fully offline + no model still produces output), pathological inputs (no raise), SPARQL/Nakdan failure-fall-through, and dissertation examples (`"משה בן מימון" → "Maimonides"`, `"רש״י" → "Rashi"`, `"ריקרדו"` produces Latin with the r/k/d skeleton).
+
+Total tests across Rule 46 (initial + upgrade): 36 unit `test_hebrew_translit.py` + 10 unit `test_wikidata_reverse_lookup.py` + 26 unit `test_nakdan_translit.py` + 18 integration `test_hebrew_translit_e2e.py` + 7 integration (`TestRule46TransliterationEndToEnd`) + 7 integration (`TestMacOsWindowsInstallerParity`) = **104 tests**.
+
+**Touched files (post-upgrade)**:
+
+- NEW `converter/wikidata/wikidata_reverse_lookup.py` — Tier 3 SPARQL helper with on-disk cache + `MHM_NO_NETWORK` env-var honour
+- NEW `converter/wikidata/nakdan_translit.py` — Tier 4 Nakdan loader + vowel-aware ALA-LC + graceful-degradation orchestrator
+- MOD `converter/wikidata/hebrew_translit.py` — `english_label_for_hebrew` extended to 5-tier waterfall with try/except guards around Tiers 3/4 imports
+- MOD `installer/macos/build_app.sh` — bundles `models/nakdan/`
+- MOD `installer/windows/MHMPipeline.spec` — bundles `models/nakdan/`
+- MOD `scripts/package_for_windows_build.sh` — flattens the Nakdan HF snapshot
+- NEW `tests/unit/test_wikidata_reverse_lookup.py` — 10 tests (cache hit/miss, TTL expiry, SPARQL shape, network-disabled, negative cache)
+- NEW `tests/unit/test_nakdan_translit.py` — 26 tests (vowel-aware ALA-LC determinism + graceful-degradation paths for the lazy loader)
+- NEW `tests/integration/test_hebrew_translit_e2e.py` — 18 tests covering tier priority, pipeline integration, cache, degradation, dissertation examples
+- MOD `tests/integration/test_rules_end_to_end.py` — added `TestRule46TransliterationEndToEnd` (7) + `TestMacOsWindowsInstallerParity` (7); `TestNoNetworkCallsDuringBuild::test_build_and_iiif_offline` now sets `MHM_NO_NETWORK=true` so the SPARQL tier doesn't fire
+
+#### Empirical Tier 4 / Tier 5 disablement for work labels (added 2026-05-18, third revision same day)
+
+Live testing of the bundled DICTA Nakdan model on real Stage 6 outputs surfaced two hard problems:
+
+1. **Tier 4 (DICTA Nakdan) is broken under `transformers==5.3.0`** — the model's custom `predict()` method (shipped via `trust_remote_code=True` from `BertForDiacritization.py`) outputs cumulative-prefix garbage on every input, including DICTA's own documented prose example. Bypassing `predict()` and decoding the logits directly returned zero nikud predictions across the test set. Diagnosis: the model was trained on modern Hebrew prose and is out-of-distribution for the medieval Hebrew names + short manuscript titles the MHM corpus actually contains.
+
+2. **Tier 5 (consonantal ALA-LC) is too ugly for public Wikidata items.** On the user's canonical example "תקנות רבנו גרשם מאור הגולה", Tier 5 emitted `"Tknot rvno grshm mor hgolh"` — readable as a consonant skeleton but unfit as a public English label. The user flagged this on 2026-05-18.
+
+**Resolution for work labels** in `converter/wikidata/item_builder.py:_get_or_create_work`:
+
+- Call the waterfall with `allow_nakdan=False, allow_algorithmic=False` so only Tiers 1, 2, 3 contribute.
+- When the waterfall returns `None`, fall back to the manuscript's NLI control number as the en label, prefixed `"NLI {control_number}"`. This is deliberately not a transliteration; it's a stable, unambiguous identifier that a Wikidata consumer can resolve to the canonical record.
+
+Result on the user's example: `en = "NLI 990000827290205171"` instead of `"Tknot rvno grshm mor hgolh"`.
+
+**Future work**: web research on 2026-05-18 surfaced [TaatikNet](https://github.com/morrisalp/taatiknet) — a ByT5-small seq2seq model from Morris Alper trained on ~15k Hebrew↔Latin Wiktionary pairs. It is bidirectional Hebrew↔Latin transliteration, far more appropriate for our use case than DICTA Nakdan (which is a nikud-adder, not a transliterator). A future Rule 46 revision can fine-tune TaatikNet on our ~1,100 paired Hebrew/Latin labels extracted from MARC 880-linked fields in the 123k NLI corpus. Until that ships, the NLI-identifier fallback is the public contract.
+
+**Tier 5 still fires for person P2093 fallbacks.** Person names like "Avrhm bn zr" remain readable as Abraham ben Ezra at a squint; the en-label slot on a person item is more forgiving than the work-label slot. Only work labels were singled out as problematic.
+
+#### Fourth iteration — TaatikNet engine swap + compound en label (added 2026-05-18, same day)
+
+Nakdan was empirically broken AND out-of-distribution for medieval Hebrew. Replaced as the Tier 4 engine with **TaatikNet** (`malper/taatiknet`) — a ByT5-small seq2seq Hebrew↔Latin transliterator trained on ~15k Wiktionary pairs by Morris Alper. Verified on the user's canonical example:
+
+| Stage | Output for `"תקנות רבנו גרשם מאור הגולה"` |
+|---|---|
+| First ship (Tier 5 consonantal) | `"Tknot rvno grshm mor hgolh"` ← ugly |
+| Third iteration (NLI fallback only) | `"NLI 990000827290205171"` ← unambiguous but bare |
+| **Fourth iteration (TaatikNet + NLI)** | **`"Takanut rivno gereshem meor hagola (NLI 990000827290205171)"`** ← what the user asked for |
+
+**Per-word strategy**: TaatikNet was trained on individual Wiktionary entries, so feeding it a multi-word phrase collapses the output. The wrapper at `converter/wikidata/taatiknet_translit.py:transliterate_hebrew_to_latin` splits on whitespace, transliterates each word, then re-joins. Empirically this produces clean output for both single names and multi-word titles.
+
+**Stress-mark stripping**: TaatikNet emits Spanish-style acute accents on stressed vowels (`Takanút rivnó`). The wrapper applies `unicodedata.normalize("NFD")` + filter on combining marks to drop the accents (`Takanut rivno`) for clean public-facing Wikidata labels. A `preserve_stress_marks=True` flag is available for callers who want the academic stress notation.
+
+**Compound work-label format** (`_get_or_create_work` in `item_builder.py`):
+- `en = f"{translit} (NLI {control_number})"` when both are available
+- `en = translit` when only translit succeeds (no control number in record)
+- `en = f"NLI {control_number}"` when TaatikNet returns None (Tier 4 graceful degradation)
+- `en` slot is omitted entirely when neither is available (Wikidata items can be label-less in `en` for non-Latin-origin works)
+
+**Bundle changes**:
+- macOS `installer/macos/build_app.sh`: `NAKDAN_MODEL_ID` → `TAATIKNET_MODEL_ID = "models--malper--taatiknet"`; copies to `models/taatiknet/` inside the .app (~1.1 GB, same size as Nakdan was).
+- Windows `installer/windows/MHMPipeline.spec`: `models/nakdan` → `models/taatiknet`.
+- `scripts/package_for_windows_build.sh`: same swap.
+- Cross-platform parity tests in `TestMacOsWindowsInstallerParity` updated to require `taatiknet` (not `nakdan`) on both sides.
+
+**Dead-code cleanup**: `converter/wikidata/nakdan_translit.py` and `tests/unit/test_nakdan_translit.py` are **deleted**. The waterfall and tests now reference `converter/wikidata/taatiknet_translit.py` exclusively. The `allow_nakdan` flag in `english_label_for_hebrew` was kept as a name for backwards compatibility — it gates Tier 4 (now TaatikNet).
+
+**Verification**: 60 Rule 46 integration tests pass (waterfall priority, Stage 6 pipeline integration, cache, graceful degradation, dissertation examples). The smoke test against the user's flagged work item now produces `Takanut rivno gereshem meor hagola (NLI 990000827290205171)` exactly.
+
+### 47. Work items must be CREATE'd in QuickStatements export (added 2026-05-18)
+
+QuickStatements v2 has no implicit item creation: every new entity must
+appear as its own `CREATE` block before any other line can reference it
+via `LAST`. Manuscript items reference their work items by P1574
+(exemplar of); if the works are not CREATE'd first, the manuscript line
+emits a stub string value (`__LOCAL:work:...`) that QuickStatements
+treats as a literal string rather than an item identifier.
+
+**Bug** (pre-2026-05-18): `QuickStatementsExporter.export()` in
+`converter/wikidata/quickstatements.py` iterated only `persons` and
+`manuscripts`. Work items built by `_get_or_create_work` carried full
+labels (including the Rule 46 compound form
+`Takanut rivno gereshem meor hagola (NLI 990001801390205171)`) but were
+silently dropped from the QS output. The user flagged this on
+2026-05-18 after a Stage 6 run on the test corpus.
+
+**Fix**: the export method now partitions and iterates three groups in
+strict dependency order:
+
+```python
+persons = [i for i in items if i.entity_type == "person" and not i.existing_qid]
+works = [i for i in items if i.entity_type == "work" and not i.existing_qid]
+manuscripts = [i for i in items if i.entity_type == "manuscript"]
+```
+
+Ship order: **persons first** (work items reference them via P50
+author); **works second** (manuscript items reference them via P1574);
+**manuscripts last**. The exporter's section-comment banners encode
+the same dependency chain.
+
+**Invariant**: any future `entity_type` introduced into `WikidataItem`
+must be added to this partition explicitly. The `entity_type in {…}`
+filter is the regression barrier — anything outside the explicit set is
+silently dropped. Treat the partition as a closed set; add a new branch
+when adding a new type.
+
+**Bundle impact**: macOS DMG (`MHMPipeline-0.1.0.dmg`, 5.9 GB) and
+Windows source zip (`mhm-pipeline-source.zip`, 5.6 GB) regenerated
+2026-05-18; both ship the quickstatements.py fix.
+
+#### Latin-only invariant on en labels (added 2026-05-18, same day)
+
+After verifying the QS export contained the 111 work CREATE blocks, a
+second audit found three label-quality issues stemming from TaatikNet
+echoing Hebrew on out-of-distribution input:
+
+| Symptom | Cause |
+|---|---|
+| Pure Hebrew echo: `"גוק אוסק (NLI ...)"` | TaatikNet returns the input unchanged on short / OOD tokens; per-word builder appended the raw Hebrew |
+| Mixed Hebrew+Latin: `"מא ktovim omet ... (NLI ...)"` | One of the per-word calls echoed Hebrew; the joiner kept it |
+| Partial transliterations: `"1) Daf e (NLI ...)"` | (Separate Stage-2 NER quality issue — Latin-only but garbage title) |
+
+**Invariant** (now enforced): the en slot on a work or person Wikidata
+item must NEVER contain Hebrew script. If TaatikNet's output contains
+any Hebrew character, the whole transliteration is rejected and the
+caller falls back to `"NLI <control_number>"` alone.
+
+**Fix** (two-layer defense in
+`converter/wikidata/taatiknet_translit.py` +
+`converter/wikidata/hebrew_translit.py`):
+
+1. **Per-word guard** in `_translit_single_word`: after decoding the
+   model output, `_has_hebrew(decoded)` rejects the result as a failure
+   (returns `None`). The per-word caller already drops `None` words,
+   but combined with #2 below this means a single Hebrew-echo word
+   collapses the whole phrase.
+2. **All-or-nothing phrase contract** in
+   `transliterate_hebrew_to_latin`: when `failures > 0` (any Hebrew
+   word didn't transliterate cleanly), the whole phrase returns
+   `None`. A final `_has_hebrew(out)` defensive check catches any
+   regression where Hebrew sneaks through despite zero per-word
+   failures.
+3. **Waterfall defensive guard** in `english_label_for_hebrew`: after
+   Tier 4 returns, `_has_hebrew(ml_label)` rejects any Hebrew-leaking
+   output. This is belt-and-suspenders insurance against future engine
+   swaps regressing on the Latin-only contract.
+
+**Tests added (4) in `tests/unit/test_hebrew_translit.py`** —
+`TestTier4LatinOnlyOutput`: pure echo → None; mixed echo → None; clean
+output unchanged; defensive waterfall guard catches engine regression.
+Total: 36 → 40 unit tests.
+
+**Note on `"1) Daf e"`-class entries**: these are Latin-only and pass
+the new guard. They originate from Stage-2 contents NER extracting the
+folio marker `"דף"` ("Daf"/"page") and the MARC 505 list numbering as
+part of the work title. Cleaning that is a Stage-2 NER concern, out of
+scope for Rule 47.

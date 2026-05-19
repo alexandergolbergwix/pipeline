@@ -1360,3 +1360,53 @@ def invalidate_cache() -> None:
     """Clear the cached dark-mode flag (call after a palette/theme change)."""
     global _dark  # noqa: PLW0603
     _dark = None
+
+
+def install_table_overflow_scroll(
+    table_view: object,
+    *,
+    min_section_px: int = 72,
+) -> None:
+    """Install the "scroll horizontally when too wide" policy on a QTableView.
+
+    Project convention (Rule 48): any table whose natural column sum
+    exceeds the viewport width must show a horizontal scrollbar instead of
+    crushing/clipping columns. The default Qt behaviour with a Stretch-mode
+    column absorbs all slack into that column, so other columns never
+    overflow — but if a screen is narrow enough, the Stretch column gets
+    squeezed below readability AND any Fixed-width column at the right
+    edge can be visually clipped by the panel boundary.
+
+    Calling this on a QTableView pins three policies:
+      * ``minimumSectionSize`` so no column (including the Stretch column)
+        collapses below ~70px of readable width.
+      * ``horizontalScrollBarPolicy = ScrollBarAsNeeded`` so a scrollbar
+        appears automatically when the column sum exceeds viewport width.
+      * ``horizontalScrollMode = ScrollPerPixel`` for smooth horizontal
+        scroll on trackpads.
+
+    Args:
+      table_view: A ``QTableView`` (or ``QAbstractItemView`` with a
+        horizontal header). Anything else is a no-op.
+      min_section_px: Minimum column width in pixels. Default 72 is
+        enough for a 2-char header + chevron + padding.
+    """
+    try:
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+        from PyQt6.QtWidgets import QAbstractItemView  # noqa: PLC0415
+    except ImportError:  # pragma: no cover — GUI-only path
+        return
+
+    header = getattr(table_view, "horizontalHeader", None)
+    if callable(header):
+        h = header()
+        if h is not None:
+            h.setMinimumSectionSize(min_section_px)
+
+    set_h_policy = getattr(table_view, "setHorizontalScrollBarPolicy", None)
+    if callable(set_h_policy):
+        set_h_policy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+    set_h_mode = getattr(table_view, "setHorizontalScrollMode", None)
+    if callable(set_h_mode):
+        set_h_mode(QAbstractItemView.ScrollMode.ScrollPerPixel)

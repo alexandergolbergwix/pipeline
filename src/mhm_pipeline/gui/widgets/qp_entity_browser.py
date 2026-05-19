@@ -1297,6 +1297,8 @@ class ClaimsEditDialog(QDialog):
         h.setSectionResizeMode(self._COL_REFS, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(self._COL_DELETE, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(self._COL_DELETE, 44)
+        # Rule 48: enable horizontal scroll-when-too-wide.
+        theme.install_table_overflow_scroll(self._table)
         outer.addWidget(self._table, stretch=1)
 
         self._attach_delete_buttons()
@@ -2022,6 +2024,8 @@ class QPEntityBrowser(QWidget):
         h.setSectionResizeMode(COL_APPROVED, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(COL_ACTIONS, 118)
+        # Rule 48: enable horizontal scroll-when-too-wide.
+        theme.install_table_overflow_scroll(self._table)
 
         # ── Pagination bar (25 / 50 / 100 per page) ─────────────────────
         page_bar = QHBoxLayout()

@@ -30,6 +30,11 @@ class SettingsManager:
     MAZAL_XML_DIR = "authority/mazal_xml_dir"
     KIMA_DB_PATH = "authority/kima_db_path"
     KIMA_TSV_DIR = "authority/kima_tsv_dir"
+    # ── Rule 45 (Phase 3): Wikibase Cloud bot credentials for IIIF upload ──
+    WIKIBASE_CLOUD_URL = "wikibase/cloud_url"
+    WIKIBASE_CLOUD_BOT_USERNAME = "wikibase/cloud_bot_username"
+    WIKIBASE_CLOUD_BOT_NAME = "wikibase/cloud_bot_name"
+    WIKIBASE_CLOUD_BOT_PASSWORD = "wikibase/cloud_bot_password"
 
     # Repo-relative defaults (resolved at class definition time so they survive
     # being imported from any working directory). When frozen by PyInstaller
@@ -209,3 +214,60 @@ class SettingsManager:
     @kima_tsv_dir.setter
     def kima_tsv_dir(self, value: Path) -> None:
         self.set(self.KIMA_TSV_DIR, value)
+
+    # ── Rule 45 (Phase 3): Wikibase Cloud bot credentials ──────────────
+
+    @property
+    def wikibase_cloud_url(self) -> str:
+        """Base URL of the project Wikibase Cloud (default: mhm-hmo.wikibase.cloud)."""
+        return str(self.get(self.WIKIBASE_CLOUD_URL, "https://mhm-hmo.wikibase.cloud"))
+
+    @wikibase_cloud_url.setter
+    def wikibase_cloud_url(self, value: str) -> None:
+        self.set(self.WIKIBASE_CLOUD_URL, value)
+
+    @property
+    def wikibase_cloud_bot_username(self) -> str:
+        """Bot account username on the Wikibase Cloud instance."""
+        return str(self.get(self.WIKIBASE_CLOUD_BOT_USERNAME, ""))
+
+    @wikibase_cloud_bot_username.setter
+    def wikibase_cloud_bot_username(self, value: str) -> None:
+        self.set(self.WIKIBASE_CLOUD_BOT_USERNAME, value)
+
+    @property
+    def wikibase_cloud_bot_name(self) -> str:
+        """Bot password name (the part after ``@`` in Special:BotPasswords)."""
+        return str(self.get(self.WIKIBASE_CLOUD_BOT_NAME, ""))
+
+    @wikibase_cloud_bot_name.setter
+    def wikibase_cloud_bot_name(self, value: str) -> None:
+        self.set(self.WIKIBASE_CLOUD_BOT_NAME, value)
+
+    @property
+    def wikibase_cloud_bot_password(self) -> str:
+        """The actual bot password. Stored in OS keychain via QSettings."""
+        return str(self.get(self.WIKIBASE_CLOUD_BOT_PASSWORD, ""))
+
+    @wikibase_cloud_bot_password.setter
+    def wikibase_cloud_bot_password(self, value: str) -> None:
+        self.set(self.WIKIBASE_CLOUD_BOT_PASSWORD, value)
+
+    @property
+    def wikibase_cloud_credentials(self) -> object | None:
+        """Resolved :class:`WikibaseBotCredentials` or ``None`` if not configured.
+
+        Lazy import on the wikibase module so importing ``settings_manager``
+        in tests does not pull the writer dependency tree.
+        """
+        username = self.wikibase_cloud_bot_username.strip()
+        bot_name = self.wikibase_cloud_bot_name.strip()
+        password = self.wikibase_cloud_bot_password.strip()
+        if not (username and bot_name and password):
+            return None
+        from converter.wikibase.cloud_client import WikibaseBotCredentials  # noqa: PLC0415
+        return WikibaseBotCredentials(
+            username=username,
+            bot_name=bot_name,
+            password=password,
+        )

@@ -284,12 +284,64 @@ class WikidataUploader:
     # pattern that Kolja21 flagged (e.g., two birth dates, two GNDs). We MUST
     # skip our value in that case — the items are different real-world entities.
     _IDENTITY_PROPS = frozenset(
-        {"P569", "P570", "P19", "P20", "P227", "P214", "P8189", "P213", "P244", "P31", "P21"}
+        {"P569", "P570", "P19", "P20", "P227", "P214", "P8189", "P213", "P244", "P21"}
+    )
+
+    # Rule 42 (Phase 1 HMO fidelity, 2026-05-17): P31 moves OUT of the strict
+    # single-value bucket. HMO models manuscripts as intersections of multiple
+    # classes (illuminated + composite + palimpsest + codex) and WikiProject
+    # Manuscripts endorses multi-P31 when no pair is in a subclass relation.
+    # The other ten identity properties keep their Rule 23 semantics intact.
+    _MULTI_VALUE_IDENTITY_PROPS = frozenset({"P31"})
+
+    # Defense-in-depth (audit response 2026-05-17, Geagea/Kolja21/Epìdosis
+    # talk threads): the multi-value P31 relaxation is bounded to the
+    # manuscript class hierarchy. Adding P31=Q5 (human), P31=Q43229
+    # (organization), P31=Q215380 (band), etc. is STILL refused even
+    # though P31 is multi-value. This is the structural guard against
+    # the wrong-P31 incidents — manuscripts can be both Q87167 and
+    # Q48498, but never Q87167 and Q5.
+    _MANUSCRIPT_P31_VALUES = frozenset(
+        {
+            "Q87167",      # manuscript
+            "Q213924",     # codex
+            "Q48498",      # illuminated manuscript
+            "Q33308141",   # composite manuscript
+            "Q179808",     # palimpsest
+            "Q3884",       # codex (alternate)
+            "Q571",        # book (only when manuscript is also being typed as a book)
+        }
     )
 
     def _would_create_identity_conflict(self, wbi_item: object, stmt: WikidataStatement) -> bool:
         """Return True if adding this statement to the existing item would create
         a multi-value conflict on an identity property."""
+        if stmt.property_id in self._MULTI_VALUE_IDENTITY_PROPS:
+            # Multi-value allowed, but bounded to a coherent class hierarchy
+            # to avoid the wrong-P31 incidents (e.g., manuscript-class on a
+            # person item). Audit response 2026-05-17.
+            if stmt.property_id == "P31":
+                new_value = str(stmt.value)
+                if new_value not in self._MANUSCRIPT_P31_VALUES:
+                    # Refuse to add a non-manuscript P31 via the pipeline.
+                    # The pipeline only emits manuscript P31s; if a caller
+                    # reaches here with something else, it's a bug.
+                    return True
+                # If the existing item already carries a non-manuscript P31
+                # (e.g., Q5 human), refuse to add a manuscript-class one
+                # alongside it.
+                try:
+                    existing_claims = wbi_item.claims.get("P31") or []
+                    for existing in existing_claims:
+                        existing_value = self._extract_claim_value(existing)
+                        if (
+                            existing_value
+                            and existing_value not in self._MANUSCRIPT_P31_VALUES
+                        ):
+                            return True
+                except Exception:
+                    pass
+            return False
         if stmt.property_id not in self._IDENTITY_PROPS:
             return False
         try:
@@ -451,6 +503,7 @@ class WikidataUploader:
         """
         from wikibaseintegrator import datatypes  # noqa: PLC0415
         from wikibaseintegrator.models import Reference, References  # noqa: PLC0415
+        from wikibaseintegrator.wbi_enums import WikibaseRank  # noqa: PLC0415
 
         # Build references
         refs = References()
@@ -476,13 +529,37 @@ class WikidataUploader:
             if qual_claim:
                 qualifiers.add(qual_claim)
 
+        # Rule 42: resolve rank for the claim. WikibaseIntegrator's
+        # WikibaseRank enum is the canonical surface; we fail closed by
+        # defaulting to NORMAL if the value is unknown.
+        rank_map = {
+            "preferred": WikibaseRank.PREFERRED,
+            "normal": WikibaseRank.NORMAL,
+            "deprecated": WikibaseRank.DEPRECATED,
+        }
+        rank_enum = rank_map.get(stmt.rank, WikibaseRank.NORMAL)
+
         try:
+            # Rule 42: somevalue/novalue map to WBI's snaktype field rather
+            # than a concrete datavalue. We build a stub Item claim and
+            # override its mainsnak.
+            if stmt.value_type in ("somevalue", "novalue"):
+                stub = datatypes.Item(
+                    prop_nr=stmt.property_id,
+                    references=refs,
+                    qualifiers=qualifiers,
+                    rank=rank_enum,
+                )
+                stub.mainsnak.snaktype = stmt.value_type
+                stub.mainsnak.datavalue = {}
+                return stub
             if stmt.value_type == "item":
                 return datatypes.Item(
                     prop_nr=stmt.property_id,
                     value=str(value),
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
             if stmt.value_type == "string":
                 return datatypes.String(
@@ -490,6 +567,7 @@ class WikidataUploader:
                     value=str(value),
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
             if stmt.value_type == "external-id":
                 return datatypes.ExternalID(
@@ -497,6 +575,7 @@ class WikidataUploader:
                     value=str(value),
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
             if stmt.value_type == "time":
                 return datatypes.Time(
@@ -505,6 +584,7 @@ class WikidataUploader:
                     precision=stmt.precision,
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
             if stmt.value_type == "quantity":
                 # Map unit strings to Wikidata entity URLs
@@ -520,6 +600,7 @@ class WikidataUploader:
                     unit=unit_val,
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
             if stmt.value_type == "url":
                 return datatypes.URL(
@@ -527,6 +608,7 @@ class WikidataUploader:
                     value=str(value),
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
             if stmt.value_type == "monolingualtext":
                 return datatypes.MonolingualText(
@@ -535,6 +617,7 @@ class WikidataUploader:
                     language=stmt.language,
                     references=refs,
                     qualifiers=qualifiers,
+                    rank=rank_enum,
                 )
         except Exception as exc:
             logger.warning(

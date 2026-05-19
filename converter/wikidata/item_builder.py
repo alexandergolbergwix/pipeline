@@ -22,12 +22,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from converter.wikidata.hebrew_translit import english_label_for_hebrew
 from converter.wikidata.property_mapping import (
     CONDITION_TO_QID,
     GENRE_TO_QID,
+    HMO_NS_TEMPLATE,
     KNOWN_WORK_QIDS,
     LANG_TO_QID,
     MATERIAL_TO_QID,
+    P_APPLIES_TO_PART,
     P_AUTHOR,
     P_BASED_ON_HEURISTIC,
     P_CATALOG_CODE,
@@ -37,6 +40,7 @@ from converter.wikidata.property_mapping import (
     P_DATE_OF_DEATH,
     P_DESCRIBED_AT_URL,
     P_EARLIEST_DATE,
+    P_EXACT_MATCH,
     P_EXEMPLAR_OF,
     P_GENRE,
     P_HEIGHT,
@@ -51,6 +55,7 @@ from converter.wikidata.property_mapping import (
     P_LOCATION_OF_CREATION,
     P_MAIN_SUBJECT,
     P_MATERIAL,
+    P_NATURE_OF_STATEMENT,
     P_NLI_J9U_ID,
     P_NUMBER_OF_FOLIOS,
     P_NUMBER_OF_PAGES,
@@ -60,10 +65,12 @@ from converter.wikidata.property_mapping import (
     P_OCCUPATION,
     P_ON_FOCUS_LIST,
     P_OWNED_BY,
+    P_REASON_DEPRECATED_RANK,
     P_SCRIPT_STYLE,
     P_SIGNIFICANT_PLACE,
     P_SOURCING_CIRCUMSTANCES,
     P_START_TIME,
+    P_STATEMENT_SUPPORTED_BY,
     P_TITLE,
     P_VIAF_ID,
     P_VOLUME,
@@ -76,15 +83,20 @@ from converter.wikidata.property_mapping import (
     Q_CODEX,
     Q_COLOPHON,
     Q_COMMENTATOR_OCCUPATION,
+    Q_COMPOSITE_MANUSCRIPT,
     Q_CORRECTION,
+    Q_DUBIOUS,
     Q_GLOSS,
     Q_HEBREW_ALPHABET,
     Q_HUMAN,
+    Q_HYPOTHESIS,
     Q_ILLUMINATED_MANUSCRIPT,
+    Q_KTIV,
     Q_MANUSCRIPT,
     Q_MARGINALIA,
     Q_NLI,
     Q_ORGANIZATION,
+    Q_PALIMPSEST,
     Q_POSSIBLY,
     Q_PRESUMABLY,
     Q_SCRIBE,
@@ -96,6 +108,7 @@ from converter.wikidata.property_mapping import (
     date_to_wikidata,
     extract_viaf_id,
     extract_wikidata_qid,
+    hmo_wikibase_page_url,
     nli_j9u_id,
     nli_reference,
     viaf_reference,
@@ -109,16 +122,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class WikidataStatement:
-    """A single Wikidata statement (claim) with optional qualifiers and references."""
+    """A single Wikidata statement (claim) with optional qualifiers and references.
+
+    ``rank`` and ``value_type ∈ {"somevalue","novalue"}`` were added in
+    Rule 42 (Phase 1 HMO fidelity, 2026-05-17). Default rank "normal"
+    preserves every existing call site; somevalue/novalue carry ``value=None``.
+    """
 
     property_id: str
-    value: str | int | float
-    value_type: str  # "item", "string", "time", "quantity", "url", "monolingualtext"
+    value: str | int | float | None  # None only for value_type in {somevalue,novalue}
+    value_type: str  # "item" | "string" | "time" | "quantity" | "url"
+                    # | "monolingualtext" | "external-id" | "somevalue" | "novalue"
     qualifiers: list[dict[str, object]] = field(default_factory=list)
     references: list[dict[str, str]] = field(default_factory=list)
     precision: int = PRECISION_YEAR
     language: str = "he"
     unit: str = ""
+    rank: str = "normal"  # "preferred" | "normal" | "deprecated"
 
 
 @dataclass
@@ -617,15 +637,59 @@ class WikidataItemBuilder:
         self._set_labels(item, record, title)
 
         # ── Core identity ────────────────────────────────────────
-        instance_qid = self._determine_instance_type(record)
-        item.statements.append(
-            WikidataStatement(
-                property_id=P_INSTANCE_OF,
-                value=instance_qid,
-                value_type="item",
-                references=ref,
+        # Rule 42: emit one P31 per applicable class. When more than one is
+        # emitted, the specific QIDs get rank="preferred" so consumers
+        # querying wdt:P31 see the most-specific class first; the base
+        # Q_MANUSCRIPT keeps the default "normal" rank.
+        instance_qids = self._determine_instance_type(record)
+        multi = len(instance_qids) > 1
+        for qid in instance_qids:
+            stmt_rank = "preferred" if multi and qid != Q_MANUSCRIPT else "normal"
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_INSTANCE_OF,
+                    value=qid,
+                    value_type="item",
+                    references=ref,
+                    rank=stmt_rank,
+                )
             )
-        )
+
+        # Rule 42: P2888 (exact match) bridges the Wikidata item to the
+        # project-owned page in mhm-hmo.wikibase.cloud. We deliberately do
+        # NOT emit the synthetic HMO graph IRI (record["hmo_iri"]) here —
+        # that namespace is for internal TTL traversal and is not hosted
+        # on any web server (audit response 2026-05-17). The wikibase.cloud
+        # slug URL is project-owned and becomes resolvable once Phase 3
+        # uploads the HMO entities and creates the corresponding redirect
+        # pages. We emit only when a control number is available.
+        wikibase_url = hmo_wikibase_page_url(control_number)
+        if wikibase_url:
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_EXACT_MATCH,
+                    value=wikibase_url,
+                    value_type="url",
+                    references=ref,
+                )
+            )
+            # Rule 44 (Phase 2, 2026-05-17): P973 (described at URL) carries
+            # the **direct** wikibase.cloud browse link. Today this is the
+            # same URL as P2888, but the two have distinct semantics:
+            # P2888 is the academic permalink ("exact match" — survives any
+            # hosting migration via the w3id.org redirect once it merges),
+            # while P973 always points at the live wikibase.cloud page for
+            # humans clicking through. The split becomes meaningful when
+            # P2888 switches to https://w3id.org/mhm/manuscript/<cn>.
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_DESCRIBED_AT_URL,
+                    value=wikibase_url,
+                    value_type="url",
+                    references=ref,
+                )
+            )
+
         item.statements.append(
             WikidataStatement(
                 property_id=P_COLLECTION,
@@ -804,14 +868,42 @@ class WikidataItemBuilder:
                     references=ref,
                 )
             )
-        iiif_url = record.get("iiif_manifest_url")
-        if iiif_url:
+        # Rule 45 P6108 coexistence (2026-05-18): the two manifests carry
+        # different payloads — NLI's manifest (from MARC 856) hosts the
+        # real high-resolution Canvas images, while ours (published to
+        # mhm-hmo.wikibase.cloud by Stage 6.5) carries the HMO scholarly
+        # overlay (Codicological_Unit Ranges, ScribalIntervention /
+        # Colophon / Marginalia AnnotationCollections, seeAlso to the
+        # HMO graph node) on placeholder Canvases. Both must be reachable
+        # from Wikidata or the consumer loses one of the two views.
+        #
+        # Rank semantics: when both URLs exist, NLI's image-rich manifest
+        # is ranked "preferred" so image-only IIIF consumers pick it by
+        # default; our overlay manifest stays at "normal" rank and
+        # remains discoverable via P6108 (see Rule 45 sub-section
+        # "P6108 coexistence"). When only one URL is present, it is
+        # emitted at "normal" rank (current behaviour preserved).
+        nli_iiif_url = record.get("iiif_manifest_url")
+        published_iiif_url = record.get("iiif_manifest_published_url")
+        both_present = bool(nli_iiif_url) and bool(published_iiif_url)
+        if nli_iiif_url:
             item.statements.append(
                 WikidataStatement(
                     property_id=P_IIIF_MANIFEST,
-                    value=str(iiif_url),
+                    value=str(nli_iiif_url),
                     value_type="url",
                     references=ref,
+                    rank="preferred" if both_present else "normal",
+                )
+            )
+        if published_iiif_url:
+            item.statements.append(
+                WikidataStatement(
+                    property_id=P_IIIF_MANIFEST,
+                    value=str(published_iiif_url),
+                    value_type="url",
+                    references=ref,
+                    rank="normal",
                 )
             )
 
@@ -845,6 +937,10 @@ class WikidataItemBuilder:
                         continue  # NOTA predicted — no genre claim
                     qid = GENRE_TO_QID.get(genre_str)
                     if qid:
+                        # Rule 42: classifier-inferred genres carry both
+                        # P1480 (presumably) and P5102 (hypothesis) to make
+                        # the epistemic status explicit. P887 stays in the
+                        # reference block (Rule 28 #3 regress guard).
                         item.statements.append(
                             WikidataStatement(
                                 property_id=P_GENRE,
@@ -855,7 +951,12 @@ class WikidataItemBuilder:
                                         "property": P_SOURCING_CIRCUMSTANCES,
                                         "value": Q_PRESUMABLY,
                                         "type": "item",
-                                    }
+                                    },
+                                    {
+                                        "property": P_NATURE_OF_STATEMENT,
+                                        "value": Q_HYPOTHESIS,
+                                        "type": "item",
+                                    },
                                 ],
                                 references=heuristic_ref,
                             )
@@ -1013,6 +1114,25 @@ class WikidataItemBuilder:
         # ── Colophon text → P1684 (inscription) ─────────────────
         colophon = record.get("colophon_text")
         if colophon and str(colophon).strip() and str(colophon) != "None":
+            colophon_qualifiers: list[dict[str, object]] = [
+                {
+                    "property": P_OBJECT_HAS_ROLE,
+                    "value": Q_COLOPHON,
+                    "type": "item",
+                }
+            ]
+            # Rule 42: when upstream (NER post-filter or HMO TextLocation)
+            # surfaces a folio reference for the colophon, attach it as
+            # P7416. Never invent folio data when absent.
+            colophon_folio = record.get("colophon_folio")
+            if colophon_folio and str(colophon_folio).strip():
+                colophon_qualifiers.append(
+                    {
+                        "property": P_NUMBER_OF_FOLIOS,
+                        "value": str(colophon_folio).strip(),
+                        "type": "string",
+                    }
+                )
             item.statements.append(
                 WikidataStatement(
                     property_id=P_INSCRIPTION,
@@ -1020,13 +1140,7 @@ class WikidataItemBuilder:
                     value_type="monolingualtext",
                     language="he",
                     references=ref,
-                    qualifiers=[
-                        {
-                            "property": P_OBJECT_HAS_ROLE,
-                            "value": Q_COLOPHON,
-                            "type": "item",
-                        }
-                    ],
+                    qualifiers=colophon_qualifiers,
                 )
             )
 
@@ -1049,6 +1163,25 @@ class WikidataItemBuilder:
                 if "correct" in int_type
                 else Q_MARGINALIA
             )
+            intervention_qualifiers: list[dict[str, object]] = [
+                {
+                    "property": P_OBJECT_HAS_ROLE,
+                    "value": role_qid,
+                    "type": "item",
+                }
+            ]
+            # Rule 42: same conditional folio wiring as colophon above.
+            intervention_folio = (
+                intervention.get("folio") if isinstance(intervention, dict) else None
+            )
+            if intervention_folio and str(intervention_folio).strip():
+                intervention_qualifiers.append(
+                    {
+                        "property": P_NUMBER_OF_FOLIOS,
+                        "value": str(intervention_folio).strip(),
+                        "type": "string",
+                    }
+                )
             item.statements.append(
                 WikidataStatement(
                     property_id=P_INSCRIPTION,
@@ -1056,13 +1189,7 @@ class WikidataItemBuilder:
                     value_type="monolingualtext",
                     language="he",
                     references=ref,
-                    qualifiers=[
-                        {
-                            "property": P_OBJECT_HAS_ROLE,
-                            "value": role_qid,
-                            "type": "item",
-                        }
-                    ],
+                    qualifiers=intervention_qualifiers,
                 )
             )
 
@@ -1267,13 +1394,33 @@ class WikidataItemBuilder:
         desc_parts.append("National Library of Israel")
         item.descriptions["en"] = ", ".join(desc_parts)
 
-    def _determine_instance_type(self, record: dict[str, object]) -> str:
-        """Determine the most specific P31 value for a manuscript."""
+    def _determine_instance_type(self, record: dict[str, object]) -> list[str]:
+        """Return all applicable P31 QIDs, most-specific first.
+
+        HMO models manuscripts as multiple intersecting classes (illuminated +
+        composite + palimpsest + codex etc.). The Wikidata equivalent is
+        multiple P31 statements. We always emit at least Q87167 (manuscript)
+        as the base type, placed last. WikiProject Manuscripts endorses
+        multi-P31 when no pair is in a subclass relation (Rule 42, Phase 1
+        HMO fidelity, 2026-05-17).
+        """
+        qids: list[str] = []
         if record.get("has_decoration"):
-            return Q_ILLUMINATED_MANUSCRIPT
+            qids.append(Q_ILLUMINATED_MANUSCRIPT)
         if record.get("is_multi_volume") or record.get("is_anthology"):
-            return Q_CODEX
-        return Q_MANUSCRIPT
+            qids.append(Q_CODEX)
+        if record.get("is_composite"):
+            qids.append(Q_COMPOSITE_MANUSCRIPT)
+        if record.get("is_palimpsest"):
+            qids.append(Q_PALIMPSEST)
+        qids.append(Q_MANUSCRIPT)  # base type always last
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for qid in qids:
+            if qid not in seen:
+                seen.add(qid)
+                ordered.append(qid)
+        return ordered
 
     def _add_languages(
         self,
@@ -1731,6 +1878,43 @@ class WikidataItemBuilder:
             if pid == P_AUTHOR and _is_institutional_name(name):
                 pid = "P195"  # collection
 
+            # Rule 42 Phase 1 (HMO fidelity, 2026-05-17): known-anonymous
+            # author. Rule 28 already blocks the creation of a person item
+            # for placeholder names ("Anonymous", "לא ידוע", …). Instead of
+            # dropping the signal or emitting only a flat P2093 string,
+            # encode it as a manuscript-side P50 somevalue with role and
+            # name-as-qualifier plus P5102=hypothesis. This makes the
+            # assertion "this manuscript has an author, identity unknown"
+            # machine-readable rather than silent.
+            clean_name_anon = name.strip().strip('"\'').strip().rstrip(",;:.")
+            if pid == P_AUTHOR and _is_anonymous_name(clean_name_anon):
+                item.statements.append(
+                    WikidataStatement(
+                        property_id=P_AUTHOR,
+                        value=None,
+                        value_type="somevalue",
+                        qualifiers=[
+                            {
+                                "property": P_OBJECT_HAS_ROLE,
+                                "value": Q_AUTHOR_OCCUPATION,
+                                "type": "item",
+                            },
+                            {
+                                "property": "P2093",
+                                "value": clean_name_anon,
+                                "type": "string",
+                            },
+                            {
+                                "property": P_NATURE_OF_STATEMENT,
+                                "value": Q_HYPOTHESIS,
+                                "type": "item",
+                            },
+                        ],
+                        references=ref,
+                    )
+                )
+                return
+
             person_item = self._get_or_create_person(name, viaf_uri, mazal_id, role, record)
             resolved_qid = self._person_qids.get(key) or person_item.existing_qid
 
@@ -1768,10 +1952,23 @@ class WikidataItemBuilder:
                         p2093_qualifiers = [
                             {"property": P_OBJECT_HAS_ROLE, "value": role_qid, "type": "item"}
                         ]
+                    cleaned_name_for_p2093 = name.strip().rstrip(",;:")
+                    # Rule 46 (2026-05-18): when the name string is Hebrew-
+                    # only, append an additional P1810 (named as) qualifier
+                    # carrying the smart Latin transliteration. Without this,
+                    # curators searching Wikidata in English have no way to
+                    # find the P2093 fallback. The romanization is for human
+                    # searchability — it never replaces the Hebrew P2093
+                    # value, which remains the authoritative form.
+                    en_alias = english_label_for_hebrew(cleaned_name_for_p2093, record)
+                    if en_alias and en_alias != cleaned_name_for_p2093:
+                        p2093_qualifiers = list(p2093_qualifiers) + [
+                            {"property": P_OBJECT_NAMED_AS, "value": en_alias, "type": "string"}
+                        ]
                     item.statements.append(
                         WikidataStatement(
                             property_id="P2093",
-                            value=name.strip().rstrip(",;:"),
+                            value=cleaned_name_for_p2093,
                             value_type="string",
                             references=ref,
                             qualifiers=p2093_qualifiers,
@@ -2257,13 +2454,40 @@ class WikidataItemBuilder:
         # Latin-only work titles (e.g. "Bible", "Diodati Segre") must NOT
         # land in the he-label slot — validator rule HE_LABEL_IS_LATIN.
         # Route them to en only and store as a he-alias for searchability.
-        shelfmark_for_work = str(source_record.get("shelfmark") or "")
         if _has_hebrew_script(title):
             work.labels["he"] = title
             if title and all(ord(c) < 256 for c in title if c.isalpha()):
                 work.labels["en"] = title
-            elif shelfmark_for_work:
-                work.labels["en"] = f"work from Hebrew manuscript {shelfmark_for_work}"
+            else:
+                # Rule 46 (2026-05-18, fourth iteration): TaatikNet (the
+                # `malper/taatiknet` ByT5 transliterator that replaced the
+                # broken DICTA Nakdan) now powers Tier 4 and produces
+                # real readable output, e.g. "Takanut rivno gereshem meor
+                # hagola" for the user's canonical example. Tier 5
+                # (consonantal ALA-LC) stays disabled — its "Tknot rvno..."
+                # output is still too ugly.
+                #
+                # Final label format = "<translit> (NLI <control_number>)"
+                # when both are available. The NLI identifier suffix gives
+                # an unambiguous link back to the source record, and the
+                # ML transliteration gives readability — exactly what the
+                # user asked for 2026-05-18.
+                en_candidate = english_label_for_hebrew(
+                    title,
+                    source_record,
+                    allow_algorithmic=False,  # consonantal output too ugly
+                )
+                ms_control_number = str(
+                    source_record.get("_control_number", "") or ""
+                ).strip()
+                if en_candidate and ms_control_number:
+                    work.labels["en"] = (
+                        f"{en_candidate} (NLI {ms_control_number})"
+                    )
+                elif en_candidate:
+                    work.labels["en"] = en_candidate
+                elif ms_control_number:
+                    work.labels["en"] = f"NLI {ms_control_number}"
         else:
             # Latin-only title (e.g. "Bible", "Diodati Segre"): route to the en
             # slot only — never any he slot (label OR alias). Putting Latin text

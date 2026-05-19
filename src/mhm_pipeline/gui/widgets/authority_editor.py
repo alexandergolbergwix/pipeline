@@ -1,6 +1,6 @@
-"""Authority-match editor — Stage 2 review surface.
+"""Authority-match editor — Authority Resolution review surface.
 
-Mirrors :mod:`extraction_editor` for Stage 2 authority results. A row is
+Mirrors :mod:`extraction_editor` for authority-match results. A row is
 one ``(entity, match)`` tuple drawn from three shapes in
 ``authority_enriched.json``:
 
@@ -509,7 +509,7 @@ class AuthorityMatchModel(QAbstractTableModel):
         )
 
     def to_approved_records(self) -> list[dict]:
-        """Return records with unapproved rows dropped — fed to Stage 3."""
+        """Return records with unapproved rows dropped — fed to authority resolution."""
         return unflatten_rows_into_records(self._rows, self._records)
 
     def is_dirty(self) -> bool:
@@ -1083,6 +1083,9 @@ class AuthorityEditor(QWidget):
         h.setSectionResizeMode(COL_WIKIDATA_QID, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(COL_ACTIONS, 78)
+        # Rule 48: enable horizontal scroll-when-too-wide.
+        from mhm_pipeline.gui import theme as _theme  # noqa: PLC0415
+        _theme.install_table_overflow_scroll(self._table)
 
         layout.addWidget(self._table, stretch=1)
 

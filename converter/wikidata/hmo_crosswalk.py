@@ -100,9 +100,28 @@ def _load_authority_records(path: Path) -> list[dict[str, object]]:
     if raw and isinstance(raw[0], dict) and "item" in raw[0] and "validation" in raw[0]:
         raise ValueError(
             f"{path.name} is Wikidata Studio review state. Use "
-            "authority_enriched_reviewed.json as the Stage 6 sidecar."
+            "authority_enriched_reviewed.json as the Wikidata Upload sidecar."
         )
-    return [dict(entry) for entry in raw if isinstance(entry, dict)]
+    records = [dict(entry) for entry in raw if isinstance(entry, dict)]
+    # Rule 42 Phase 1: when the sidecar JSON lacks an HMO IRI but carries
+    # a control number, synthesize the IRI so P2888 can still be emitted.
+    # The TTL-first path (_records_from_rdf) reads the canonical IRI
+    # directly and never enters this fallback.
+    for rec in records:
+        if rec.get("hmo_iri"):
+            continue
+        control_number = str(rec.get("_control_number", "") or "").strip()
+        if control_number:
+            from converter.wikidata.property_mapping import (  # noqa: PLC0415
+                HMO_NS_TEMPLATE,
+            )
+            rec["hmo_iri"] = HMO_NS_TEMPLATE.format(control_number=control_number)
+            logger.warning(
+                "Synthesized HMO IRI from control number %s (sidecar path); "
+                "prefer running Wikidata Upload against output.ttl for the canonical IRI.",
+                control_number,
+            )
+    return records
 
 
 def _records_from_rdf(graph: Graph) -> list[dict[str, object]]:
@@ -124,7 +143,26 @@ def _records_from_rdf(graph: Graph) -> list[dict[str, object]]:
         record: dict[str, object] = {
             "_control_number": control_number,
             "title": _literal_text(graph.value(ms_uri, RDFS.label)),
+            # Rule 42 Phase 1: propagate the HMO IRI so item_builder can
+            # attach P2888 (exact match) bridging the Wikidata item to its
+            # canonical HMO graph node.
+            "hmo_iri": str(ms_uri),
         }
+
+        # Rule 42 Phase 1: surface instance-type flags from HMO RDF so
+        # _determine_instance_type can emit multiple P31 statements.
+        # Each flag is True iff a corresponding boolean predicate or class
+        # assertion is present in the graph. Absent flags fall back to
+        # False; never invent.
+        for flag_name, predicate in (
+            ("is_palimpsest", HM.is_palimpsest),
+            ("is_composite", HM.is_composite),
+            ("has_decoration", HM.has_decoration),
+        ):
+            flag_value = graph.value(ms_uri, predicate)
+            if flag_value is not None and isinstance(flag_value, Literal):
+                if str(flag_value).strip().lower() in ("true", "1", "yes"):
+                    record[flag_name] = True
 
         comments = [
             str(obj) for obj in graph.objects(ms_uri, RDFS.comment)

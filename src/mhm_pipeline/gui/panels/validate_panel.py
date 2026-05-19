@@ -1,4 +1,4 @@
-"""Stage 5 — SHACL validation panel."""
+"""SHACL Validation panel."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from mhm_pipeline.gui.widgets.validation_result_view import ValidationResultView
 
 
 class ValidatePanel(QWidget):
-    """Panel for Stage 5: SHACL shape validation."""
+    """SHACL Validation panel — validates the RDF graph against the ontology shapes."""
 
     run_requested = pyqtSignal(Path, Path)
 

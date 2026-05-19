@@ -1,4 +1,4 @@
-"""Stage 3 — Authority reconciliation panel."""
+"""Authority Resolution panel."""
 
 from __future__ import annotations
 
@@ -30,11 +30,11 @@ from mhm_pipeline.gui.widgets.percent_progress import PercentProgressWidget
 
 
 class AuthorityPanel(QWidget):
-    """Panel for Stage 3: authority record reconciliation.
+    """Authority Resolution panel — reconciles names/places against Mazal, VIAF, Wikidata, KIMA.
 
     Signal args: (input_path, output_dir, ner_path, enable_viaf,
                   enable_kima, kima_db_path, mazal_db_path)
-    input_path is the MARC extract (stage 0 output).
+    input_path is the MARC extract (output of MARC parsing).
     ner_path is Path("") when no NER results are selected.
     """
 
@@ -57,7 +57,7 @@ class AuthorityPanel(QWidget):
             "MARC Extract:", mode="open", filter="JSON files (*.json)"
         )
         self._input_selector.setToolTip(
-            "JSON output from Stage 1 (MARC parse). Contains original name "
+            "JSON output from MARC Parsing. Contains original name "
             "fields (100/110/111/700/710/711) and place data."
         )
         self._output_selector = FileSelector("Output Dir:", mode="directory")
@@ -69,7 +69,7 @@ class AuthorityPanel(QWidget):
             "NER Results (optional):", mode="open", filter="JSON files (*.json)"
         )
         self._ner_selector.setToolTip(
-            "JSON output from Stage 2 (NER). Entities are merged into the "
+            "JSON output from NER Extraction. Entities are merged into the "
             "MARC records before authority matching."
         )
         layout.addWidget(self._ner_selector)

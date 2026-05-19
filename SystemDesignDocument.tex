@@ -62,7 +62,7 @@
   {\LARGE\bfseries Mapping Hebrew Manuscripts (MHM)}\\[0.5cm]
   {\LARGE\bfseries Cross-Platform Desktop Application}\\[0.5cm]
   {\Large System Design Document}\\[1cm]
-  {\large Version 1.8}
+  {\large Version 1.9}
 }
 \author{
   Alexander Goldberg\\
@@ -101,6 +101,8 @@
 \label{sec:executive-summary}
 
 The MHM pipeline is a research-grade Python system comprising six tightly coupled stages: MARC parsing, Named Entity Recognition (NER), authority resolution, RDF graph construction, SHACL validation, and Wikidata upload. The pipeline has been developed incrementally as a collection of Python modules and currently includes a partial PyQt6 desktop GUI. This document specifies the design of the complete cross-platform desktop application that wraps and exposes all six pipeline stages to end users on macOS and Windows.
+
+The desktop application also exposes an optional \emph{HMO Wikibase} workbench. This is not a seventh research stage; it is a deployment/export interface over the canonical Stage~4/5 \code{output.ttl}. It prepares full-HMO project-Wikibase draft entities, local QuickStatements-style files, and connection checks for the project Wikibase Cloud instance while keeping live writes disabled until the schema has been reviewed. The current draft export covers every typed HMO node and every RDF-derived non-type/non-label statement from the source graph; nodes with multiple RDF classes are currently displayed through one preferred class and are tracked for a future \code{class\_uris} JSON extension.
 
 Three requirements drive every decision in this document:
 
@@ -394,8 +396,8 @@ The application is organised into four horizontal layers. Each layer depends onl
 
 \node[layer, fill=purple!8] (data) at (0,-6.0)
   {\textbf{Data / External Services Layer}\\
-   MARC files \quad Mazal SQLite DB \quad KIMA SQLite DB \quad RDF/TTL output \quad
-   VIAF API \quad Wikidata API \quad HuggingFace Hub};
+   MARC files \quad Mazal SQLite DB \quad KIMA SQLite DB \quad canonical RDF/TTL output \quad
+   optional HMO Wikibase \quad VIAF API \quad Wikidata API \quad HuggingFace Hub};
 
 \draw[-{Stealth}, thick] (gui.south) -- (app.north)
   node[midway, right=2mm, font=\scriptsize] {Qt signals/slots};
@@ -440,7 +442,15 @@ The application is organised into four horizontal layers. Each layer depends onl
 \hline
 \code{KimaIndexWorker} & Parses three KIMA TSV files and builds a SQLite place authority index for Hebrew historical place names & Worker & \code{KimaIndex} (core) \\
 \hline
-\code{WikidataUploadWorker} & Two-phase upload pipeline: (1)~prefer building \code{WikidataItem} objects from validated HMO \code{output.ttl} via the HMO-to-Wikidata crosswalk, using \code{authority\_enriched\_reviewed.json} as a reviewed sidecar when it exists; reuse already approved Studio items when the GUI passes them; keep the legacy authority-JSON \code{WikidataItemBuilder} path only as compatibility fallback, (2)~upload to Wikidata via \code{WikidataUploader} (live, with OAuth~2.0 / bot password) or export QuickStatements (dry run). SPARQL reconciliation is skipped; items with \code{existing\_qid} from authority matching are updated, others are created. Emits \code{entity\_status(str,str,str,str)} per item. & Worker & \code{WikidataUploader}, \code{WikidataItemBuilder}, \code{hmo\_crosswalk}, \code{QuickStatementsExporter} \\
+\code{WikidataUploadWorker} & Two-phase upload pipeline: (1)~prefer building \code{WikidataItem} objects from validated HMO \code{output.ttl} via the HMO-to-Wikidata crosswalk, using \code{authority\_enriched\_reviewed.json} as a reviewed sidecar when it exists; reuse already approved Studio items when the GUI passes them; keep the legacy authority-JSON \code{WikidataItemBuilder} path only as compatibility fallback, (2)~upload to Wikidata via \code{WikidataUploader} (live, with OAuth~2.0 / bot password) or export QuickStatements (dry run). Stage~6 treats Wikidata as the richest safe public projection of the canonical HMO graph and records projection coverage so HMO-only structures are explicit rather than lost. SPARQL reconciliation is skipped; items with \code{existing\_qid} from authority matching are updated, others are created. The QuickStatements exporter partitions items by \code{entity\_type} and emits \code{CREATE} blocks in strict dependency order (persons $\to$ works $\to$ manuscripts) so back-references via \code{LAST} resolve within the same batch (Rule~47 in \filepath{CLAUDE.md}). Emits \code{entity\_status(str,str,str,str)} per item. & Worker & \code{WikidataUploader}, \code{WikidataItemBuilder}, \code{hmo\_crosswalk}, \code{QuickStatementsExporter} \\
+\hline
+\code{HmoWikibaseExporter} & Converts typed nodes in canonical HMO \code{output.ttl} into local project-Wikibase entity drafts, preserving source URIs, multilingual labels, one preferred HMO class URI, and all RDF-derived statement drafts other than \code{rdf:type} and \code{rdfs:label}. Multi-class nodes are preserved as entities but currently expose only the preferred class in JSON; adding \code{class\_uris} is the next schema-fidelity improvement. & Core & \code{rdflib}, \code{WikibaseEntityDraft} \\
+\hline
+\code{LocalQuickStatementsExporter} & Writes offline QuickStatements-style TSV for the project Wikibase drafts. Local draft identifiers are placeholders until a reviewed Wikibase schema and ID map exist. & Core & \code{WikibaseEntityDraft} \\
+\hline
+\code{WikibaseCloudClient} & Read-only connection checker for the project Wikibase Cloud API. It calls \code{action=query\&meta=siteinfo}; it does not store credentials and does not perform writes. & Worker/helper & \code{requests} \\
+\hline
+\code{WikibaseSchemaBootstrap} & Offline schema-bootstrap draft for the HMO Wikibase classes and properties that must exist before live upload can safely map HMO entities to real Wikibase Q/P identifiers. & Core & \code{converter.wikibase.schema\_bootstrap} \\
 \hline
 \end{longtable}
 
@@ -720,7 +730,9 @@ Each of the six pipeline stages has a dedicated panel. All panels share the same
 \hline
 \code{ValidatePanel} & SHACL shapes file selector, severity filter combo, violations table view, ``Validate SHACL'' button & \code{finished} $\to$ populate \code{QTableWidget} with SHACL report \\
 \hline
-\code{WikidataStudioPanel} (supersedes the separate \code{WikidataPreviewPanel} and \code{WikidataUploadPanel} from v1.x) & Six-step stepper (Load $\to$ Build $\to$ Browse $\to$ Validate $\to$ Approve $\to$ Upload); load field accepts the preferred HMO RDF \code{output.ttl}, legacy \code{authority\_enriched*.json}, or a saved \code{<stem>\_wikidata\_verified.json} review file; liquid-glass ``\emph{Credentials}'' card (token field masked, show/hide toggle, moratorium-status banner) accepting four formats --- bot password \code{User@Bot:pass}, OAuth~2.0 owner-only consumer \code{key|secret}, OAuth~1.0a \code{key|secret|token|secret}, and a pre-issued JWT bearer token \code{eyJ...} (auto-detected by format and routed through a \code{requests.Session} with \code{Authorization: Bearer}); dry-run checkbox; batch mode checkbox (ON by default, 45~items + 30s pause); \code{QTabWidget} with \code{QPEntityBrowser} (paginated 25/50/100 per page via \code{\_PaginationProxy}; editable Q/P entities with validator Issues column, auto-approve, per-row claim-edit dialog, ℹ~status-info popup on each Status cell) and an RDF-Triples preview; full-screen popup; ``Validate with Wikidata'' (runs \code{\_ValidationWorker}: reconciler + per-PID collisions + SPARQL \code{ASK} existence + 3-channel creator check + re-run in-process validator); ``💾~Save validation'' (writes \code{<stem>\_wikidata\_verified.json} round-trippable via the Load field); ``Export / Upload approved'' & \code{row\_validated(str, dict)} $\to$ model \code{update\_validation}; \code{log\_line} $\to$ log; \code{progress} $\to$ progress bar; \code{finished\_all(dict)} carries per-status counts; \code{upload\_requested(Path,Path,str,bool,bool,list)} carries only the approved-item subset \\
+\code{WikidataStudioPanel} (supersedes the separate \code{WikidataPreviewPanel} and \code{WikidataUploadPanel} from v1.x) & Six-step stepper (Load $\to$ Build $\to$ Browse $\to$ Validate $\to$ Approve $\to$ Upload); load field accepts the preferred canonical HMO RDF \code{output.ttl}, legacy \code{authority\_enriched*.json}, or a saved \code{<stem>\_wikidata\_verified.json} review file; liquid-glass ``\emph{Credentials}'' card (token field masked, show/hide toggle, moratorium-status banner) accepting four formats --- bot password \code{User@Bot:pass}, OAuth~2.0 owner-only consumer \code{key|secret}, OAuth~1.0a \code{key|secret|token|secret}, and a pre-issued JWT bearer token \code{eyJ...} (auto-detected by format and routed through a \code{requests.Session} with \code{Authorization: Bearer}); dry-run checkbox; batch mode checkbox (ON by default, 45~items + 30s pause); \code{QTabWidget} with \code{QPEntityBrowser} (paginated 25/50/100 per page via \code{\_PaginationProxy}; editable Q/P entities with validator Issues column, auto-approve, per-row claim-edit dialog, ℹ~status-info popup on each Status cell), an RDF-Triples preview, and projection coverage summary when available; full-screen popup; ``Validate with Wikidata'' (runs \code{\_ValidationWorker}: reconciler + per-PID collisions + SPARQL \code{ASK} existence + 3-channel creator check + re-run in-process validator); ``💾~Save validation'' (writes \code{<stem>\_wikidata\_verified.json} round-trippable via the Load field); ``Export / Upload approved'' & \code{row\_validated(str, dict)} $\to$ model \code{update\_validation}; \code{log\_line} $\to$ log; \code{progress} $\to$ progress bar; \code{finished\_all(dict)} carries per-status counts; \code{upload\_requested(Path,Path,str,bool,bool,list)} carries only the approved-item subset \\
+\hline
+\code{HmoWikibasePanel} & Optional full-HMO deployment workbench fed by canonical \code{output.ttl}; HMO RDF/TTL selector, output-directory selector, Wikibase URL field defaulting to \url{https://mhm-hmo.wikibase.cloud}, ``Build Draft'', ``Export JSON'', ``Export QuickStatements'', and read-only ``Test Connection'' buttons; entity/statement summary cards; table of draft entities (Local ID, Type, Label, statement count, source URI); embedded log and progress bar. The panel writes \code{wikibase\_entities.json}, \code{wikibase\_quickstatements.txt}, and \code{wikibase\_export\_report.json}; it stores no credentials and performs no upload. The report records entity and statement totals so the export can be compared back to the source TTL. & \code{\_BuildDraftWorker.finished\_export} $\to$ table and summary update; \code{\_ConnectionTestWorker.finished\_test} $\to$ status/log update; no controller stage signal because this is an optional export workbench rather than a required pipeline stage \\
 \hline
 \end{longtable}
 
@@ -1274,7 +1286,9 @@ Ontology coverage is measured by running the pipeline over the full \filepath{da
 
 \subsection{Wikidata Property Coverage (v1.8)}
 
-\code{WikidataItemBuilder} remains the compatibility builder for authority-enriched pipeline JSON, while the preferred v2.x path projects validated HMO RDF \code{output.ttl} into \code{WikidataItem} objects and uses reviewed authority JSON as a sidecar when available. Version 1.8 introduced three coverage improvements: Hebrew century date parsing for P571 (inception), comprehensive genre-to-QID mappings for P136, and LCSH subject-to-QID mappings for P921. Table~\ref{tbl:wikidata-coverage} summarises the per-property coverage measured on 100 manuscripts with the richest metadata.
+\code{WikidataItemBuilder} remains the compatibility builder for authority-enriched pipeline JSON, while the preferred v2.x path projects validated HMO RDF \code{output.ttl} into \code{WikidataItem} objects and uses reviewed authority JSON as a sidecar when available. The Stage~4/5 TTL remains the canonical full scholarly graph; Wikidata coverage measures the richest safe public projection, not total HMO expressivity. Optional HMO Wikibase export is documented as a browsable/editable deployment of the full scholarly model and is therefore separate from the Wikidata projection metrics. Version 1.8 introduced three coverage improvements: Hebrew century date parsing for P571 (inception), comprehensive genre-to-QID mappings for P136, and LCSH subject-to-QID mappings for P921. Table~\ref{tbl:wikidata-coverage} summarises the per-property coverage measured on 100 manuscripts with the richest metadata.
+
+The projection coverage report complements Table~\ref{tbl:wikidata-coverage} by counting HMO classes and nodes that were projected directly, represented indirectly through qualifiers or summaries, or kept HMO-only. This prevents Wikidata's intentionally narrower public model from being mistaken for data loss in the canonical TTL output.
 
 \begin{longtable}{|l|p{3.5cm}|r|r|p{4cm}|}
 \hline
@@ -1319,6 +1333,82 @@ P11603 & transcribed by & 20 & 18\% & NER + role classification \\
 \item \textbf{P5816/P527/P195 type guards:} Added skip logic for properties that require item QIDs when only string values are available, preventing invalid uploads.
 \end{itemize}
 
+\subsection{Hebrew\textendash Latin Label Waterfall (Rule 46)}
+\label{ssec:hebrew-translit-waterfall}
+
+When a Wikidata work or person item has only a Hebrew-script label, the
+pipeline composes an English label through a five-tier waterfall in
+\filepath{converter/wikidata/hebrew\_translit.py}. The waterfall replaces
+the legacy synthetic placeholder \code{"work from Hebrew manuscript X"}
+that the Wikidata community flagged as unhelpful:
+
+\begin{enumerate}
+\item \textbf{Tier 1 \textemdash{} Curated override dictionary.} ~33
+canonical Hebrew\,$\to$\,Latin mappings for famous figures
+(\textit{Maimonides}, \textit{Rashi}, \textit{Nahmanides},
+\textit{Ibn Ezra}, \textit{Yehuda HaLevi}, \textit{Joseph Karo}, …)
+plus common Jewish works (\textit{Mishnah}, \textit{Talmud},
+\textit{Siddur}, \textit{Zohar}, …). Strips ISBD terminators and
+gershayim variants before matching.
+
+\item \textbf{Tier 2 \textemdash{} NLI ALA-LC romanization read.}
+When a source MARC record carries a romanized form (fields 246, 880, or
+the pipeline-derived \code{title\_romanized} / \code{name\_romanized}
+keys), use it directly. NLI catalogers follow the Library of Congress
+ALA-LC scheme, so this is always preferred over algorithmic output.
+
+\item \textbf{Tier 3 \textemdash{} Wikidata SPARQL reverse-lookup.}
+Query the public WDQS endpoint for an item whose \code{rdfs:label@he}
+matches the input exactly; if found, return its \code{rdfs:label@en}.
+Results are cached on disk at
+\code{platformdirs.user\_cache\_dir("MHMPipeline")/wikidata\_reverse\_label\_cache.json}
+with 30-day TTL for positive results and 24-hour TTL for negative
+results. Honours \code{MHM\_NO\_NETWORK=true} for offline-first
+behaviour and never raises.
+
+\item \textbf{Tier 4 \textemdash{} TaatikNet ML transliteration.}
+Calls \code{malper/taatiknet}\footnote{\url{https://huggingface.co/malper/taatiknet}; project at \url{https://github.com/morrisalp/taatiknet}.}, a ByT5-small seq2seq model fine-tuned on $\sim$15k Hebrew\,$\leftrightarrow$\,Latin Wiktionary pairs by Morris Alper. The wrapper splits the input on
+whitespace and transliterates each word independently (the model was
+trained on Wiktionary entries, so single-word inputs are
+in-distribution and multi-word phrases would otherwise be collapsed).
+Combining stress marks (acute accents emitted on stressed vowels) are
+stripped via NFD normalisation for clean Wikidata labels. Model is
+lazy-loaded on first call with MPS\,$\to$\,CUDA\,$\to$\,CPU device
+fallthrough and is bundled identically on macOS and Windows
+($\sim$1.1\,GB).
+
+\item \textbf{Tier 5 \textemdash{} Deterministic consonantal ALA-LC
+fallback.} 27-entry letter-by-letter table (e.g. \code{ב\,$\to$\,v},
+\code{ח\,$\to$\,h}, \code{שׁ\,$\to$\,sh}) that drops vowel marks. Used
+only for the person-item P2093 alias path; work labels disable this
+tier (\code{allow\_algorithmic=False}) because its consonantal output
+(\textit{e.g.}~\code{"Tknot rvno grshm mor hgolh"}) was empirically
+judged too ugly for public Wikidata labels.
+\end{enumerate}
+
+\paragraph{Compound work-label format.} When Tier 4 succeeds and a
+MARC control number is available, the work item's English label
+becomes \code{"\textless translit\textgreater{} (NLI
+\textless control\_number\textgreater)"} \textemdash{} pairing a readable
+Hebrew\,$\to$\,Latin transliteration with an unambiguous identifier
+back to the source record. Example for the medieval work
+\code{תקנות רבנו גרשם מאור הגולה} (manuscript control number
+\code{990000827290205171}):
+\begin{quote}
+\code{Takanut rivno gereshem meor hagola (NLI 990000827290205171)}
+\end{quote}
+When Tier 4 returns \code{None} (model absent, network failure on
+Tier~3, or no Hebrew letters in the input), the en label collapses to
+\code{"NLI \textless control\_number\textgreater"} alone.
+
+\paragraph{Cross-platform installer parity.} Both
+\filepath{installer/macos/build\_app.sh} and
+\filepath{installer/windows/MHMPipeline.spec}~+
+\filepath{scripts/package\_for\_windows\_build.sh} bundle the same
+seven ML model artefacts (joint NER, DictaBERT base, TaatikNet, plus
+the four task \code{.pt} checkpoints). Drift is structurally enforced
+by 7 integration tests in
+\filepath{tests/integration/test\_rules\_end\_to\_end.py::TestMacOsWindowsInstallerParity}.
 
 %% ============================================================
 %% SECTION 10: TECHNICAL REQUIREMENTS

@@ -1,4 +1,4 @@
-"""Stage 2 — Named Entity Recognition panel.
+"""NER Extraction panel.
 
 Runs up to 4 NER models: Person (notes/colophon), Provenance (MARC 561),
 Contents (MARC 505), Colophon ML (MARC 500). The Genre classifier runs later
@@ -48,7 +48,7 @@ _PREVIEW_MAX_ENTITIES = 8
 
 
 class NerPanel(QWidget):
-    """Panel for Stage 2: NER extraction from parsed JSON."""
+    """NER extraction panel — runs entity extraction over parsed MARC JSON."""
 
     # (input_path, output_dir, model_path, batch_size, prov_model_path, cont_model_path)
     run_requested = pyqtSignal(Path, Path, str, int, str, str)
@@ -325,7 +325,7 @@ class NerPanel(QWidget):
         )
         dlg_layout.addWidget(sep)
 
-        stage3_lbl = QLabel("Stage 3 — RDF Building")
+        stage3_lbl = QLabel("Genre ML fallback")
         stage3_lbl.setStyleSheet(theme.minicaps_label_style())
         dlg_layout.addWidget(stage3_lbl)
 
@@ -840,7 +840,7 @@ class NerPanel(QWidget):
         if self._marc500_check.isChecked():
             enabled.append("Colophon ML")
         if self._genre_check.isChecked():
-            enabled.append("Genre ML (Stage 3)")
+            enabled.append("Genre ML")
         self._log_viewer.append_line(f"Running NER models: {', '.join(enabled)}")
 
         self.run_requested.emit(

@@ -31,6 +31,12 @@ def _format_value(stmt: WikidataStatement) -> str:
     Returns:
         QuickStatements-compatible value string.
     """
+    # Rule 42: somevalue/novalue are native QS v2 tokens (no quotes).
+    if stmt.value_type == "somevalue":
+        return "somevalue"
+    if stmt.value_type == "novalue":
+        return "novalue"
+
     if stmt.value_type == "item":
         value = str(stmt.value)
         if value.startswith("__LOCAL:"):
@@ -156,6 +162,16 @@ class QuickStatementsExporter:
 
         # Statements
         for stmt in item.statements:
+            # Rule 42: QS v2 has no native rank syntax. Emit a leading
+            # comment line documenting the intended rank; rank is actually
+            # persisted by the WBI uploader. Reviewers reading the QS file
+            # can still see the intended rank.
+            if stmt.rank != "normal":
+                lines.append(
+                    f"/* RANK: {stmt.rank} "
+                    f"(set via WBI; not expressible in QS v2) */"
+                )
+
             value_str = _format_value(stmt)
             line_parts = [qid, stmt.property_id, value_str]
 
@@ -182,20 +198,38 @@ class QuickStatementsExporter:
         """
         blocks: list[str] = []
 
-        # Separate by type: persons first (they need QIDs before manuscripts reference them)
+        # Separate by type and ORDER OF DEPENDENCY:
+        #   persons first  — work items reference them via P50 (author).
+        #   works second   — manuscript items reference them via P1574 (exemplar of).
+        #   manuscripts last.
+        #
+        # Bug fix 2026-05-18: works were previously dropped entirely from
+        # QS export (only `persons` + `manuscripts` were iterated). Work
+        # items now appear as their own CREATE blocks so the en label
+        # "Takanut rivno gereshem meor hagola (NLI 990001801390205171)"
+        # composed in `_get_or_create_work` reaches Wikidata.
         persons = [i for i in items if i.entity_type == "person" and not i.existing_qid]
+        works = [i for i in items if i.entity_type == "work" and not i.existing_qid]
         manuscripts = [i for i in items if i.entity_type == "manuscript"]
 
-        # Add header comment
         blocks.append(
             "/* MHM Pipeline — Wikidata QuickStatements Export */\n"
-            "/* Persons (create first, then manuscripts reference them) */\n"
+            "/* Persons (create first; works and manuscripts reference them) */\n"
         )
 
         for person in persons:
             if block := self.export_item(person):
                 blocks.append(block)
                 blocks.append("")  # Blank line between items
+
+        blocks.append(
+            "\n/* Works (create second; manuscripts P1574 them) */\n"
+        )
+
+        for work in works:
+            if block := self.export_item(work):
+                blocks.append(block)
+                blocks.append("")
 
         blocks.append("\n/* Manuscripts */\n")
 

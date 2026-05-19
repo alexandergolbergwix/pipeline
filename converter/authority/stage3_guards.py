@@ -1,7 +1,7 @@
-"""Stage 3 authority-matching guards (pure helpers).
+"""Authority-matching guards (pure helpers).
 
 These guards address the 22 false-positive matches identified by the
-2026-04-30 manual review of Stage 3 (`E_AUTH_REVIEW`). They run
+2026-04-30 manual review of authority resolution (`E_AUTH_REVIEW`). They run
 *after* VIAF / Mazal return a candidate but *before* the match is
 written into the authority-enriched JSON, so a wrong cluster never
 reaches the GUI's auto-approve path.
@@ -146,7 +146,7 @@ def _parse_year(value: object) -> int | None:
 def extract_manuscript_year(record: dict[str, Any]) -> int | None:
     """Return the catalogued manuscript year, or ``None``.
 
-    Reads ``record["dates"]["year"]`` first (Stage 0 already parses
+    Reads ``record["dates"]["year"]`` first (MARC parsing already extracts
     MARC 008 / 264$c / 260$c into this field). Falls back to the
     raw ``original_string`` when the structured year is missing.
     """

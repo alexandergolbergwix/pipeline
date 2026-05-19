@@ -1,4 +1,4 @@
-"""Stage 1 — MARC conversion panel."""
+"""MARC Parsing panel."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 class ConvertPanel(QWidget):
-    """Panel for Stage 1: parsing MARC/TSV/CSV records into JSON."""
+    """MARC Parsing panel — converts MARC/TSV/CSV records into JSON."""
 
     run_requested = pyqtSignal(Path, Path, int, int)
 

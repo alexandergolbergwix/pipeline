@@ -105,13 +105,13 @@ class TestVenvImports:
         except ImportError as e:
             pytest.fail(f"PyQt6 not installed in venv: {e}. Run: uv sync")
 
-    def test_stage_0_worker_imports_from_venv(self) -> None:
-        """Stage 0 imports must work from venv — catches 90% of runtime crashes."""
+    def test_marc_parsing_worker_imports_from_venv(self) -> None:
+        """MARC-parsing imports must work from venv — catches 90% of runtime crashes."""
         try:
             from converter.parser.unified_reader import UnifiedReader  # noqa: PLC0415
             from converter.transformer.field_handlers import extract_all_data  # noqa: PLC0415
         except ImportError as e:
-            pytest.fail(f"Stage 0 imports failed from venv: {e}. Run: uv sync")
+            pytest.fail(f"MARC parsing imports failed from venv: {e}. Run: uv sync")
 
     def test_viaf_matcher_uses_json_accept_header(self) -> None:
         """VIAFMatcher must set Accept: application/json on its session."""
@@ -267,6 +267,75 @@ class TestGuiWidgetContracts:
             window._on_stage_progress(stage_idx, 0)
             window._on_stage_progress(stage_idx, 50)
             window._on_stage_progress(stage_idx, 100)
+
+
+class TestHmoWikibasePanelIiifSection:
+    """Rule 45 / Phase 3 GUI contract: the HMO Wikibase panel exposes
+    Generate / Upload / Configure / Open-folder controls and the two
+    new QThread workers expose the signals the panel binds to."""
+
+    def test_panel_constructs_with_iiif_section(self, qtbot: object) -> None:
+        from mhm_pipeline.gui.panels.hmo_wikibase_panel import HmoWikibasePanel
+        panel = HmoWikibasePanel()
+        # IIIF buttons must exist
+        assert hasattr(panel, "_iiif_build_btn")
+        assert hasattr(panel, "_iiif_upload_btn")
+        assert hasattr(panel, "_iiif_configure_btn")
+        assert hasattr(panel, "_iiif_open_folder_btn")
+        # Upload is disabled at construction (no manifests built yet, no creds)
+        assert not panel._iiif_upload_btn.isEnabled()
+        # Open-folder is disabled until manifests exist
+        assert not panel._iiif_open_folder_btn.isEnabled()
+        # Generate is always enabled (writes local files; no creds needed)
+        assert panel._iiif_build_btn.isEnabled()
+
+    def test_iiif_build_worker_signals(self) -> None:
+        from mhm_pipeline.gui.panels.hmo_wikibase_panel import _IiifBuildWorker
+        assert hasattr(_IiifBuildWorker, "finished_build")
+        assert hasattr(_IiifBuildWorker, "failed")
+        assert hasattr(_IiifBuildWorker, "progress")
+        assert hasattr(_IiifBuildWorker, "substep")
+        assert hasattr(_IiifBuildWorker, "log_line")
+
+    def test_iiif_upload_worker_signals(self) -> None:
+        from mhm_pipeline.gui.panels.hmo_wikibase_panel import _IiifUploadWorker
+        assert hasattr(_IiifUploadWorker, "finished_upload")
+        assert hasattr(_IiifUploadWorker, "failed")
+        assert hasattr(_IiifUploadWorker, "progress")
+        assert hasattr(_IiifUploadWorker, "substep")
+        assert hasattr(_IiifUploadWorker, "log_line")
+        # Per-manifest status signal so the GUI table updates live
+        assert hasattr(_IiifUploadWorker, "manifest_status")
+
+    def test_credentials_dialog_inherits_glass_dialog(self, qtbot: object) -> None:
+        """Rule 37: every dialog must use the GlassDialog backdrop."""
+        from mhm_pipeline.gui.panels.hmo_wikibase_panel import _BotCredentialsDialog
+        from mhm_pipeline.gui.widgets.glass_dialog import GlassDialog
+        assert issubclass(_BotCredentialsDialog, GlassDialog)
+
+    def test_iiif_upload_refused_without_credentials(self, qtbot: object) -> None:
+        """The upload button must remain disabled when credentials are absent,
+        even if manifests have been built."""
+        from mhm_pipeline.gui.panels.hmo_wikibase_panel import HmoWikibasePanel
+        from mhm_pipeline.settings.settings_manager import SettingsManager
+        # Clear any credentials persisted from a previous run
+        settings = SettingsManager()
+        settings.wikibase_cloud_bot_username = ""
+        settings.wikibase_cloud_bot_name = ""
+        settings.wikibase_cloud_bot_password = ""
+        panel = HmoWikibasePanel()
+        # Simulate a successful build
+        panel._iiif_manifest_paths = [Path("/tmp/MS_x.json")]
+        panel._refresh_iiif_status()
+        # Credentials absent → upload stays disabled
+        assert not panel._iiif_upload_btn.isEnabled()
+
+    def test_iiif_section_uses_dynamic_progress_bar(self, qtbot: object) -> None:
+        """Rule 39: long-running stages must use DynamicProgressBar."""
+        from mhm_pipeline.gui.panels.hmo_wikibase_panel import HmoWikibasePanel
+        from mhm_pipeline.gui.widgets.dynamic_progress_bar import DynamicProgressBar
+        panel = HmoWikibasePanel()
+        assert isinstance(panel.stage_progress, DynamicProgressBar)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -920,7 +989,7 @@ class TestAuthorityWorker4SourceIntegration:
         preferred_name_lat: str | None = None,
         dates: str | None = None,
     ) -> MagicMock:
-        """Build a MazalMatcher mock with the methods Stage 3 calls."""
+        """Build a MazalMatcher mock with the methods authority resolution calls."""
         mock = MagicMock()
         mock.is_available = True
         mock.index_path = ":memory:"
@@ -956,7 +1025,7 @@ class TestAuthorityWorker4SourceIntegration:
         match_person: str | None = None,
         latin_only: bool = False,
     ) -> MagicMock:
-        """Build a WikidataMatcher mock with the 4 public methods Stage 3 calls."""
+        """Build a WikidataMatcher mock with the 4 public methods authority resolution calls."""
         mock = MagicMock()
         mock.find_qid_by_viaf.return_value = find_qid_by_viaf
         mock.find_qid_by_mazal.return_value = find_qid_by_mazal
@@ -1717,7 +1786,7 @@ class TestFullGuiProgressChain:
                 end=10,
             )
 
-        assert not error_stages, f"Stage 0 error: {error_stages}"
+        assert not error_stages, f"MARC parsing error: {error_stages}"
         assert 0 in finished_stages
 
         # Verify output is valid
@@ -3104,7 +3173,7 @@ class TestExtractionEditorFlow:
 
 
 class TestAuthorityEditor:
-    """E2E tests for AuthorityEditor — Stage 2 equivalent of the NER editor.
+    """E2E tests for AuthorityEditor — the authority-resolution equivalent of the NER editor.
 
     Covers:
       * flatten_authority_records handles all 3 shapes (marc_authority_matches,
@@ -3653,4 +3722,236 @@ class TestDynamicProgressBar:
         qtbot.wait(150)  # type: ignore[attr-defined]
         assert bar._bar.maximum() == 0, (
             f"indeterminate mode never activated; max={bar._bar.maximum()}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Wikidata Studio — save / resume progress round-trip
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestWikidataStudioSaveResume:
+    """The Studio panel must let a curator save partial review progress
+    (some entities approved, some not) and re-open the file later to
+    continue from exactly where they left off. The save target is the
+    ``*_wikidata_verified.json`` sidecar produced by
+    ``_on_save_validation`` and consumed by ``_load_validated_file``.
+
+    These tests pin three invariants the user explicitly asked for
+    (2026-05-19):
+
+      1. Save round-trips preserve the ``approved`` flag on every row.
+      2. Re-loading a saved file restores both the items AND the
+         checkbox UI state (the model emits ``dataChanged`` so the
+         table re-paints checked rows correctly).
+      3. The save action is enabled BEFORE the user has clicked
+         "Check / validate" — partial approval state must be savable
+         even without running the validator.
+    """
+
+    @pytest.fixture
+    def _qapp(self) -> object:
+        from PyQt6.QtWidgets import QApplication  # noqa: PLC0415
+
+        return QApplication.instance() or QApplication(sys.argv)
+
+    @pytest.fixture
+    def _sample_items(self) -> list:
+        from converter.wikidata.item_builder import (  # noqa: PLC0415
+            WikidataItem, WikidataStatement,
+        )
+        return [
+            WikidataItem(
+                entity_type="manuscript",
+                local_id="__LOCAL:ms:1",
+                labels={"he": "כתב יד א'", "en": "Manuscript A"},
+                statements=[
+                    WikidataStatement(
+                        property_id="P31", value="Q87167", value_type="item",
+                    ),
+                ],
+            ),
+            WikidataItem(
+                entity_type="work",
+                local_id="__LOCAL:work:1",
+                labels={"he": "תקנות רבנו גרשם",
+                        "en": "Takanut rivno gereshem (NLI 990001801390205171)"},
+                statements=[
+                    WikidataStatement(
+                        property_id="P31", value="Q47461344", value_type="item",
+                    ),
+                ],
+            ),
+            WikidataItem(
+                entity_type="person",
+                local_id="__LOCAL:person:1",
+                labels={"he": "משה בן מימון", "en": "Maimonides"},
+                statements=[
+                    WikidataStatement(
+                        property_id="P31", value="Q5", value_type="item",
+                    ),
+                ],
+            ),
+        ]
+
+    def test_save_round_trip_preserves_approved_flag(
+        self, _qapp: object, _sample_items: list,
+    ) -> None:
+        """User approves 2 out of 3 entities and saves. The saved JSON
+        must report ``approved=True`` for exactly those two rows so
+        the round-trip never silently drops approval state."""
+        import json  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (  # noqa: PLC0415
+            flatten_items, serialize_validated_rows,
+        )
+        rows = flatten_items(_sample_items)
+        rows[0]["approved"] = True
+        rows[2]["approved"] = True
+
+        out = serialize_validated_rows(rows)
+        # Round-trip through JSON to mimic the actual file path.
+        serialised = json.loads(
+            json.dumps(out, ensure_ascii=False, default=str),
+        )
+
+        approved_local_ids = {
+            e["local_id"] for e in serialised if e["approved"]
+        }
+        assert approved_local_ids == {"__LOCAL:ms:1", "__LOCAL:person:1"}, (
+            f"approved-flag round-trip lost rows; got {approved_local_ids}"
+        )
+        # Items themselves must be preserved with statements + labels
+        ms_entry = next(e for e in serialised if e["local_id"] == "__LOCAL:ms:1")
+        assert ms_entry["item"]["entity_type"] == "manuscript"
+        assert ms_entry["item"]["labels"]["en"] == "Manuscript A"
+        assert ms_entry["item"]["statements"][0]["property_id"] == "P31"
+
+    def test_load_restores_approved_checkbox_state(
+        self, _qapp: object, _sample_items: list,
+    ) -> None:
+        """The Rule 47 bug fix: loading a saved file must trigger
+        ``dataChanged`` so the table view re-paints. Before the fix,
+        ``_load_validated_file`` mutated ``_rows`` directly without
+        emitting any model signal, leaving checkboxes visually
+        unchecked even though the underlying state was approved.
+        """
+        from PyQt6.QtCore import Qt  # noqa: PLC0415
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (  # noqa: PLC0415
+            QPEntityModel, flatten_items, COL_APPROVED,
+        )
+
+        m = QPEntityModel()
+        m.load(flatten_items(_sample_items))
+
+        # Capture signal emissions
+        emissions: list[tuple[int, int]] = []
+        m.dataChanged.connect(
+            lambda tl, br, _roles=None: emissions.append((tl.row(), br.row()))
+        )
+
+        # Mimic the load path's restore (rows 0 and 2 approved)
+        changed = m.set_approved_bulk([0, 2], True)
+        assert changed == 2, "bulk approve did not flip both rows"
+
+        # CRITICAL: dataChanged must have fired so the view repaints.
+        # Without this signal, the visual checkboxes stay unchecked.
+        assert len(emissions) >= 1, (
+            "set_approved_bulk did not emit dataChanged — checkboxes "
+            "would remain visually unchecked after restore"
+        )
+
+        # CheckStateRole must report Checked for rows 0 + 2,
+        # Unchecked for row 1.
+        for row, expected in [
+            (0, Qt.CheckState.Checked),
+            (1, Qt.CheckState.Unchecked),
+            (2, Qt.CheckState.Checked),
+        ]:
+            idx = m.index(row, COL_APPROVED)
+            assert m.data(idx, Qt.ItemDataRole.CheckStateRole) == expected, (
+                f"row {row} CheckStateRole mismatch after bulk approve"
+            )
+
+    def test_validated_file_heuristic_detection(self) -> None:
+        """The load path branches on the file shape. A file produced by
+        ``serialize_validated_rows`` must be detected as validated,
+        while an ``authority_enriched.json`` must NOT be — they take
+        different code paths in ``_on_load_and_build``."""
+        from mhm_pipeline.gui.widgets.qp_entity_browser import (  # noqa: PLC0415
+            flatten_items, serialize_validated_rows,
+        )
+        from converter.wikidata.item_builder import (  # noqa: PLC0415
+            WikidataItem, WikidataStatement,
+        )
+
+        items = [WikidataItem(
+            entity_type="manuscript", local_id="__LOCAL:ms:1",
+            labels={"he": "א"},
+            statements=[WikidataStatement(
+                property_id="P31", value="Q87167", value_type="item",
+            )],
+        )]
+        validated = serialize_validated_rows(flatten_items(items))
+        # Mimic the heuristic at wikidata_studio_panel.py:_on_load_and_build
+        is_validated = (
+            len(validated) > 0
+            and isinstance(validated[0], dict)
+            and "item" in validated[0]
+            and "validation" in validated[0]
+        )
+        assert is_validated, "saved-progress file failed heuristic detection"
+
+        # authority_enriched.json shape — raw MARC records, no "item"
+        enriched = [
+            {"_control_number": "990001234560205171", "title": {"main": "א"}},
+        ]
+        is_validated_2 = (
+            len(enriched) > 0
+            and isinstance(enriched[0], dict)
+            and "item" in enriched[0]
+            and "validation" in enriched[0]
+        )
+        assert not is_validated_2, (
+            "authority_enriched.json was incorrectly detected as a saved "
+            "progress file — load path would skip the build step entirely"
+        )
+
+    def test_save_progress_enabled_before_validation(self, _qapp: object) -> None:
+        """Rule from 2026-05-19 user request: a curator who has only
+        approved some entities (no Check/validation run yet) must still
+        be able to save progress. Before this fix, the Save button was
+        only enabled after ``_on_validation_done`` fired."""
+        # Read the panel source and verify the Save button is enabled
+        # at the end of ``_on_items_built`` — the path that fires after
+        # the build worker finishes (step 3 of the stepper), well before
+        # the user has any chance to click "Check".
+        import inspect  # noqa: PLC0415
+        from mhm_pipeline.gui.panels import wikidata_studio_panel  # noqa: PLC0415
+
+        src = inspect.getsource(
+            wikidata_studio_panel.WikidataStudioPanel._on_items_built,
+        )
+        assert "_save_validation_btn.setEnabled(True)" in src, (
+            "Save-progress button must be enabled in _on_items_built so "
+            "the curator can save partial approval state before running "
+            "the optional Check/validation step"
+        )
+
+    def test_save_button_label_reads_save_progress(self) -> None:
+        """The button label is the user's primary affordance for this
+        feature. ``💾 Save validation`` was confusing because it sounded
+        like the save was only useful AFTER validation. Renamed to
+        ``💾 Save progress`` on 2026-05-19."""
+        import inspect  # noqa: PLC0415
+        from mhm_pipeline.gui.panels import wikidata_studio_panel  # noqa: PLC0415
+
+        src = inspect.getsource(wikidata_studio_panel)
+        # The new label must be present, and the old one must NOT be
+        # the user-visible string (it may still appear in docstrings).
+        assert '"💾 Save progress"' in src, (
+            "Save button label regression — must read '💾 Save progress'"
+        )
+        # The Load button must hint at resume too
+        assert '"Load / Resume"' in src, (
+            "Load button label regression — must read 'Load / Resume'"
         )

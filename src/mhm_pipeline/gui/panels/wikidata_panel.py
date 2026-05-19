@@ -1,7 +1,7 @@
-"""Stage 6 — Wikidata upload panel.
+"""Wikidata Upload panel.
 
 Features:
-- Input: authority_enriched.json (Stage 2 output), NOT TTL
+- Input: authority_enriched.json (authority-resolved records), NOT TTL
 - Dry run: exports QuickStatements V2 format
 - Live upload: via WikibaseIntegrator with bot password
 - Per-entity progress tracking
@@ -108,7 +108,7 @@ def _check_existing_items(input_path: Path, token: str) -> dict:
 
 
 class WikidataPanel(QWidget):
-    """Panel for Stage 6: Wikidata upload with dry-run and live modes."""
+    """Wikidata Upload panel — dry-run QuickStatements export or live API upload."""
 
     # (input_path, output_dir, token, dry_run, batch_mode)
     run_requested = pyqtSignal(Path, Path, str, bool, bool)

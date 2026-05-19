@@ -1258,11 +1258,18 @@ class TestWorkItemEnglishLabel:
         assert 'work.labels["en"]' in body
 
     def test_shelfmark_fallback_in_source(self) -> None:
+        # Rule 46 (2026-05-18): the synthetic ``"work from Hebrew manuscript
+        # <shelfmark>"`` placeholder was replaced with the three-tier smart
+        # waterfall ``english_label_for_hebrew``. Pin that the new path is
+        # wired up in ``_get_or_create_work`` and that the old placeholder is
+        # gone from the source so a future refactor cannot silently re-emit
+        # the dead synthetic label.
         src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
         work_idx = src.find("def _get_or_create_work")
         work_body_end = src.find("\n    def ", work_idx + 1)
         body = src[work_idx:work_body_end]
-        assert "shelfmark_for_work" in body
+        assert "english_label_for_hebrew" in body
+        assert "work from Hebrew manuscript" not in body
 
 
 class TestWorkP407DerivedFromManuscript:
@@ -1294,9 +1301,17 @@ class TestP2093Fallback:
         assert "P2093" in src
 
     def test_p2093_condition_checks_no_labels(self) -> None:
+        """Find the P2093 fallback block (introduced by Fix #8) and verify
+        the elif gate above it checks for empty labels. We pin to the
+        Fix-#8 marker comment so unrelated P2093 mentions (e.g., Rule 42's
+        anonymous-author somevalue branch, which is a separate branch with
+        its own gate) don't shift what this test scans."""
         src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
-        idx = src.find("P2093")
-        block = src[max(0, idx - 200) : idx + 200]
+        idx = src.find("Fix 2026-04-15 third audit Fix #8")
+        assert idx != -1, "Fix #8 marker comment not found"
+        # Window includes the elif gate above the comment plus the P2093 emit below.
+        block = src[max(0, idx - 400) : idx + 1500]
+        assert "P2093" in block
         assert "person_item.labels" in block or "labels" in block
 
 
@@ -1483,7 +1498,7 @@ class TestNerEntitySchemaCleanliness:
             and '"colophon_ml"' in ln
         ]
         assert not non_comment_lines, (
-            "Stage 2 must not emit entities with source=colophon_ml. "
+            "NER extraction must not emit entities with source=colophon_ml. "
             "Use record['ml_colophon_sentences'] (list[str]) instead. "
             f"Offending lines: {non_comment_lines}"
         )
@@ -1497,7 +1512,7 @@ class TestNerEntitySchemaCleanliness:
             and '"genre_ml"' in ln
         ]
         assert not non_comment_lines, (
-            "Stage 2 must not emit entities with source=genre_ml. "
+            "NER extraction must not emit entities with source=genre_ml. "
             "Use record['ml_genres'] (list[{label, confidence}]) instead. "
             f"Offending lines: {non_comment_lines}"
         )
@@ -1507,7 +1522,7 @@ class TestNerEntitySchemaCleanliness:
         src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
         assert '"ml_genres"' in src, (
             "NerWorker must include 'ml_genres' in the per-record "
-            "results dict — Stage 4 reads it for the P136 fallback."
+            "results dict — RDF construction reads it for the P136 fallback."
         )
 
     def test_extraction_editor_lists_classifier_outputs_as_synthetic(self) -> None:
@@ -1873,14 +1888,14 @@ class TestNerPostFilters:
 
 
 class TestOrganisationMatchRouting:
-    """When Stage 1 marks a MARC name as an organisation (type=110/710),
+    """When MARC parsing marks a MARC name as an organisation (type=110/710),
     the worker routes it to the Wikidata corporate authority lookup
     instead of the person-name search. Hits get a wikidata_qid; misses
     drop the entry entirely so the auth-match table stops carrying
     institution rows that nobody can match. A safety-net upgrade
     promotes person-typed strings whose text matches the institutional
     keyword set (catches e.g. ``Central Archives ... Jewish People`` that
-    Stage 1 mis-classified as a person).
+    MARC parsing mis-classified as a person).
     """
 
     def _make_worker(self):  # type: ignore[no-untyped-def]
@@ -2094,7 +2109,7 @@ class TestOrganisationMatchRouting:
 
 
 class TestNerPostFiltersPrecision:
-    """Audit-driven precision tightening for Stage 2 post-filters:
+    """Audit-driven precision tightening for NER post-filters:
 
     * F1 — drop person spans harvested from MARC ``נושא נוסף`` subject
       headings (detected via the preceding 30-char window).
@@ -2285,7 +2300,7 @@ class TestPersonNerModelConfidence:
         # Legacy ``confidence`` from the keyword classifier remains.
         assert "ent['confidence'] = conf" in src, (
             "Legacy 'confidence' field from _classify_role must "
-            "remain for Stage 3 backwards compatibility."
+            "remain for authority-resolution backwards compatibility."
         )
 
     def test_keyword_classifier_still_returns_bimodal(self) -> None:
@@ -5026,7 +5041,7 @@ class TestStage3AuthorityGuards:
     # ── manuscript-year extraction ───────────────────────────────────
 
     def test_extract_manuscript_year_from_structured_dates(self) -> None:
-        """Stage 0 ``record["dates"]["year"]`` is used."""
+        """MARC-parsing ``record["dates"]["year"]`` is used."""
         from converter.authority.stage3_guards import extract_manuscript_year
 
         rec = {"dates": {"year": 1612, "original_string": "1612"}}
@@ -6922,6 +6937,602 @@ class TestAuthorityTableFullPicture:
             "The source-filter combo must be populated from "
             "VALID_SOURCES, not a hardcoded list."
         )
+
+
+# ── Rule 42 / Phase 1 — HMO-faithful Wikidata projection ─────────────────────
+#
+# Tests added 2026-05-17 for the Phase 1 enrichment (multi-P31, statement
+# ranks, somevalue/novalue, P2888 exact-match to HMO IRI, qualifier stacks,
+# anonymous-author somevalue encoding, classifier P5102 augmentation). See
+# plans/smooth-humming-feather.md and CLAUDE.md Rule 42.
+
+
+class TestMultiP31Emission:
+    """Rule 42: a manuscript with multiple intersecting HMO classes must emit
+    multiple P31 statements (illuminated + composite + palimpsest + manuscript
+    when each is applicable). The base Q_MANUSCRIPT is always emitted last."""
+
+    def _builder(self) -> object:
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        return WikidataItemBuilder()
+
+    def test_decoration_adds_illuminated_qid(self) -> None:
+        b = self._builder()
+        qids = b._determine_instance_type({"has_decoration": True})
+        assert "Q48498" in qids  # illuminated manuscript
+        assert "Q87167" in qids  # base manuscript
+        assert qids[-1] == "Q87167"
+
+    def test_anthology_adds_codex_qid(self) -> None:
+        b = self._builder()
+        qids = b._determine_instance_type({"is_anthology": True})
+        assert "Q213924" in qids  # codex
+        assert qids[-1] == "Q87167"
+
+    def test_palimpsest_and_composite_combine(self) -> None:
+        b = self._builder()
+        qids = b._determine_instance_type(
+            {"is_palimpsest": True, "is_composite": True, "has_decoration": True}
+        )
+        # All three specific QIDs + base manuscript, no duplicates
+        assert "Q179808" in qids  # palimpsest
+        assert "Q33308141" in qids  # composite
+        assert "Q48498" in qids  # illuminated
+        assert qids.count("Q87167") == 1
+        assert qids[-1] == "Q87167"
+
+    def test_base_only_when_no_flags(self) -> None:
+        b = self._builder()
+        qids = b._determine_instance_type({})
+        assert qids == ["Q87167"]
+
+
+class TestP31MultiValueGuardRelaxed:
+    """Rule 42: P31 moves from _IDENTITY_PROPS to _MULTI_VALUE_IDENTITY_PROPS.
+    The other ten identity properties keep their Rule 23 semantics intact."""
+
+    def _uploader(self) -> object:
+        from converter.wikidata.uploader import WikidataUploader
+        return WikidataUploader.__new__(WikidataUploader)
+
+    def _stmt(self, prop: str, value: str) -> object:
+        s = MagicMock()
+        s.property_id = prop
+        s.value = value
+        return s
+
+    def _existing(self, value: str) -> object:
+        c = MagicMock()
+        c.mainsnak.datavalue = {"value": value}
+        return c
+
+    def test_p31_in_multi_value_set(self) -> None:
+        from converter.wikidata.uploader import WikidataUploader
+        assert "P31" in WikidataUploader._MULTI_VALUE_IDENTITY_PROPS
+        assert "P31" not in WikidataUploader._IDENTITY_PROPS
+
+    def test_p31_conflict_returns_false_for_different_value(self) -> None:
+        u = self._uploader()
+        wbi_item = MagicMock()
+        # Existing P31 = Q87167 (manuscript); adding Q48498 (illuminated) → allowed
+        wbi_item.claims.get = MagicMock(return_value=[self._existing("Q87167")])
+        stmt = self._stmt("P31", "Q48498")
+        assert u._would_create_identity_conflict(wbi_item, stmt) is False
+
+    def test_p214_conflict_still_blocks(self) -> None:
+        """Rule 23 regress guard: P214 multi-value with different values stays blocked."""
+        u = self._uploader()
+        wbi_item = MagicMock()
+        wbi_item.claims.get = MagicMock(return_value=[self._existing("12345")])
+        stmt = self._stmt("P214", "67890")
+        assert u._would_create_identity_conflict(wbi_item, stmt) is True
+
+    def test_p31_refuses_non_manuscript_value(self) -> None:
+        """Audit-response defense (2026-05-17): the pipeline must not add
+        P31=Q5 (human) or P31=Q43229 (org) even though P31 is multi-value.
+        The manuscript-class allowlist refuses anything outside the
+        manuscript hierarchy."""
+        u = self._uploader()
+        wbi_item = MagicMock()
+        wbi_item.claims.get = MagicMock(return_value=[self._existing("Q87167")])
+        # Q5 (human) is outside the manuscript hierarchy → blocked
+        stmt = self._stmt("P31", "Q5")
+        assert u._would_create_identity_conflict(wbi_item, stmt) is True
+        # Q43229 (organization) likewise
+        stmt2 = self._stmt("P31", "Q43229")
+        assert u._would_create_identity_conflict(wbi_item, stmt2) is True
+        # Q215380 (band) — Pallor/Jcb wrong-merge class
+        stmt3 = self._stmt("P31", "Q215380")
+        assert u._would_create_identity_conflict(wbi_item, stmt3) is True
+
+    def test_p31_refuses_manuscript_on_non_manuscript_item(self) -> None:
+        """Inverse defense: if the existing item is a person (Q5) and we
+        try to add P31=Q87167 (manuscript), refuse — would re-type a
+        person as a manuscript. Geagea's wrong-J9U-on-humans class."""
+        u = self._uploader()
+        wbi_item = MagicMock()
+        # Existing P31 = Q5 (human)
+        wbi_item.claims.get = MagicMock(return_value=[self._existing("Q5")])
+        stmt = self._stmt("P31", "Q87167")
+        assert u._would_create_identity_conflict(wbi_item, stmt) is True
+
+    def test_p31_allows_two_manuscript_classes(self) -> None:
+        """Positive case: illuminated + manuscript on the same item is fine
+        (this is exactly the multi-P31 pattern Phase 1 wanted to enable)."""
+        u = self._uploader()
+        wbi_item = MagicMock()
+        wbi_item.claims.get = MagicMock(return_value=[self._existing("Q87167")])
+        stmt = self._stmt("P31", "Q48498")
+        assert u._would_create_identity_conflict(wbi_item, stmt) is False
+
+
+class TestQualifierStackOnInscription:
+    """Rule 42: P1684 (inscription) emissions accept a P7416 (folios) qualifier
+    when upstream surfaces a folio reference. Never invent when absent."""
+
+    def test_colophon_carries_role_qualifier_always(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The colophon block must wire P3831 (role) → Q_COLOPHON
+        idx = src.find("# ── Colophon text → P1684")
+        assert idx != -1
+        block = src[idx : idx + 1500]
+        assert "P_OBJECT_HAS_ROLE" in block
+        assert "Q_COLOPHON" in block
+
+    def test_colophon_folio_attaches_p7416_conditionally(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("# ── Colophon text → P1684")
+        block = src[idx : idx + 1500]
+        # P_NUMBER_OF_FOLIOS qualifier appended when colophon_folio present
+        assert "colophon_folio" in block
+        assert "P_NUMBER_OF_FOLIOS" in block
+
+    def test_scribal_intervention_folio_conditional(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("# ── Scribal interventions → P1684")
+        assert idx != -1
+        block = src[idx : idx + 2000]
+        assert "P_NUMBER_OF_FOLIOS" in block
+        assert "intervention_folio" in block
+
+
+class TestStatementRankSerialization:
+    """Rule 42: WikidataStatement.rank is plumbed through the QS exporter
+    (as a comment line) and the WBI uploader (via WikibaseRank enum)."""
+
+    def test_default_rank_is_normal(self) -> None:
+        from converter.wikidata.item_builder import WikidataStatement
+        s = WikidataStatement(property_id="P31", value="Q87167", value_type="item")
+        assert s.rank == "normal"
+
+    def test_qs_emits_rank_comment_for_preferred(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q123")
+        item.statements.append(
+            WikidataStatement(
+                property_id="P31", value="Q48498", value_type="item", rank="preferred",
+            )
+        )
+        out = QuickStatementsExporter().export_item(item)
+        assert "/* RANK: preferred" in out
+
+    def test_qs_no_comment_for_normal_rank(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q123")
+        item.statements.append(
+            WikidataStatement(property_id="P31", value="Q87167", value_type="item")
+        )
+        out = QuickStatementsExporter().export_item(item)
+        assert "/* RANK" not in out
+
+
+class TestSomevalueNovalueSerialization:
+    """Rule 42: somevalue/novalue are emitted as literal QS v2 tokens (no
+    quotes). The WBI uploader maps them to mainsnak.snaktype."""
+
+    def test_qs_emits_literal_somevalue_token(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q1")
+        item.statements.append(
+            WikidataStatement(property_id="P50", value=None, value_type="somevalue")
+        )
+        out = QuickStatementsExporter().export_item(item)
+        # Must be the literal token, not a quoted string
+        assert "\tsomevalue" in out
+        assert '"somevalue"' not in out
+
+    def test_qs_emits_literal_novalue_token(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q1")
+        item.statements.append(
+            WikidataStatement(property_id="P50", value=None, value_type="novalue")
+        )
+        out = QuickStatementsExporter().export_item(item)
+        assert "\tnovalue" in out
+        assert '"novalue"' not in out
+
+    def test_somevalue_in_format_value(self) -> None:
+        from converter.wikidata.item_builder import WikidataStatement
+        from converter.wikidata.quickstatements import _format_value
+        s = WikidataStatement(property_id="P50", value=None, value_type="somevalue")
+        assert _format_value(s) == "somevalue"
+
+
+class TestP2888EmitsHmoIri:
+    """Rule 42 (audit-revised 2026-05-17): every manuscript with a control
+    number gets a P2888 (exact match) claim pointing at the project-owned
+    wikibase.cloud slug URL (NOT the synthetic HMO graph IRI, which is
+    only for internal TTL traversal and does not resolve over HTTP)."""
+
+    def test_p2888_emitted_uses_wikibase_cloud_slug(self) -> None:
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        b = WikidataItemBuilder()
+        record = {"_control_number": "990000123", "title": "Test"}
+        item = b.build_manuscript_item(record)
+        p2888 = [s for s in item.statements if s.property_id == "P2888"]
+        assert len(p2888) == 1
+        # The URL is the project-owned, stable slug — not the synthetic IRI
+        assert p2888[0].value == (
+            "https://mhm-hmo.wikibase.cloud/wiki/MS_990000123"
+        )
+        assert p2888[0].value_type == "url"
+
+    def test_p2888_absent_without_control_number(self) -> None:
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        b = WikidataItemBuilder()
+        item = b.build_manuscript_item({"title": "Test"})
+        assert not [s for s in item.statements if s.property_id == "P2888"]
+
+    def test_p2888_never_uses_synthetic_hmo_iri(self) -> None:
+        """Regress guard: P2888 must NEVER point at the synthetic HMO
+        graph IRI (http://www.ontology.org.il/...). That namespace is for
+        TTL-internal use and does not resolve."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The P2888 emission must use hmo_wikibase_page_url, not hmo_iri
+        idx = src.find("property_id=P_EXACT_MATCH")
+        assert idx != -1
+        block = src[max(0, idx - 800) : idx + 400]
+        assert "hmo_wikibase_page_url" in block, (
+            "P2888 must derive its URL from hmo_wikibase_page_url()"
+        )
+        # The synthetic HMO IRI must NOT appear in the value position of
+        # the P2888 statement; record["hmo_iri"] may still be assigned
+        # in the record dict (for TTL traversal) but never passed as the
+        # P2888 value. We assert by ensuring the immediate context of
+        # P_EXACT_MATCH does NOT read from record["hmo_iri"].
+        narrow = src[idx : idx + 400]
+        assert 'record.get("hmo_iri")' not in narrow, (
+            "P2888 emission must not read record['hmo_iri'] as its value"
+        )
+
+    def test_hmo_iri_still_propagated_from_rdf_for_internal_use(self) -> None:
+        """The crosswalk still populates record["hmo_iri"] (the TTL
+        graph identifier) for internal use, but it is no longer the
+        P2888 value. Phase 2 may revisit this for P973 or owl:sameAs
+        on a separate output surface."""
+        src = pathlib.Path("converter/wikidata/hmo_crosswalk.py").read_text(encoding="utf-8")
+        assert '"hmo_iri": str(ms_uri)' in src
+
+
+class TestP887EmittedAtClaimLevelForGenreClassifier:
+    """Rule 42 + Rule 28 #3 regress: classifier-inferred genres carry both
+    P1480 (presumably) and P5102 (hypothesis) qualifiers; P887 stays in the
+    reference block, never in qualifier position."""
+
+    def test_classifier_genre_carries_p5102_hypothesis(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("# ── Genre fallback: classifier when MARC 655 absent")
+        assert idx != -1
+        block = src[idx : idx + 2000]
+        assert "P_NATURE_OF_STATEMENT" in block
+        assert "Q_HYPOTHESIS" in block
+
+    def test_p887_in_reference_position_for_classifier(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("# ── Genre fallback: classifier when MARC 655 absent")
+        block = src[idx : idx + 2000]
+        # P887 lives in heuristic_ref (the reference list), not in qualifiers
+        assert "P_BASED_ON_HEURISTIC" in block
+        assert "heuristic_ref" in block
+
+    def test_p887_never_appears_as_qualifier(self) -> None:
+        """Rule 28 #3 structural guard: P887 must NEVER appear inside a
+        qualifiers=[...] block — only in references=[...]."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # Scan every line containing P_BASED_ON_HEURISTIC and confirm it is not
+        # within an obvious qualifier dict structure (heuristic but useful).
+        for i, line in enumerate(src.splitlines()):
+            if "P_BASED_ON_HEURISTIC" not in line:
+                continue
+            # Look back ~5 lines for a qualifiers=[ context (without a
+            # closing ] in between).
+            window = "\n".join(src.splitlines()[max(0, i - 5) : i + 1])
+            if "qualifiers=[" in window and "]" not in window.split("qualifiers=[")[-1]:
+                raise AssertionError(
+                    f"P_BASED_ON_HEURISTIC appears in qualifier context near line {i + 1}"
+                )
+
+
+class TestRankSlotOrderingInQs:
+    """Rule 42 + Rule 31 #6: qualifiers must precede references in QS output
+    even when rank-comment lines are interleaved. The rank comment lives on
+    its own line before the statement."""
+
+    def test_qualifiers_precede_references(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q1")
+        item.statements.append(
+            WikidataStatement(
+                property_id="P50", value="Q2", value_type="item",
+                qualifiers=[{"property": "P3831", "value": "Q5", "type": "item"}],
+                references=[{"property": "P248", "value": "Q3", "type": "item"}],
+            )
+        )
+        out = QuickStatementsExporter().export_item(item)
+        # Find the statement line; assert P3831 (qualifier) comes before S248 (ref)
+        stmt_lines = [line for line in out.splitlines() if "\tP50\t" in line]
+        assert stmt_lines, "P50 statement line not found"
+        line = stmt_lines[0]
+        p3831_idx = line.find("P3831")
+        s248_idx = line.find("S248")
+        assert 0 < p3831_idx < s248_idx, f"qualifiers must precede refs: {line!r}"
+
+    def test_rank_comment_precedes_statement(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q1")
+        item.statements.append(
+            WikidataStatement(
+                property_id="P31", value="Q48498", value_type="item", rank="preferred",
+            )
+        )
+        out = QuickStatementsExporter().export_item(item)
+        lines = out.splitlines()
+        # The comment line must appear immediately before its statement
+        stmt_line_idx = next(
+            (i for i, ln in enumerate(lines) if "\tP31\tQ48498" in ln), -1
+        )
+        assert stmt_line_idx > 0
+        assert "/* RANK: preferred" in lines[stmt_line_idx - 1]
+
+    def test_deprecated_rank_comment(self) -> None:
+        from converter.wikidata.item_builder import WikidataItem, WikidataStatement
+        from converter.wikidata.quickstatements import QuickStatementsExporter
+        item = WikidataItem(entity_type="manuscript", local_id="x", existing_qid="Q1")
+        item.statements.append(
+            WikidataStatement(
+                property_id="P50", value="Q2", value_type="item", rank="deprecated",
+            )
+        )
+        out = QuickStatementsExporter().export_item(item)
+        assert "/* RANK: deprecated" in out
+
+
+class TestAnonymousAuthorSomevalueEncoding:
+    """Rule 42: known-anonymous authors get a P50 somevalue claim on the
+    manuscript with P3831 (role), P2093 (name string), and P5102 (hypothesis)
+    qualifiers — instead of being silently dropped. Rule 28 still prevents
+    creation of a stub person item for the anonymous placeholder."""
+
+    def test_anonymous_branch_present_in_add_person_statement(self) -> None:
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        # The somevalue branch is keyed by _is_anonymous_name(clean_name_anon)
+        # inside _add_person_statement.
+        assert 'value_type="somevalue"' in src
+        assert "_is_anonymous_name(clean_name_anon)" in src
+        # Must carry P2093 + P3831 + P5102 (nature of statement) qualifiers
+        idx = src.find("_is_anonymous_name(clean_name_anon)")
+        block = src[idx : idx + 1500]
+        assert "P_OBJECT_HAS_ROLE" in block
+        assert '"P2093"' in block
+        assert "P_NATURE_OF_STATEMENT" in block
+        assert "Q_HYPOTHESIS" in block
+
+    def test_rule_28_anonymous_filter_still_blocks_person_item(self) -> None:
+        """Rule 28 regress: _get_or_create_person must still refuse to create
+        a person item for an anonymous placeholder name."""
+        from converter.wikidata.item_builder import _is_anonymous_name
+        assert _is_anonymous_name("Anonymous") is True
+        assert _is_anonymous_name("לא ידוע") is True
+        assert _is_anonymous_name("Some Real Name") is False
+
+    def test_somevalue_branch_short_circuits_before_get_or_create(self) -> None:
+        """The somevalue branch returns early; no person item is created."""
+        src = pathlib.Path("converter/wikidata/item_builder.py").read_text(encoding="utf-8")
+        idx = src.find("_is_anonymous_name(clean_name_anon)")
+        # A `return` must appear before the next `_get_or_create_person` call
+        next_create = src.find("_get_or_create_person", idx)
+        early_return = src.find("return", idx)
+        assert early_return != -1
+        assert early_return < next_create
+
+
+# ── Rule 44 / Phase 2 — HMO bridge: P973 + projection coverage report ───────
+
+
+class TestP973ToWikibaseCloud:
+    """Rule 44: every manuscript carries a P973 (described at URL) claim
+    pointing at the direct wikibase.cloud browse page. The split with
+    P2888 (exact match, which switches to w3id.org after the perma-id PR
+    merges) is intentional — P2888 is the academic permalink, P973 is
+    the live direct link a human clicks through."""
+
+    def test_p973_emitted_with_wikibase_cloud_url(self) -> None:
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        b = WikidataItemBuilder()
+        item = b.build_manuscript_item({"_control_number": "990000123", "title": "Test"})
+        p973 = [s for s in item.statements if s.property_id == "P973"]
+        assert len(p973) == 1
+        assert p973[0].value == "https://mhm-hmo.wikibase.cloud/wiki/MS_990000123"
+        assert p973[0].value_type == "url"
+
+    def test_p973_absent_without_control_number(self) -> None:
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        b = WikidataItemBuilder()
+        item = b.build_manuscript_item({"title": "Test"})
+        assert not [s for s in item.statements if s.property_id == "P973"]
+
+    def test_p2888_and_p973_coexist_with_distinct_semantics(self) -> None:
+        """Both P2888 (exact match permalink) and P973 (direct URL) are
+        emitted. Today their URLs coincide; once w3id.org PR merges and
+        P2888 switches to the permalink, P973 stays as the direct link."""
+        from converter.wikidata.item_builder import WikidataItemBuilder
+        b = WikidataItemBuilder()
+        item = b.build_manuscript_item({"_control_number": "990000123", "title": "Test"})
+        p2888 = [s for s in item.statements if s.property_id == "P2888"]
+        p973 = [s for s in item.statements if s.property_id == "P973"]
+        assert len(p2888) == 1 and len(p973) == 1
+        # Both currently point at the same wikibase.cloud URL; the split
+        # becomes meaningful when P2888 swaps to https://w3id.org/mhm/...
+        assert p2888[0].value == p973[0].value
+        assert "mhm-hmo.wikibase.cloud" in p973[0].value
+
+
+class TestProjectionCoverageReport:
+    """Rule 44: Wikidata Upload writes a wikidata_projection_coverage.json so
+    curators can see per-HMO-class projection mode. Phase 2 added 23
+    new strategy entries to STRATEGY_BY_LOCAL_NAME so the unknown-class
+    count drops to ~zero on the test corpus."""
+
+    def test_coverage_report_shape(self) -> None:
+        from converter.wikidata.projection_coverage import (
+            build_projection_coverage_report,
+        )
+        from converter.wikidata.item_builder import WikidataItem
+        # Use a real graph file; the test corpus output.ttl is the canonical
+        # reference for the report shape.
+        import pathlib
+        ttl = pathlib.Path("/Users/alexandergo/Desktop/test_sub2/output.ttl")
+        if not ttl.exists():
+            import pytest as _pytest
+            _pytest.skip("test corpus output.ttl not present")
+        report = build_projection_coverage_report(ttl, [])
+        assert "classes" in report
+        assert "rdf_class_count" in report
+        assert "wikidata_item_count" in report
+        assert "report_version" in report
+        assert isinstance(report["classes"], list)
+        for entry in report["classes"]:
+            assert "class_uri" in entry
+            assert "class_local_name" in entry
+            assert "projection_status" in entry
+            assert entry["projection_status"] in (
+                "direct_wikidata_item",
+                "summarized_in_wikidata",
+                "hmo_or_wikibase_only",
+                "unknown",
+            )
+
+    def test_phase2_strategies_cover_corpus_classes(self) -> None:
+        """After Phase 2's 23 new entries, the test corpus should have
+        ZERO 'unknown' projection statuses (or very close to it). This
+        is the structural assertion that we documented the full crosswalk."""
+        from converter.wikidata.projection_coverage import (
+            build_projection_coverage_report,
+        )
+        import pathlib
+        ttl = pathlib.Path("/Users/alexandergo/Desktop/test_sub2/output.ttl")
+        if not ttl.exists():
+            import pytest as _pytest
+            _pytest.skip("test corpus output.ttl not present")
+        report = build_projection_coverage_report(ttl, [])
+        unknowns = [
+            c for c in report["classes"]
+            if c["projection_status"] == "unknown"
+        ]
+        # Phase 2 explicitly maps the 19 unknown classes we found in the
+        # corpus. The schema/owl/rdf metadata classes are intentionally
+        # excluded — they're not HMO data classes.
+        # Allow a small margin (≤ 3) for any future schema-only additions.
+        assert len(unknowns) <= 3, (
+            f"Phase 2 should leave ≤3 unmapped classes; found "
+            f"{len(unknowns)}: {[u['class_local_name'] for u in unknowns]}"
+        )
+
+    def test_new_strategy_entries_present_in_module(self) -> None:
+        """Structural guard: each Phase 2 new entry must be in the
+        STRATEGY_BY_LOCAL_NAME dict so the test corpus coverage stays
+        complete even as the dict is edited."""
+        from converter.wikidata.projection_coverage import STRATEGY_BY_LOCAL_NAME
+        phase2_added = {
+            "AnthologyPosition", "AnthologyStructure", "SubjectType",
+            "E52_Time-Span", "E56_Language", "E57_Material",
+            "F27_Work_Creation", "CanonicalReference", "BiblicalReference",
+            "MishnaicReference", "TalmudicReference", "HalachicReference",
+            "Decoration", "CodicologicalHierarchy", "ConditionType",
+            "HandChange", "Marginalia", "MarginalAddition", "TextCorrection",
+            "HebrewScriptType", "ModeScriptType", "TypeScriptType",
+            "ParticipationRole", "CanonicalHierarchyType",
+        }
+        missing = phase2_added - set(STRATEGY_BY_LOCAL_NAME.keys())
+        assert not missing, f"Phase 2 entries missing: {missing}"
+
+    def test_worker_writes_coverage_report(self) -> None:
+        """Structural guard: WikidataUploadWorker writes the coverage
+        report alongside the other Stage 6 outputs (Rule 39 substep)."""
+        src = pathlib.Path(
+            "src/mhm_pipeline/controller/workers.py"
+        ).read_text(encoding="utf-8")
+        assert "write_projection_coverage_report" in src
+        assert "wikidata_projection_coverage.json" in src
+
+
+class TestHmoWikidataCrosswalkTtl:
+    """Rule 44: the static class crosswalk lives at
+    ontology/hmo-wikidata-crosswalk.ttl as the human-readable companion
+    to the runtime STRATEGY_BY_LOCAL_NAME table."""
+
+    def test_crosswalk_file_exists_and_parses(self) -> None:
+        from rdflib import Graph
+        path = pathlib.Path("ontology/hmo-wikidata-crosswalk.ttl")
+        assert path.exists(), "crosswalk TTL missing"
+        g = Graph()
+        g.parse(path)
+        # Should carry at least a few dozen SKOS match assertions
+        match_props = (
+            "http://www.w3.org/2004/02/skos/core#exactMatch",
+            "http://www.w3.org/2004/02/skos/core#closeMatch",
+            "http://www.w3.org/2004/02/skos/core#relatedMatch",
+        )
+        from rdflib import URIRef
+        total_matches = sum(
+            sum(1 for _ in g.triples((None, URIRef(p), None)))
+            for p in match_props
+        )
+        assert total_matches >= 30, (
+            f"Crosswalk should declare ≥30 mappings; got {total_matches}"
+        )
+
+    def test_crosswalk_covers_core_manuscript_class(self) -> None:
+        from rdflib import Graph, URIRef
+        g = Graph()
+        g.parse("ontology/hmo-wikidata-crosswalk.ttl")
+        f4 = URIRef("http://iflastandards.info/ns/lrm/lrmoo/F4_Manifestation_Singleton")
+        manuscript_qid = URIRef("http://www.wikidata.org/entity/Q87167")
+        exact_match = URIRef("http://www.w3.org/2004/02/skos/core#exactMatch")
+        assert (f4, exact_match, manuscript_qid) in g, (
+            "F4_Manifestation_Singleton must skos:exactMatch Q87167 (manuscript)"
+        )
+
+    def test_crosswalk_documents_hmo_only_classes(self) -> None:
+        """Tier D classes (ParadigmBridge, PhilologicalView, TextTradition,
+        TransmissionWitness) must be documented in the crosswalk so
+        external consumers know they are intentionally HMO-only."""
+        text = pathlib.Path("ontology/hmo-wikidata-crosswalk.ttl").read_text(
+            encoding="utf-8",
+        )
+        for hmo_only in (
+            "ParadigmBridge", "PhilologicalView",
+            "TextTradition", "TransmissionWitness",
+        ):
+            assert f"hm:{hmo_only}" in text, (
+                f"Crosswalk must document HMO-only class {hmo_only}"
+            )
 
 
 if __name__ == "__main__":

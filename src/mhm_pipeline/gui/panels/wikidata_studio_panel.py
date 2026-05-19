@@ -458,14 +458,19 @@ class WikidataStudioPanel(QWidget):
             filter="RDF / JSON files (*.ttl *.nt *.jsonld *.rdf *.json)",
         )
         self._input_selector.setToolTip(
-            "Preferred: output.ttl from Stage 4/5, built from reviewed authority data. "
+            "Preferred: output.ttl from the RDF/SHACL pipeline, built from reviewed authority data. "
             "Compatibility: authority_enriched.json / authority_enriched_reviewed.json, "
             "or *_wikidata_verified.json to resume a saved Studio review."
         )
         load_row.addWidget(self._input_selector, stretch=1)
-        self._load_btn = QPushButton("Load & Build Items")
+        self._load_btn = QPushButton("Load / Resume")
         self._load_btn.setStyleSheet(theme.button_style("primary"))
         self._load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._load_btn.setToolTip(
+            "Load a TTL/JSON file to build fresh Wikidata items, OR pick a "
+            "previously-saved *_wikidata_verified.json to resume where you "
+            "left off — approvals, validation payloads, and edits are restored."
+        )
         self._load_btn.clicked.connect(self._on_load_and_build)
         load_row.addWidget(self._load_btn)
         layout.addLayout(load_row)
@@ -542,13 +547,14 @@ class WikidataStudioPanel(QWidget):
         self._check_btn.clicked.connect(self._on_validate)
         action_row.addWidget(self._check_btn)
 
-        self._save_validation_btn = QPushButton("💾 Save validation")
+        self._save_validation_btn = QPushButton("💾 Save progress")
         self._save_validation_btn.setStyleSheet(theme.button_style("success"))
         self._save_validation_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._save_validation_btn.setEnabled(False)
         self._save_validation_btn.setToolTip(
-            "Save the current items + validation payloads to a JSON file "
-            "that round-trips with the uploader."
+            "Save your current review progress — approved items, validation "
+            "payloads, edits — to a JSON file. Re-open via the Browse… field "
+            "any time to resume from exactly this state."
         )
         self._save_validation_btn.clicked.connect(self._on_save_validation)
         action_row.addWidget(self._save_validation_btn)
@@ -851,18 +857,29 @@ class WikidataStudioPanel(QWidget):
             ))
 
         self._qp_browser.load_items(items)
-        # Re-apply validation payloads + approval flags
+        # Re-apply validation payloads + approval flags. We collect all
+        # approved-row indices first and apply them via the model's
+        # ``set_approved_bulk`` method so ``dataChanged`` fires and the
+        # checkboxes visually reflect the restored state — direct
+        # ``_rows`` mutation alone leaves the UI showing unchecked boxes.
         restored = 0
+        approved_source_rows: list[int] = []
+        local_id_to_row: dict[str, int] = {
+            r["local_id"]: idx
+            for idx, r in enumerate(self._qp_browser._model._rows)
+        }
         for local_id, payload, approved in payloads:
             if payload:
                 self._qp_browser.update_validation(local_id, payload)
                 restored += 1
             if approved:
-                # Flip the approved flag on the matching row
-                for r in self._qp_browser._model._rows:
-                    if r["local_id"] == local_id:
-                        r["approved"] = True
-                        break
+                row_idx = local_id_to_row.get(local_id)
+                if row_idx is not None:
+                    approved_source_rows.append(row_idx)
+        if approved_source_rows:
+            self._qp_browser._model.set_approved_bulk(
+                approved_source_rows, True,
+            )
 
         self._log_viewer.append_line(
             f"Restored {len(items)} items and {restored} validation payloads. "
@@ -885,6 +902,9 @@ class WikidataStudioPanel(QWidget):
         self._load_btn.setEnabled(True)
         self._check_btn.setEnabled(True)
         self._upload_btn.setEnabled(True)
+        # Save-progress is allowed as soon as items exist — the user may
+        # want to save partial approval state before running validation.
+        self._save_validation_btn.setEnabled(True)
         # Also build a Turtle preview
         self._refresh_rdf_preview()
         if self._build_worker is not None:

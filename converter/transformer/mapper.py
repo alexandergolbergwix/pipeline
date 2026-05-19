@@ -31,9 +31,9 @@ def is_wikidata_verified_json(path: Path) -> bool:
 
 
 def select_rdf_source_path(input_path: Path) -> tuple[Path, str]:
-    """Choose the safest/richest manuscript-source file for Stage 4 RDF.
+    """Choose the safest/richest manuscript-source file for RDF construction.
 
-    If the user points Stage 4 at ``authority_enriched.json`` and the
+    If the user points RDF construction at ``authority_enriched.json`` and the
     user-reviewed sibling exists, the reviewed file is preferred.  A
     ``*_wikidata_verified.json`` file is already a Wikidata Studio review
     state, not manuscript-source data, and must never feed RDF construction.

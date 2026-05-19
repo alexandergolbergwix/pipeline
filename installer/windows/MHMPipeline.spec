@@ -89,6 +89,12 @@ datas += _opt('ner/marc500_classifier_model.pt', 'ner')
 # HuggingFace snapshots (staged into models/ by package_for_windows_build.sh).
 datas += _opt_dir('models/hebrew-manuscript-joint-ner-v2', 'models/hebrew-manuscript-joint-ner-v2')
 datas += _opt_dir('models/dictabert', 'models/dictabert')
+# Rule 46 (2026-05-18, fourth iteration): TaatikNet ByT5 transliterator
+# powers Hebrew→Latin Tier 4. Must be present in BOTH installers (macOS
+# build_app.sh stages this to models/taatiknet by the same logic).
+# If absent, hebrew_translit Tier 4 short-circuits and the work-label
+# falls back to "NLI <control_number>".
+datas += _opt_dir('models/taatiknet', 'models/taatiknet')
 
 # Ontology + SHACL shapes (required for Stages 4 and 5).
 datas += _opt('ontology/hebrew-manuscripts.ttl', 'ontology')

@@ -126,6 +126,15 @@ PYTHONPATH=src:. .venv/bin/python -m pytest tests/ -v \
 
 ## Expected Baseline
 
-- Full suite: 50+ tests pass
+- **Full suite: ~850 tests pass, 1 skipped** (as of CLAUDE.md Rule 46, 2026-05-18)
+  - `tests/unit/test_safety_guards.py`: 502 (Rules 23–44 unit invariants)
+  - `tests/unit/test_hebrew_translit.py`: 36 (Rule 46 Tier 1/2/5)
+  - `tests/unit/test_wikidata_reverse_lookup.py`: 10 (Rule 46 Tier 3 cache)
+  - `tests/unit/test_nakdan_translit.py`: 26 (Rule 46 Tier 4 graceful degradation)
+  - `tests/unit/test_iiif_phase3.py`: 25 (Rule 45 IIIF + P6108 coexistence)
+  - `tests/integration/test_hebrew_translit_e2e.py`: 18 (Rule 46 waterfall E2E)
+  - `tests/integration/test_rules_end_to_end.py`: 50+ (rule-by-rule against
+    real corpus + cross-platform macOS/Windows installer parity)
+  - Plus existing unit + integration tests for the pipeline stages
 - Unit tests: Fast (< 1 min)
-- Integration tests: Slower (2-5 min) due to file I/O
+- Integration tests: Slower (2-5 min) due to file I/O and corpus parsing

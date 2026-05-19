@@ -6,8 +6,9 @@ import dataclasses
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -70,7 +71,10 @@ def _get_marc500_classifier() -> object | None:
         model_path = _find_classifier_weights("marc500_classifier_model.pt")
         if model_path is not None:
             try:
-                from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
+                from converter.authority.marc500_classifier import (
+                    Marc500Classifier,  # noqa: PLC0415
+                )
+
                 _MARC500_CLASSIFIER = Marc500Classifier(str(model_path))
             except Exception as _exc:
                 logger.warning("Could not load MARC 500 classifier: %s", _exc)
@@ -91,6 +95,7 @@ def _get_genre_classifier() -> object | None:
         if model_path is not None:
             try:
                 from converter.authority.genre_classifier import GenreClassifier  # noqa: PLC0415
+
                 _GENRE_CLASSIFIER = GenreClassifier(str(model_path))
             except Exception as _exc:
                 logger.warning("Could not load genre classifier: %s", _exc)
@@ -102,6 +107,7 @@ def _get_genre_classifier() -> object | None:
 
 def _split_marc500_sentences(text: str) -> list[str]:
     import re as _re  # noqa: PLC0415
+
     parts = _re.split(r"(?<=[.!?])\s+|\n", text)
     return [s.strip() for s in parts if len(s.strip()) >= 10]
 
@@ -178,9 +184,7 @@ class MarcParseWorker(StageWorker):
                 entry["_control_number"] = record.control_number
                 extracted.append(entry)
                 if idx % substep_every == 0 or idx + 1 == total:
-                    self.substep.emit(
-                        f"Parsing record {idx + 1}/{total}: {record.control_number}"
-                    )
+                    self.substep.emit(f"Parsing record {idx + 1}/{total}: {record.control_number}")
                 self.progress.emit(int((idx + 1) / total * 100))
 
             self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -356,6 +360,7 @@ class NerWorker(StageWorker):
         # returns sys._MEIPASS so this resolves correctly inside the .exe.
         try:
             from mhm_pipeline.platform_.paths import bundled_resource_root  # noqa: PLC0415
+
             frozen = bundled_resource_root() / "ner" / filename
             if frozen.exists():
                 return str(frozen)
@@ -578,24 +583,27 @@ class NerWorker(StageWorker):
                 if _genre_clf is not None:
                     try:
                         title = str(record.get("title") or "").strip()
-                        notes_list = [
-                            str(n) for n in (record.get("notes") or []) if n
-                        ]
+                        notes_list = [str(n) for n in (record.get("notes") or []) if n]
                         predictions = _genre_clf.predict(title, notes_list)
                         for item in predictions or []:
                             # GenreClassifier.predict returns list[(label, conf)]
                             if isinstance(item, tuple) and len(item) >= 2:
                                 label, conf = item[0], float(item[1])
                             elif isinstance(item, dict):
-                                label, conf = item.get("label", ""), float(item.get("confidence", 0.0))
+                                label, conf = (
+                                    item.get("label", ""),
+                                    float(item.get("confidence", 0.0)),
+                                )
                             else:
                                 continue
                             if not label or label == "other":
                                 continue
-                            ml_genres.append({
-                                "label": str(label),
-                                "confidence": conf,
-                            })
+                            ml_genres.append(
+                                {
+                                    "label": str(label),
+                                    "confidence": conf,
+                                }
+                            )
                     except Exception as _genre_exc:
                         logger.debug("Genre ML error: %s", _genre_exc)
 
@@ -633,7 +641,8 @@ class NerWorker(StageWorker):
                         continue
                     s, e = ent.get("start"), ent.get("end")
                     if (
-                        isinstance(s, int) and isinstance(e, int)
+                        isinstance(s, int)
+                        and isinstance(e, int)
                         and 0 <= s < e <= len(full_text)
                         and full_text[s:e] == payload
                     ):
@@ -663,13 +672,16 @@ class NerWorker(StageWorker):
                     filter_person_role_dedup,
                     filter_work_author_folio,
                 )
+
                 all_entities = filter_work_author_folio(all_entities)
                 all_entities, catalog_refs = filter_collection_citations(
-                    all_entities, surrounding_text=full_text,
+                    all_entities,
+                    surrounding_text=full_text,
                 )
                 all_entities, prov_inscriptions = filter_owner_length(all_entities)
                 all_entities = filter_person_hallucinations(
-                    all_entities, surrounding_text=full_text,
+                    all_entities,
+                    surrounding_text=full_text,
                 )
                 all_entities = filter_person_role_dedup(all_entities)
                 all_entities = filter_date_shape(all_entities)
@@ -696,8 +708,8 @@ class NerWorker(StageWorker):
             output_path.write_text(json_text, encoding="utf-8")
 
             def _count(src: str) -> int:
-                return sum(1 for r in results for e in r["entities"]
-                           if e.get("source") == src)
+                return sum(1 for r in results for e in r["entities"] if e.get("source") == src)
+
             person_count = _count("person_ner")
             prov_count = _count("provenance_ner")
             cont_count = _count("contents_ner")
@@ -844,13 +856,13 @@ class AuthorityWorker(StageWorker):
             return None, None
 
         if on_substep is not None:
-            on_substep("Stage 3.1 — Mazal lookup")
+            on_substep("Mazal authority lookup")
         mazal_id = mazal.match_person(name)
         viaf_uri = None
 
         if viaf:
             if on_substep is not None:
-                on_substep("Stage 3.2 — VIAF SRU")
+                on_substep("VIAF cluster lookup")
             viaf_uri = viaf.match_person(name)
 
         return mazal_id, viaf_uri
@@ -892,7 +904,7 @@ class AuthorityWorker(StageWorker):
         wikidata_qid: str | None = None
         if wd_matcher is not None:
             if on_substep is not None:
-                on_substep("Stage 3.3 — Wikidata SPARQL")
+                on_substep("Wikidata SPARQL lookup")
             try:
                 if viaf_uri:
                     import re as _re_ner_wd  # noqa: PLC0415
@@ -909,9 +921,7 @@ class AuthorityWorker(StageWorker):
                         # mark it so the consumer doesn't auto-promote.
                         entity["wikidata_latin_only"] = True
             except Exception as exc:  # defensive
-                logger.debug(
-                    "WikidataMatcher NER match failed for %s: %s", name, exc
-                )
+                logger.debug("WikidataMatcher NER match failed for %s: %s", name, exc)
 
         if wikidata_qid:
             entity["wikidata_qid"] = wikidata_qid
@@ -969,6 +979,7 @@ class AuthorityWorker(StageWorker):
         from converter.wikidata.item_builder import (  # noqa: PLC0415
             is_institutional_name,
         )
+
         if entity_type == "person" and is_institutional_name(name):
             entity_type = "organization"
 
@@ -979,7 +990,7 @@ class AuthorityWorker(StageWorker):
             if wd_matcher is None:
                 return None
             if on_substep is not None:
-                on_substep("Stage 3.6 — Wikidata corporate match")
+                on_substep("Wikidata corporate matching")
             try:
                 corp_qid = wd_matcher.match_corporate(name)
             except Exception as exc:  # defensive — never crash Stage 3
@@ -1023,13 +1034,11 @@ class AuthorityWorker(StageWorker):
             )
 
             if on_substep is not None:
-                on_substep("Stage 3.1 — Mazal lookup")
+                on_substep("Mazal authority lookup")
             person_dates = person.get("dates")
             person_dates_str = str(person_dates) if person_dates else None
             try:
-                strict = resolve_with_nli_priority(
-                    name, mazal, name_dates=person_dates_str
-                )
+                strict = resolve_with_nli_priority(name, mazal, name_dates=person_dates_str)
             except Exception as exc:  # defensive — never crash Stage 3
                 logger.debug("NLI strict mode failed for %s: %s", name, exc)
                 strict = None
@@ -1066,7 +1075,7 @@ class AuthorityWorker(StageWorker):
         viaf_id_for_step4: str | None = None
         if wd_matcher is not None and entity_type == "person":
             if on_substep is not None:
-                on_substep("Stage 3.3 — Wikidata SPARQL")
+                on_substep("Wikidata SPARQL lookup")
             try:
                 if viaf_uri:
                     import re as _re_step4  # noqa: PLC0415
@@ -1104,9 +1113,7 @@ class AuthorityWorker(StageWorker):
                         viaf_uri = f"https://viaf.org/viaf/{backfilled}"
                         viaf_id_for_step4 = backfilled
             except Exception as exc:  # defensive — Wikidata step never crashes Stage 3
-                logger.debug(
-                    "WikidataMatcher triangulation failed for %s: %s", name, exc
-                )
+                logger.debug("WikidataMatcher triangulation failed for %s: %s", name, exc)
 
         # ── Step 5 — Wikidata Hebrew label fallback (Mode 2) ───────────
         # Only fires when step 4 yielded nothing AND neither Mazal nor
@@ -1126,9 +1133,7 @@ class AuthorityWorker(StageWorker):
                 if wikidata_qid is not None and wd_matcher.last_match_was_latin_only():
                     wd_latin_only_in_step5 = True
             except Exception as exc:  # defensive
-                logger.debug(
-                    "WikidataMatcher label fallback failed for %s: %s", name, exc
-                )
+                logger.debug("WikidataMatcher label fallback failed for %s: %s", name, exc)
 
         # ``source`` is derived from the IDs that survive the verdict
         # (see the "Derive authority source" block below). The empty
@@ -1199,9 +1204,7 @@ class AuthorityWorker(StageWorker):
                             else:
                                 match_info["death_year"] = yr
                                 mazal_death = yr
-            preferred_lat = (
-                details.get("preferred_name_lat") if isinstance(details, dict) else None
-            )
+            preferred_lat = details.get("preferred_name_lat") if isinstance(details, dict) else None
             if isinstance(preferred_lat, str) and preferred_lat:
                 match_info["preferred_name_lat"] = preferred_lat
 
@@ -1213,15 +1216,12 @@ class AuthorityWorker(StageWorker):
         person_birth = viaf_birth if viaf_birth is not None else mazal_birth
         person_death = viaf_death if viaf_death is not None else mazal_death
         # Pick the most-disambiguating Latin form for guard 2.
-        preferred_lat_for_guard = (
-            match_info.get("preferred_name_lat") or viaf_preferred_lat
-        )
+        preferred_lat_for_guard = match_info.get("preferred_name_lat") or viaf_preferred_lat
         # Detect MARC 100$d / 700$d biographical date subfield in source name.
         import re as _re_marc  # noqa: PLC0415
 
         bio_dates_in_marc = bool(
-            person.get("dates")
-            or _re_marc.search(r"\d{3,4}", str(person.get("name", "")))
+            person.get("dates") or _re_marc.search(r"\d{3,4}", str(person.get("name", "")))
         )
 
         # ── First pass: deterministic 5-guard layer ────────────────────
@@ -1253,14 +1253,16 @@ class AuthorityWorker(StageWorker):
         viaf_id_for_signals: str | None = None
         viaf_uri_to_check = verdict.get("viaf_uri") or viaf_uri
         if viaf_uri_to_check and verdict["confidence"] != "low":
+            import re as _re_viaf  # noqa: PLC0415
+
             from converter.authority.wikidata_crosscheck import (  # noqa: PLC0415
                 hebrew_label_matches,
-                is_enabled as wd_is_enabled,
                 is_overmerged,
                 lookup_viaf,
             )
-
-            import re as _re_viaf  # noqa: PLC0415
+            from converter.authority.wikidata_crosscheck import (
+                is_enabled as wd_is_enabled,
+            )
 
             viaf_id_match = _re_viaf.search(r"/viaf/(\d+)", viaf_uri_to_check)
             if viaf_id_match and wd_is_enabled():
@@ -1293,15 +1295,9 @@ class AuthorityWorker(StageWorker):
         # This is the STRONGEST over-merge signal but only fires after
         # all matches in the record are resolved (post-pass in
         # ``_match_marc_persons``). Here we just *record* the triple.
-        if (
-            over_merge_table is not None
-            and mazal_id
-            and viaf_id_for_signals
-        ):
+        if over_merge_table is not None and mazal_id and viaf_id_for_signals:
             try:
-                over_merge_table.record_mazal_pair(
-                    name, mazal_id, viaf_id_for_signals
-                )
+                over_merge_table.record_mazal_pair(name, mazal_id, viaf_id_for_signals)
             except Exception as exc:  # defensive
                 logger.debug("OverMergeTable.record_mazal_pair failed: %s", exc)
 
@@ -1314,14 +1310,9 @@ class AuthorityWorker(StageWorker):
         # NLI ID but ``find_qid_by_mazal`` mapped it to a different QID
         # than the VIAF-derived one, that's also a conflict.
         cross_source_conflict = False
-        if (
-            wd_matcher is not None
-            and mazal_id
-            and viaf_uri
-            and wikidata_qid
-        ):
+        if wd_matcher is not None and mazal_id and viaf_uri and wikidata_qid:
             if on_substep is not None:
-                on_substep("Stage 3.4 — Cross-source conflict probe")
+                on_substep("Cross-source conflict probe")
             try:
                 # If Mode 1 used the VIAF path, verify the Mazal/J9U
                 # path lands on the SAME QID. If they disagree the IDs
@@ -1329,9 +1320,7 @@ class AuthorityWorker(StageWorker):
                 # the deterministic 5-guard layer cannot detect.
                 qid_via_mazal = wd_matcher.find_qid_by_mazal(mazal_id)
                 qid_via_viaf = (
-                    wd_matcher.find_qid_by_viaf(viaf_id_for_step4)
-                    if viaf_id_for_step4
-                    else None
+                    wd_matcher.find_qid_by_viaf(viaf_id_for_step4) if viaf_id_for_step4 else None
                 )
                 if (
                     qid_via_mazal is not None
@@ -1470,11 +1459,7 @@ class AuthorityWorker(StageWorker):
             ms_title = str(title_field or "")
         ms_title = ms_title.strip() or None
         related_places = marc_rec.get("related_places") or []
-        ms_place = (
-            str(related_places[0]).strip()
-            if related_places and related_places[0]
-            else None
-        )
+        ms_place = str(related_places[0]).strip() if related_places and related_places[0] else None
 
         # F3 — per-record OverMergeTable (also caches Wikidata lookups
         # across multiple persons in the same MS).
@@ -1582,7 +1567,7 @@ class AuthorityWorker(StageWorker):
             return None
 
         if on_substep is not None:
-            on_substep("Stage 3.5 — KIMA place match")
+            on_substep("KIMA place matching")
         place_matches: dict[str, str] = {}
         for place in places:
             uri = kima.match_place(place)
@@ -1840,9 +1825,7 @@ class MazalIndexWorker(StageWorker):
             n_files = len(xml_files)
             for file_idx, xml_file in enumerate(xml_files):
                 self.log_line.emit(f"Processing {xml_file.name}…")
-                self.substep.emit(
-                    f"Processing {xml_file.name} ({file_idx + 1}/{n_files})"
-                )
+                self.substep.emit(f"Processing {xml_file.name} ({file_idx + 1}/{n_files})")
                 for nli_id, record in parse_xml_records(str(xml_file)):
                     index.insert_authority(
                         nli_id=nli_id,
@@ -2098,6 +2081,7 @@ class WikidataUploadWorker(StageWorker):
             items: list[Any]
             source_marker = "raw authority enriched"
             source_sidecar = ""
+            rdf_input_path: Path | None = None
             if self._approved_items is not None:
                 items = list(self._approved_items)
                 if not items:
@@ -2108,6 +2092,8 @@ class WikidataUploadWorker(StageWorker):
                     f"Phase 1/2: Using {len(items)} approved Wikidata Studio items "
                     "(Wikidata reviewed)"
                 )
+                if self._input_path.suffix.lower() in {".ttl", ".nt", ".jsonld", ".rdf"}:
+                    rdf_input_path = self._input_path
                 self.progress.emit(45)
             elif self._input_path.suffix.lower() in {".ttl", ".nt", ".jsonld", ".rdf"}:
                 from converter.wikidata.hmo_crosswalk import (  # noqa: PLC0415
@@ -2130,9 +2116,8 @@ class WikidataUploadWorker(StageWorker):
                 items = result.items
                 source_marker = result.provenance_marker
                 source_sidecar = str(result.sidecar_path or "")
-                self.log_line.emit(
-                    f"Built {len(items)} items from {result.provenance_marker}"
-                )
+                rdf_input_path = result.ttl_path
+                self.log_line.emit(f"Built {len(items)} items from {result.provenance_marker}")
             else:
                 from converter.wikidata.item_builder import WikidataItemBuilder  # noqa: PLC0415
 
@@ -2244,6 +2229,9 @@ class WikidataUploadWorker(StageWorker):
                 encoding="utf-8",
             )
 
+            if rdf_input_path is not None:
+                self._write_rdf_projection_reports(rdf_input_path, items)
+
             # Emit total count so the panel sets the overall progress bar
             self.entity_status.emit("__total__", "total", str(len(items)), "")
 
@@ -2328,9 +2316,7 @@ class WikidataUploadWorker(StageWorker):
                     if label_pair is None:
                         label_pair = ("item", str(msg or ""))
                     entity_type, label = label_pair
-                    self.substep.emit(
-                        f"Uploading {entity_type} '{label}' ({idx}/{t})"
-                    )
+                    self.substep.emit(f"Uploading {entity_type} '{label}' ({idx}/{t})")
 
                 results = uploader.upload_all(
                     items,
@@ -2371,3 +2357,183 @@ class WikidataUploadWorker(StageWorker):
         except Exception as exc:
             logger.error("Wikidata upload failed: %s", exc, exc_info=True)
             self.error.emit(str(exc))
+
+    def _write_rdf_projection_reports(
+        self,
+        rdf_input_path: Path,
+        items: list[Any],
+    ) -> None:
+        """Write RDF-derived Wikidata coverage and full HMO Wikibase exports."""
+        try:
+            from converter.wikibase.hmo_exporter import HmoWikibaseExporter  # noqa: PLC0415
+            from converter.wikibase.quickstatements_exporter import (  # noqa: PLC0415
+                LocalQuickStatementsExporter,
+            )
+            from converter.wikidata.projection_coverage import (  # noqa: PLC0415
+                write_projection_coverage_report,
+            )
+
+            self.substep.emit("Writing HMO projection reports")
+            coverage_path = self._output_dir / "wikidata_projection_coverage.json"
+            write_projection_coverage_report(rdf_input_path, items, coverage_path)
+
+            wikibase_exporter = HmoWikibaseExporter()
+            wikibase_entities = wikibase_exporter.from_ttl(rdf_input_path)
+            wikibase_json_path = self._output_dir / "wikibase_entities.json"
+            wikibase_exporter.export_json_to_file(wikibase_entities, wikibase_json_path)
+
+            wikibase_qs_path = self._output_dir / "wikibase_quickstatements.txt"
+            LocalQuickStatementsExporter().export_to_file(
+                wikibase_entities,
+                wikibase_qs_path,
+            )
+            self.log_line.emit(
+                "Projection reports written: "
+                f"{coverage_path.name}, {wikibase_json_path.name}, "
+                f"{wikibase_qs_path.name}"
+            )
+
+            # ── Stage 6.5 (Rule 45, Phase 3): IIIF manifest generation ──
+            self._write_iiif_manifests(rdf_input_path, items)
+        except Exception as exc:  # noqa: BLE001
+            self.log_line.emit(f"Projection report generation failed: {exc}")
+            logger.warning(
+                "Projection report generation failed for %s: %s",
+                rdf_input_path,
+                exc,
+                exc_info=True,
+            )
+
+    def _write_iiif_manifests(
+        self,
+        rdf_input_path: Path,
+        items: list[Any],
+    ) -> None:
+        """Generate IIIF Presentation 3.0 manifests from the HMO graph.
+
+        Always writes manifests to ``iiif_manifests/MS_<cn>.json`` (review
+        surface). If Wikibase Cloud bot credentials are configured in
+        SettingsManager AND we are NOT in dry-run mode, also uploads the
+        manifests to ``mhm-hmo.wikibase.cloud`` under the ``IIIF:``
+        namespace. The upload status is recorded in
+        ``iiif_upload_report.json`` regardless.
+
+        Failure of any single manifest does not stop the rest — the
+        Stage 6 worker continues even if Stage 6.5 surfaces errors.
+        """
+        try:
+            import json as _json  # noqa: PLC0415
+
+            from rdflib import Graph  # noqa: PLC0415
+
+            from converter.wikidata.iiif_manifest_builder import (  # noqa: PLC0415
+                IiifManifestBuilder,
+            )
+            from mhm_pipeline.settings.settings_manager import (  # noqa: PLC0415
+                SettingsManager,
+            )
+
+            self.substep.emit("Generating IIIF manifests")
+            manifest_dir = self._output_dir / "iiif_manifests"
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+
+            graph = Graph()
+            graph.parse(rdf_input_path)
+
+            settings = SettingsManager()
+            wikibase_url = settings.wikibase_cloud_url
+            credentials = settings.wikibase_cloud_credentials
+
+            builder = IiifManifestBuilder(graph, base_url=wikibase_url)
+
+            uploader = None
+            upload_report: list[dict[str, Any]] = []
+            if credentials is not None and not self._dry_run:
+                from converter.wikibase.cloud_client import (  # noqa: PLC0415
+                    WikibaseCloudClient,
+                    WikibaseCloudWriter,
+                )
+                from converter.wikidata.iiif_uploader import (  # noqa: PLC0415
+                    IiifManifestUploader,
+                )
+
+                writer = WikibaseCloudWriter(
+                    WikibaseCloudClient.config_for_mhm_hmo_cloud(),
+                    credentials,
+                )
+                uploader = IiifManifestUploader(writer, dry_run=False)
+                self.log_line.emit(
+                    "IIIF: Wikibase Cloud bot credentials present — uploading manifests"
+                )
+            elif credentials is None:
+                self.log_line.emit(
+                    "IIIF: no Wikibase Cloud bot credentials configured; "
+                    "manifests written locally only (configure in Settings)"
+                )
+            else:
+                self.log_line.emit(
+                    "IIIF: dry-run mode — manifests written locally, no upload"
+                )
+
+            total_manifests = 0
+            total_canvases = 0
+            total_ranges = 0
+            total_annotations = 0
+            for shelfmark, manifest, stats in builder.build_all():
+                # Write to disk (always)
+                manifest_path = manifest_dir / f"MS_{shelfmark}.json"
+                manifest_path.write_text(
+                    _json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                total_manifests += 1
+                total_canvases += stats.canvas_count
+                total_ranges += stats.range_count
+                total_annotations += stats.annotation_count
+
+                # Upload if credentials + non-dry-run
+                if uploader is not None:
+                    result = uploader.upload(shelfmark, manifest, stats)
+                    upload_report.append(
+                        {
+                            "shelfmark": result.shelfmark,
+                            "page_url": result.page_url,
+                            "status": result.status,
+                            "message": result.message,
+                            "edit_id": result.edit_id,
+                            "new_revid": result.new_revid,
+                            "canvas_count": result.canvas_count,
+                            "range_count": result.range_count,
+                            "annotation_count": result.annotation_count,
+                        }
+                    )
+
+            if upload_report:
+                report_path = self._output_dir / "iiif_upload_report.json"
+                report_path.write_text(
+                    _json.dumps(upload_report, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                created = sum(1 for r in upload_report if r["status"] == "created")
+                updated = sum(1 for r in upload_report if r["status"] == "updated")
+                unchanged = sum(1 for r in upload_report if r["status"] == "unchanged")
+                failed = sum(1 for r in upload_report if r["status"] == "failed")
+                self.log_line.emit(
+                    f"IIIF upload: {created} created, {updated} updated, "
+                    f"{unchanged} unchanged, {failed} failed "
+                    f"({report_path.name})"
+                )
+
+            self.log_line.emit(
+                f"IIIF manifests written: {total_manifests} files, "
+                f"{total_canvases} canvases, {total_ranges} ranges, "
+                f"{total_annotations} annotations ({manifest_dir.name}/)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.log_line.emit(f"IIIF manifest generation failed: {exc}")
+            logger.warning(
+                "IIIF manifest generation failed for %s: %s",
+                rdf_input_path,
+                exc,
+                exc_info=True,
+            )

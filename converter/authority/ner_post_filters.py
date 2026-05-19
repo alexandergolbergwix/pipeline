@@ -1,7 +1,7 @@
-"""Deterministic post-filters for Stage 2 NER outputs.
+"""Deterministic post-filters for NER outputs.
 
 Each filter prevents a specific class of NER mistake from flowing to
-Stage 3 / Stage 4 and producing a wrong Wikidata claim:
+authority resolution / RDF construction and producing a wrong Wikidata claim:
 
 * :func:`filter_work_author_folio` — re-types folio-shaped strings
   ("133ב :") that the contents NER mis-tags as ``WORK_AUTHOR``,

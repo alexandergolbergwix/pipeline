@@ -24,12 +24,14 @@ from PyQt6.QtWidgets import (
 from mhm_pipeline.controller.pipeline_controller import PipelineController
 from mhm_pipeline.gui.panels.authority_panel import AuthorityPanel
 from mhm_pipeline.gui.panels.convert_panel import ConvertPanel
+from mhm_pipeline.gui.panels.hmo_wikibase_panel import HmoWikibasePanel
 from mhm_pipeline.gui.panels.ner_panel import NerPanel
 from mhm_pipeline.gui.panels.rdf_panel import RdfPanel
 from mhm_pipeline.gui.panels.validate_panel import ValidatePanel
 from mhm_pipeline.gui.panels.wikidata_studio_panel import WikidataStudioPanel
 from mhm_pipeline.gui.widgets.entity_highlighter import Entity
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
+
 # PipelineFlowWidget retired — the left sidebar is the single source of
 # truth for stage state, and the top bar duplicated that navigation.
 from mhm_pipeline.platform_.gpu import get_device
@@ -43,6 +45,7 @@ _STAGE_LABELS: list[str] = [
     "RDF Graph",
     "SHACL Validation",
     "Wikidata Studio",
+    "HMO Wikibase",
 ]
 
 _STATE_ICONS: dict[str, str] = {
@@ -220,7 +223,7 @@ class MainWindow(QMainWindow):
         logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
 
     def _on_gpu_device_change(self, device: str) -> None:
-        """Persist the GPU device choice. Takes effect on the next Stage 2 run."""
+        """Persist the GPU device choice. Takes effect on the next NER extraction run."""
         self._settings.gpu_device = device
         QMessageBox.information(
             self,
@@ -231,8 +234,8 @@ class MainWindow(QMainWindow):
     def _on_open_settings_file(self) -> None:
         """Open the QSettings INI file in the platform's default editor."""
         import os  # noqa: PLC0415
-        import sys  # noqa: PLC0415
         import subprocess  # noqa: PLC0415
+        import sys  # noqa: PLC0415
 
         path = self._settings._qs.fileName()  # noqa: SLF001
         if not path:
@@ -251,8 +254,9 @@ class MainWindow(QMainWindow):
     def _on_open_log_dir(self) -> None:
         """Reveal the platform log directory in the file manager."""
         import os  # noqa: PLC0415
-        import sys  # noqa: PLC0415
         import subprocess  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+
         from mhm_pipeline.platform_.paths import app_log_dir  # noqa: PLC0415
 
         log_dir = app_log_dir()
@@ -333,6 +337,7 @@ class MainWindow(QMainWindow):
         self._validate_panel = ValidatePanel()
         # Unified tab: replaces the old WikidataPreview + WikidataUpload
         self._wikidata_studio_panel = WikidataStudioPanel()
+        self._hmo_wikibase_panel = HmoWikibasePanel()
 
         self._panels: list[QWidget] = [
             self._convert_panel,
@@ -341,6 +346,7 @@ class MainWindow(QMainWindow):
             self._rdf_panel,                # stage 3
             self._validate_panel,           # stage 4
             self._wikidata_studio_panel,    # stage 5 (merged)
+            self._hmo_wikibase_panel,       # optional full-HMO Wikibase export
         ]
         # Wrap each panel in a scroll area so content is reachable even when
         # the window is resized below the panel's natural size. Native
@@ -414,12 +420,12 @@ class MainWindow(QMainWindow):
     # Mirrors Agent C's spec — each stage's bar finishes with the right
     # text when stage_finished / stage_error fires.
     _STAGE_PROGRESS_LABELS: tuple[tuple[str, str], ...] = (
-        ("Stage 1 — MARC parsed",            "Stage 1 failed"),
-        ("Stage 2 — NER complete",           "Stage 2 failed"),
-        ("Stage 3 — authority enriched",     "Stage 3 failed"),
-        ("Stage 4 — RDF built",              "Stage 4 failed"),
-        ("Stage 5 — SHACL OK",               "Stage 5 — SHACL failed"),
-        ("Stage 6 — Wikidata upload complete", "Stage 6 — upload failed"),
+        ("MARC parsing complete",           "MARC parsing failed"),
+        ("NER extraction complete",         "NER extraction failed"),
+        ("Authority resolution complete",   "Authority resolution failed"),
+        ("RDF construction complete",       "RDF construction failed"),
+        ("SHACL validation passed",         "SHACL validation failed"),
+        ("Wikidata projection complete",    "Wikidata projection failed"),
     )
 
     def _on_stage_started(self, index: int) -> None:
@@ -626,6 +632,8 @@ class MainWindow(QMainWindow):
             # Wikidata Studio input.
             self._validate_panel._ttl_selector.path = output
             self._wikidata_studio_panel._input_selector.path = output
+            self._hmo_wikibase_panel.set_ttl_path(output)
+            self._hmo_wikibase_panel.set_output_dir(out_dir)
 
     def _on_stage_error(self, index: int, message: str) -> None:
         self._update_stage_state(index, "error")
@@ -772,6 +780,6 @@ class MainWindow(QMainWindow):
             "MHM Pipeline\n\n"
             "A desktop application for processing MARC Hebrew Manuscript records\n"
             "through NER, authority reconciliation, RDF serialisation,\n"
-            "SHACL validation, and Wikidata upload.\n\n"
+            "SHACL validation, Wikidata upload, and optional HMO Wikibase export.\n\n"
             "Bar-Ilan University",
         )

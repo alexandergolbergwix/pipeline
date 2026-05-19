@@ -1480,8 +1480,17 @@ class ExtractionEditor(QWidget):
         h.setSectionResizeMode(COL_CONF, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_SOURCE, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_APPROVED, QHeaderView.ResizeMode.ResizeToContents)
+        # Actions column holds two per-row buttons (✎ edit + ↗ view source).
+        # Each rendered button is ~34px (24px min-width + 8px padding + 2px
+        # border), plus 4px inter-button spacing and 2px×2 layout margins:
+        # 2 + 34 + 4 + 34 + 2 = 76px minimum. Widened from 36px so the right
+        # icon is no longer clipped by the column edge.
         h.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(COL_ACTIONS, 36)
+        self._table.setColumnWidth(COL_ACTIONS, 84)
+        # Rule 48: enable horizontal scroll-when-too-wide. The Stretch mode
+        # on COL_TEXT absorbs slack on wide screens; on narrow screens this
+        # adds a horizontal scrollbar instead of clipping the right edge.
+        theme.install_table_overflow_scroll(self._table)
 
         layout.addWidget(self._table, stretch=1)
 
