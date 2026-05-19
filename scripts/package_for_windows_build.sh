@@ -71,6 +71,15 @@ done
 if [ "$MISSING" -ne 0 ]; then
   echo
   echo "ERROR: one or more required assets are missing. Aborting." >&2
+  echo
+  echo "If 'converter/authority/mazal_index.db' is missing, it is not in" >&2
+  echo "the public repo (too large — see .gitignore). Build it locally:" >&2
+  echo >&2
+  echo "  PYTHONPATH=src:. .venv/bin/python scripts/build_mazal_index.py \\" >&2
+  echo "    --input /path/to/NLI_AUTHORITY_XML/ \\" >&2
+  echo "    --output converter/authority/mazal_index.db" >&2
+  echo >&2
+  echo "Then re-run this packaging script." >&2
   exit 1
 fi
 

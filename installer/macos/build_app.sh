@@ -135,8 +135,12 @@ if [ -f "$MAZAL_DB" ] && [ "$(wc -c < "$MAZAL_DB")" -gt 10000 ]; then
     cp "$MAZAL_DB" "$PIPELINE/converter/authority/mazal_index.db"
     echo "  Mazal DB: $(du -sh "$PIPELINE/converter/authority/mazal_index.db" | cut -f1)"
 else
-    echo "  WARNING: Mazal DB not found or is a Git LFS stub."
-    echo "  Run 'git lfs pull --include=converter/authority/mazal_index.db' first."
+    echo "  WARNING: Mazal DB not found."
+    echo "  It is no longer tracked in the public repo (too large)."
+    echo "  Rebuild it locally with:"
+    echo "    PYTHONPATH=src:. .venv/bin/python scripts/build_mazal_index.py \\"
+    echo "      --input /path/to/NLI_AUTHORITY_XML/ \\"
+    echo "      --output converter/authority/mazal_index.db"
     echo "  Authority matching will not work offline without it."
 fi
 
