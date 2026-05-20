@@ -41,8 +41,21 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Data files (large)
+# Data files (large) — NLI authority + KIMA third-party + MARC dumps
 data/kima/kima_index.db
+data/kima/*.tsv
+data/NLI_AUTHORITY_XML/
+data/marc-subset-10k.*
+data/catalog-v001.xml
+data/tsvs/17th_century_samples.tsv
+data/tsvs/top100_richest.tsv
+data/output/
+data/samples/
+data/pilot-sample/
+
+# All MARC binary dumps EXCEPT the intentional test_manuscripts/ fixtures.
+data/mrc/*.mrc
+!data/mrc/test_manuscripts/
 
 # Secrets / credentials — NEVER commit these
 *.token
