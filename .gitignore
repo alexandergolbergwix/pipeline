@@ -1,9 +1,26 @@
-# Model weights (too large for GitHub — bundled in .app instead)
-ner/*.pt
-ner/*.pkl
+# Model weights (too large for GitHub — bundled in .app instead).
+# Use ``ner/**/*`` glob so checkpoints in nested kfold dirs are also caught.
+ner/**/*.pt
+ner/**/*.pkl
+ner/**/*.ckpt
+ner/**/*.safetensors
 ner/joint_entity_role_model/
+ner/joint_entity_role_model_kfold/
 ner/provenance_model_kfold/
 ner/contents_model_kfold/
+
+# Reference + draft PDFs inside the ML workspace (not for public repo).
+ner/**/*.pdf
+ner/ontology/
+
+# ML training notes + intermediate-run results (transient, regenerable).
+# Keep ner/dictabert_error_analysis.json — referenced in CLAUDE.md Rule 33.
+ner/HalleluBERT.txt
+ner/baseline_5fold_results*.json
+ner/kfold_results.json
+
+# Compiled ontology PDFs (keep the .tex sources if any).
+ontology/documentation/*.pdf
 
 # Training-data caches (large; regenerated from source TSVs)
 data/tsvs/genre_samples.tsv
