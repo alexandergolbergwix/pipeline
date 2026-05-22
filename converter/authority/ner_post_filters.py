@@ -531,12 +531,253 @@ def filter_date_shape(
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────
+# F8 — MARC-grounded auto-approval filter (additive, non-destructive)
+# ─────────────────────────────────────────────────────────────────────
+#
+# WHY: eval-agent's 2026-05-22 run on the canonical test_subset.tsv
+# showed that per (evaluator, sub_type) strict precision at the global
+# 0.85 confidence threshold ranges from 100 % (FOLIO, OWNER, DATE) to
+# 25 % (person_ner.TRANSCRIBER / TRANSLATOR) to 6 %
+# (marc500_colophon.COLOPHON). The classifier-level confidence score
+# is therefore mis-calibrated as an auto-approval signal — most of the
+# "high-confidence wrong" cases are predictions that contradict the
+# MARC source the entity should have been read from.
+#
+# WHAT: deterministic check that asks "is this entity's text actually
+# present in the MARC field its predicted role / type implies?". When
+# the answer is "no", we don't drop the entity — we stamp it with
+# ``grounded = False`` so the GUI's auto-approve gate can refuse to
+# auto-approve unconditionally.
+#
+# This is the pipeline-side answer to the eval-agent's
+# Gemini-judge precision data. The GUI can then offer:
+#
+#   auto_approve = (confidence >= threshold[evaluator][sub_type]
+#                   AND grounded)
+#
+# where ``threshold[…]`` is sourced from
+# ``state/runs/<id>/per_sub_type_thresholds.yaml`` (the eval-agent's
+# ``calibrate`` subcommand emits it).
+
+# Map of predicted person ROLE → MARC field(s) where evidence must live
+# for the entity to count as grounded. Order matters — first hit wins
+# and lands in ``grounded_field``.
+_PERSON_ROLE_TO_MARC_FIELDS: dict[str, tuple[str, ...]] = {
+    "AUTHOR":       ("authors",),
+    "TRANSCRIBER":  ("colophon_text", "data_from_colophon.scribe",
+                     "contributors"),
+    "TRANSLATOR":   ("contributors", "notes"),
+    "COMMENTATOR":  ("contributors", "notes"),
+    "EDITOR":       ("contributors",),
+    "CENSOR":       ("notes", "contributors"),
+    "OWNER":        ("provenance", "notes"),
+}
+
+# Fields searched when role is unknown / unmapped — any hit grounds.
+_PERSON_FALLBACK_FIELDS: tuple[str, ...] = (
+    "authors", "contributors", "colophon_text",
+    "data_from_colophon.scribe", "provenance", "notes",
+)
+
+# Map of provenance / contents entity TYPE → MARC field(s).
+_PROVENANCE_TYPE_TO_MARC_FIELDS: dict[str, tuple[str, ...]] = {
+    "OWNER":      ("provenance", "notes"),
+    "DATE":       ("colophon_text", "provenance", "notes", "dates"),
+    "COLLECTION": ("provenance", "notes"),
+}
+
+_CONTENTS_TYPE_TO_MARC_FIELDS: dict[str, tuple[str, ...]] = {
+    "WORK":        ("contents", "notes", "canonical_references",
+                    "colophon_text"),
+    "FOLIO":       ("contents", "notes"),
+    "WORK_AUTHOR": ("contents", "notes", "canonical_references"),
+}
+
+
+def _norm_for_match(text: str) -> str:
+    """Normalize Hebrew/Latin text for substring matching.
+
+    Collapses internal whitespace, swaps ASCII for Hebrew quote marks
+    (``"`` ≡ ``״``, ``'`` ≡ ``׳``), lower-cases ASCII letters. Hebrew
+    is unchanged because nikud is rare in MARC and we don't have a
+    full unicode-normaliser dependency in this module.
+    """
+    if not text:
+        return ""
+    t = text.strip().lower()
+    t = t.replace("״", '"').replace("׳", "'")
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def _name_appears(name: str, haystack: str) -> bool:
+    """True iff *name* appears in *haystack* allowing word-order swap.
+
+    ``"ריאיטי, חזקיה"`` ≡ ``"חזקיה ריאיטי"`` — both forms count as a
+    match. Empty inputs return False.
+    """
+    n = _norm_for_match(name)
+    h = _norm_for_match(haystack)
+    if not n or not h:
+        return False
+    if n in h:
+        return True
+    # MARC inverts personal names as "Surname, Given" — try the swap.
+    if "," in n:
+        parts = [p.strip() for p in n.split(",", 1)]
+        if len(parts) == 2 and parts[0] and parts[1]:
+            swapped = f"{parts[1]} {parts[0]}"
+            if swapped in h:
+                return True
+    # Token-set fallback: every name token appears in haystack. Helps
+    # when MARC drops honorifics or word order differs by ≥ 1 token.
+    tokens = [t for t in n.split() if t]
+    if len(tokens) >= 2 and all(t in h for t in tokens):
+        return True
+    return False
+
+
+def _resolve_field(marc: dict[str, Any], dotted: str) -> str:
+    """Return the MARC field at *dotted* (e.g. ``data_from_colophon.scribe``)
+    as a flat haystack string suitable for substring matching.
+
+    Resolves list-of-dicts shapes (``authors[].name``, ``contributors[].name``)
+    AND list-of-strings (``notes``) AND nested dicts.
+    """
+    cur: Any = marc
+    for key in dotted.split("."):
+        if isinstance(cur, dict):
+            cur = cur.get(key)
+        else:
+            return ""
+        if cur is None:
+            return ""
+
+    # Flatten by shape
+    if isinstance(cur, str):
+        return cur
+    if isinstance(cur, list):
+        chunks: list[str] = []
+        for item in cur:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                # Common name-bearing keys across MARC dicts
+                for k in ("name", "term", "title", "value", "original_string"):
+                    v = item.get(k)
+                    if isinstance(v, str) and v:
+                        chunks.append(v)
+        return " || ".join(chunks)
+    if isinstance(cur, dict):
+        return " || ".join(str(v) for v in cur.values() if isinstance(v, str))
+    return str(cur)
+
+
+def _ground_in_fields(
+    needle: str, marc: dict[str, Any], fields: tuple[str, ...],
+    *, person_mode: bool = False,
+) -> str | None:
+    """Return the first dotted field name where *needle* appears, else None."""
+    for field in fields:
+        haystack = _resolve_field(marc, field)
+        if not haystack:
+            continue
+        if person_mode:
+            if _name_appears(needle, haystack):
+                return field
+        else:
+            if _norm_for_match(needle) in _norm_for_match(haystack):
+                return field
+    return None
+
+
+def filter_with_marc_grounding(
+    entities: list[dict[str, Any]],
+    *,
+    marc_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Stamp every entity with ``grounded`` + ``grounded_field``.
+
+    Non-destructive: no entities are dropped. The GUI's auto-approve
+    gate is expected to read ``grounded`` AND ``confidence`` together
+    rather than relying on confidence alone.
+
+    Grounding rules:
+
+    - ``person_ner`` entities: look for the name in the MARC field
+      mapped from the predicted role (e.g., role=TRANSCRIBER →
+      ``colophon_text`` or ``data_from_colophon.scribe``).
+    - ``provenance_ner`` entities: look for the text in the MARC field
+      mapped from the predicted type (OWNER → ``provenance`` / ``notes``).
+    - ``contents_ner`` entities: look for the text in ``contents`` /
+      ``notes`` / ``canonical_references`` / ``colophon_text``.
+    - Unknown source / unmapped role/type: fall back to a broad
+      person-fields search (for person_ner) or to the full set of
+      content fields. Sets ``grounded_field`` to the matching field
+      name on success, ``None`` on failure.
+
+    The MARC record dict is the Stage-1 ``marc_extracted.json`` entry
+    for the same control number.
+    """
+    if not marc_record:
+        # No MARC context to verify against — stamp everything as
+        # ungrounded so the GUI must treat every prediction as
+        # needing review.
+        for ent in entities:
+            ent["grounded"] = False
+            ent["grounded_field"] = None
+        return entities
+
+    for ent in entities:
+        source = ent.get("source")
+        if source == "person_ner":
+            name = str(ent.get("person") or "")
+            role = str(ent.get("role") or "").upper()
+            fields = _PERSON_ROLE_TO_MARC_FIELDS.get(role, _PERSON_FALLBACK_FIELDS)
+            grounded_field = _ground_in_fields(
+                name, marc_record, fields, person_mode=True,
+            )
+            ent["grounded"] = grounded_field is not None
+            ent["grounded_field"] = grounded_field
+            continue
+
+        if source == "provenance_ner":
+            text = str(ent.get("text") or "")
+            etype = str(ent.get("type") or "").upper()
+            fields = _PROVENANCE_TYPE_TO_MARC_FIELDS.get(
+                etype, ("provenance", "notes"),
+            )
+            grounded_field = _ground_in_fields(text, marc_record, fields)
+            ent["grounded"] = grounded_field is not None
+            ent["grounded_field"] = grounded_field
+            continue
+
+        if source == "contents_ner":
+            text = str(ent.get("text") or "")
+            etype = str(ent.get("type") or "").upper()
+            fields = _CONTENTS_TYPE_TO_MARC_FIELDS.get(
+                etype, ("contents", "notes"),
+            )
+            grounded_field = _ground_in_fields(text, marc_record, fields)
+            ent["grounded"] = grounded_field is not None
+            ent["grounded_field"] = grounded_field
+            continue
+
+        # Unknown source — leave the flags absent rather than guess.
+        ent.setdefault("grounded", None)
+        ent.setdefault("grounded_field", None)
+
+    return entities
+
+
 __all__ = [
     "filter_collection_citations",
     "filter_date_shape",
     "filter_owner_length",
     "filter_person_hallucinations",
     "filter_person_role_dedup",
+    "filter_with_marc_grounding",
     "filter_work_author_folio",
     "OWNER_MAX_LENGTH",
 ]

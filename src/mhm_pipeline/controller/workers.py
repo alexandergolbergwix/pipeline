@@ -670,6 +670,7 @@ class NerWorker(StageWorker):
                     filter_owner_length,
                     filter_person_hallucinations,
                     filter_person_role_dedup,
+                    filter_with_marc_grounding,
                     filter_work_author_folio,
                 )
 
@@ -685,6 +686,13 @@ class NerWorker(StageWorker):
                 )
                 all_entities = filter_person_role_dedup(all_entities)
                 all_entities = filter_date_shape(all_entities)
+                # F8 — MARC-grounding: stamp ``grounded`` + ``grounded_field``
+                # on every entity so the GUI auto-approve gate can refuse
+                # high-confidence predictions whose text isn't actually
+                # present in the MARC field its role/type implies.
+                all_entities = filter_with_marc_grounding(
+                    all_entities, marc_record=record,
+                )
 
                 results.append(
                     {

@@ -7535,5 +7535,163 @@ class TestHmoWikidataCrosswalkTtl:
             )
 
 
+class TestMarcGroundingFilter:
+    """F8 — ``filter_with_marc_grounding`` stamps each entity with
+    ``grounded`` / ``grounded_field`` so the GUI auto-approve gate
+    can refuse predictions whose text isn't present in the MARC field
+    its role/type implies. Calibration data: 2026-05-22 eval-agent
+    run showed person_ner.TRANSCRIBER at 25 % strict precision and
+    marc500_colophon at 6 %, while contents_ner.FOLIO and
+    provenance_ner.OWNER are already 100 %. The grounding filter
+    targets the broken sub-types without weakening the good ones.
+    """
+
+    def _marc(self) -> dict[str, object]:
+        return {
+            "_control_number": "990000000000001",
+            "title": "ספר תהלים",
+            "authors": [{"name": "דוד המלך", "role": "author"}],
+            "contributors": [
+                {"name": "רש\"י, שלמה בן יצחק", "role": "commentator"},
+                {"name": "ריאיטי, חזקיה", "role": "translator"},
+            ],
+            "provenance": 'ציון בעלים בראש כה"י: "משה יהודה הכמ"ר מהללאל".',
+            "notes": [
+                "BIBLIOGRAPHIC_TEST_1.txt",
+                "פתיחה: ספר תהלים עם פירוש רש\"י, נכתב בידי יוסף בן יעקב בשנת ת\"ה (1645)",
+                "תרגום לאיטלקית מאת חזקיה ריאיטי בדף 12א-18ב",
+            ],
+            "contents": "תהלים פרקים א-ה (דף 1א-5ב); תהלים פרקים ו-י (דף 6א-10ב)",
+            "colophon_text": (
+                "נשלם פירוש כל ספר תהלים בעזרת ה' יום ה' כ\"ח לאדר "
+                "שנת ת\"ה ליצירה אני יוסף בן יעקב מעתיק"
+            ),
+            "data_from_colophon": {"scribe": "יוסף בן יעקב", "year": 1645},
+        }
+
+    # ── person_ner role grounding ──────────────────────────────────────
+
+    def test_grounds_transcriber_in_colophon_text(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "יוסף בן יעקב", "role": "TRANSCRIBER",
+                 "source": "person_ner", "confidence": 0.85}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+        assert out[0]["grounded_field"] in {"colophon_text",
+                                            "data_from_colophon.scribe"}
+
+    def test_grounds_owner_in_provenance(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "משה יהודה הכמ\"ר מהללאל", "role": "OWNER",
+                 "source": "person_ner", "confidence": 0.85}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+        assert out[0]["grounded_field"] == "provenance"
+
+    def test_grounds_translator_in_contributors_with_word_swap(self) -> None:
+        # MARC has "ריאיטי, חזקיה" (inverted); model emits "חזקיה ריאיטי".
+        # The grounding helper must accept the word-swap.
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "חזקיה ריאיטי", "role": "TRANSLATOR",
+                 "source": "person_ner", "confidence": 0.85}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+        assert out[0]["grounded_field"] == "contributors"
+
+    def test_ungrounds_transcriber_when_name_not_in_colophon(self) -> None:
+        # Name appears as the manuscript's OWNER but role says TRANSCRIBER.
+        # The role mapping requires colophon evidence; OWNER fields don't
+        # count for TRANSCRIBER → grounded=False (this is exactly the
+        # eval-agent's "fail" case for person_ner.TRANSCRIBER 25%).
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "משה יהודה הכמ\"ר מהללאל", "role": "TRANSCRIBER",
+                 "source": "person_ner", "confidence": 0.85}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is False
+        assert out[0]["grounded_field"] is None
+
+    def test_ungrounds_person_not_in_any_field(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "שמעון בן יוחאי", "role": "AUTHOR",
+                 "source": "person_ner", "confidence": 0.85}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is False
+        assert out[0]["grounded_field"] is None
+
+    # ── provenance_ner type grounding ──────────────────────────────────
+
+    def test_grounds_provenance_owner_in_provenance_field(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"text": "משה יהודה הכמ\"ר מהללאל", "type": "OWNER",
+                 "source": "provenance_ner", "confidence": 0.99}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+        assert out[0]["grounded_field"] == "provenance"
+
+    def test_grounds_provenance_date_in_colophon(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"text": "ת\"ה", "type": "DATE", "source": "provenance_ner",
+                 "confidence": 0.95}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+
+    # ── contents_ner type grounding ────────────────────────────────────
+
+    def test_grounds_contents_folio_in_contents(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"text": "12א", "type": "FOLIO", "source": "contents_ner",
+                 "confidence": 0.99}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+
+    def test_grounds_contents_work_in_contents(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"text": "תהלים", "type": "WORK", "source": "contents_ner",
+                 "confidence": 0.93}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert out[0]["grounded"] is True
+        assert out[0]["grounded_field"] == "contents"
+
+    # ── invariants ─────────────────────────────────────────────────────
+
+    def test_never_drops_entities(self) -> None:
+        """Filter is additive — every input entity survives, only the
+        grounded flag changes. This is the critical invariant: the
+        GUI gate is the place where ungrounded entities are demoted
+        from auto-approve; the pipeline itself never silently throws
+        them away."""
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [
+            {"person": "יוסף בן יעקב", "role": "TRANSCRIBER", "source": "person_ner"},
+            {"person": "שמעון בן יוחאי", "role": "AUTHOR", "source": "person_ner"},
+            {"text": "12א", "type": "FOLIO", "source": "contents_ner"},
+            {"text": "fake date string", "type": "DATE", "source": "provenance_ner"},
+        ]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert len(out) == len(ents)
+        # All entities should now carry a grounded flag (True/False).
+        assert all("grounded" in e for e in out)
+
+    def test_empty_marc_marks_everything_ungrounded(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "יוסף בן יעקב", "role": "TRANSCRIBER", "source": "person_ner"}]
+        out = filter_with_marc_grounding(ents, marc_record={})
+        assert out[0]["grounded"] is False
+        assert out[0]["grounded_field"] is None
+
+    def test_wired_into_nerworker_post_filter_chain(self) -> None:
+        """Structural guard: ensure the workers.py invocation of the
+        filter exists. If a future refactor drops the call, this test
+        fails so the grounding signal can't silently disappear from
+        ner_results.json without a deliberate decision."""
+        from pathlib import Path
+        workers_src = Path(__file__).resolve().parents[2] / "src" / "mhm_pipeline" / "controller" / "workers.py"
+        text = workers_src.read_text(encoding="utf-8")
+        assert "filter_with_marc_grounding" in text, (
+            "NerWorker no longer invokes filter_with_marc_grounding — "
+            "ungrounded predictions will reach the GUI auto-approve gate"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
