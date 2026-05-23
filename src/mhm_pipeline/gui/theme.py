@@ -1355,6 +1355,22 @@ def _apply_palette(app: object) -> None:
 
     app.setPalette(pal)  # type: ignore[union-attr]
 
+    # macOS quirk: ``QToolTip`` does NOT pick up ``app.setPalette()``
+    # changes on its own — the global QSS rule alone isn't enough either
+    # because the macOS native tooltip painter ignores QSS for its
+    # background. Explicitly force-set the tooltip palette so light-mode
+    # tooltips don't render as dark-on-dark when the OS is in dark
+    # mode (or vice versa).
+    from PyQt6.QtWidgets import QToolTip  # noqa: PLC0415
+    tooltip_pal = QPalette()
+    tooltip_pal.setColor(QPalette.ColorRole.ToolTipBase, tooltip_bg)
+    tooltip_pal.setColor(QPalette.ColorRole.ToolTipText, tooltip_text)
+    # Also set WindowText so multi-line tooltips with ●/○ markers
+    # don't fall through to the OS default colour mid-string.
+    tooltip_pal.setColor(QPalette.ColorRole.WindowText, tooltip_text)
+    tooltip_pal.setColor(QPalette.ColorRole.Text, tooltip_text)
+    QToolTip.setPalette(tooltip_pal)
+
 
 def invalidate_cache() -> None:
     """Clear the cached dark-mode flag (call after a palette/theme change)."""

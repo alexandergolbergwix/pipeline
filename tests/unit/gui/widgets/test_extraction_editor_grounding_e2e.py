@@ -519,6 +519,99 @@ class TestPopupRendering:
 # ── 7. End-to-end click flow ──────────────────────────────────────────────
 
 
+class TestEntityColumnHoverAndClick:
+    """The Entity (text) column shows its full value on hover and
+    opens the edit popup on double-click. Inline cell editing of long
+    Hebrew strings is awkward and was deliberately disabled — the
+    popup is the only edit affordance."""
+
+    def test_entity_cell_tooltip_shows_full_text(
+        self, editor: ExtractionEditor,
+    ) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import COL_TEXT  # noqa: PLC0415
+        idx = editor._model.index(0, COL_TEXT)
+        tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
+        assert isinstance(tip, str)
+        assert "Yossi Stiwi" in tip
+        # The tooltip also tells the user the click affordance
+        assert "Double-click" in tip or "double-click" in tip.lower()
+
+    def test_entity_cell_tooltip_empty_when_no_text(
+        self, editor: ExtractionEditor,
+    ) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import COL_TEXT  # noqa: PLC0415
+        # Simulate an entity with empty text
+        editor._model._entities[0]["text"] = ""
+        idx = editor._model.index(0, COL_TEXT)
+        tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
+        assert tip is None
+
+    def test_double_click_on_text_column_opens_edit_dialog(
+        self, editor: ExtractionEditor, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Double-click on the entity-text cell routes to the existing
+        ``_on_edit_text`` handler — the same one the per-row ✎ button
+        triggers. We patch that method to capture the row index without
+        actually opening the modal dialog."""
+        from mhm_pipeline.gui.widgets.extraction_editor import COL_TEXT  # noqa: PLC0415
+        opened: list[int] = []
+        monkeypatch.setattr(
+            editor, "_on_edit_text", lambda row: opened.append(row),
+        )
+        proxy_idx = editor._proxy.index(0, COL_TEXT)
+        editor._on_table_double_clicked(proxy_idx)
+        assert opened == [0]
+
+    def test_double_click_on_other_column_does_nothing(
+        self, editor: ExtractionEditor, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The double-click handler is column-aware — only COL_TEXT
+        opens the edit popup. Other columns (Type, Role, Approved)
+        keep their default delegate / checkbox behaviour."""
+        from mhm_pipeline.gui.widgets.extraction_editor import COL_TYPE  # noqa: PLC0415
+        opened: list[int] = []
+        monkeypatch.setattr(
+            editor, "_on_edit_text", lambda row: opened.append(row),
+        )
+        proxy_idx = editor._proxy.index(0, COL_TYPE)
+        editor._on_table_double_clicked(proxy_idx)
+        assert opened == [], "double-click on Type column shouldn't open Edit Text dialog"
+
+
+class TestTooltipPaletteForcedOnApp:
+    """Regression guard for the macOS light-mode tooltip bug where the
+    palette change wasn't propagating to QToolTip — tooltips rendered
+    as dark-on-dark even in light mode. ``theme._apply_palette``
+    now calls ``QToolTip.setPalette()`` explicitly."""
+
+    def test_apply_palette_sets_tooltip_palette(
+        self, qtbot: object, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if QApplication.instance() is None:
+            QApplication([])
+        from PyQt6.QtWidgets import QToolTip  # noqa: PLC0415
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        # Force light mode for the duration of this test.
+        monkeypatch.setattr(theme, "is_dark", lambda: False)
+        # Clear the cached dark-mode flag (paranoia)
+        theme.invalidate_cache()
+
+        theme._apply_palette(QApplication.instance())
+        pal = QToolTip.palette()
+        # Light-mode ToolTipText should be dark-grey-ish, NOT black-on-black
+        from PyQt6.QtGui import QPalette  # noqa: PLC0415
+        text_color = pal.color(QPalette.ColorRole.ToolTipText)
+        bg_color = pal.color(QPalette.ColorRole.ToolTipBase)
+        # In light mode: bg should be near-white, text near-black
+        assert bg_color.lightness() > 200, (
+            f"light-mode tooltip bg too dark: lightness={bg_color.lightness()}"
+        )
+        assert text_color.lightness() < 80, (
+            f"light-mode tooltip text too light: lightness={text_color.lightness()}"
+        )
+
+
 class TestClickFlow:
     """Walk the click → popup → close flow with no mocks."""
 

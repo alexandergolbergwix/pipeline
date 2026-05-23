@@ -406,6 +406,14 @@ class EditableEntityModel(QAbstractTableModel):
         ent = self._entities[index.row()]
         col = index.column()
 
+        # Hover tooltip for the entity text — always shows the FULL
+        # string so the reviewer can read long Hebrew names that the
+        # cell width truncates.
+        if role == Qt.ItemDataRole.ToolTipRole and col == COL_TEXT:
+            full = str(ent.get("text") or "")
+            if full:
+                return f"{full}\n\nDouble-click to edit"
+
         # Display / edit values
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             if col == COL_RECORD:
@@ -1769,6 +1777,12 @@ class ExtractionEditor(QWidget):
         # Connected to ``clicked`` (single-click) because that column is
         # read-only and the popup is the only useful interaction.
         self._table.clicked.connect(self._on_table_clicked)
+        # Double-click anywhere in the entity-text column → open the
+        # full edit-text dialog (the same popup the per-row ✎ button
+        # opens). Inline editing of long Hebrew strings in a narrow
+        # cell was awkward, so double-click is the only edit affordance
+        # on this column.
+        self._table.doubleClicked.connect(self._on_table_double_clicked)
 
         self._active_filters: dict[str, set[str]] = {
             "sources": set(), "types": set(), "roles": set(),
@@ -1890,6 +1904,16 @@ class ExtractionEditor(QWidget):
         cn = ent.get("_control_number", "")
         dlg = SourceViewDialog(cn, full, et, start, end, parent=self)
         dlg.exec()
+
+    def _on_table_double_clicked(self, proxy_idx: "QModelIndex") -> None:
+        """Open the entity-text edit popup on double-click of the
+        Entity column. Other columns keep their default editor (enum
+        delegates) or are read-only — only COL_TEXT routes here.
+        """
+        if not proxy_idx.isValid() or proxy_idx.column() != COL_TEXT:
+            return
+        source_row = self._proxy.mapToSource(proxy_idx).row()
+        self._on_edit_text(source_row)
 
     def _on_table_clicked(self, proxy_idx: "QModelIndex") -> None:
         """Handle clicks anywhere in the table.
