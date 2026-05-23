@@ -500,3 +500,132 @@ class TestClickFlow:
         assert dlg.isVisible()
         dlg.accept()
         assert dlg.result() == 1  # QDialog.Accepted
+
+
+# ── 8. Auto-approve gate respects ``grounded`` ───────────────────────────
+
+
+class TestAutoApproveGroundedGate:
+    """The auto-approve rule builder exposes ``grounded`` as a field
+    and pre-seeds the dialog with the safe-default pair
+    ``confidence > 0.85 AND grounded = True`` whenever the loaded
+    entities carry F8 grounding evidence.
+    """
+
+    def test_grounded_is_an_auto_approve_field(self) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            _AUTO_FIELDS, _FIELD_OPTIONS,
+        )
+        assert "grounded" in _AUTO_FIELDS, (
+            "grounded must be a first-class auto-approve field"
+        )
+        assert _FIELD_OPTIONS.get("grounded") == ["True", "False"], (
+            "grounded must be a string-enum field with True/False values"
+        )
+
+    def test_evaluate_rule_matches_grounded_true(self) -> None:
+        from mhm_pipeline.gui.widgets.extraction_editor import evaluate_rule  # noqa: PLC0415
+        rule = {"field": "grounded", "op": "=", "value": "True"}
+        assert evaluate_rule({"grounded": True}, rule) is True
+        assert evaluate_rule({"grounded": False}, rule) is False
+        # Missing field → str(None) → "None" ≠ "True" → no match. The
+        # default-safe outcome: ungraded entities don't auto-approve.
+        assert evaluate_rule({}, rule) is False
+
+    def test_seed_rules_replaces_default_with_pair(
+        self, qtbot: object,
+    ) -> None:
+        if QApplication.instance() is None:
+            QApplication([])
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            AutoApproveDialog,
+        )
+        dlg = AutoApproveDialog(options_for={
+            "type": [], "role": [], "source": [],
+        })
+        qtbot.addWidget(dlg)  # type: ignore[attr-defined]
+        dlg.seed_rules([
+            {"field": "confidence", "op": ">", "value": 0.85},
+            {"field": "grounded", "op": "=", "value": "True"},
+        ])
+        rules = dlg.rules()
+        assert len(rules) == 2
+        # Confidence rule first
+        assert rules[0]["field"] == "confidence"
+        assert rules[0]["op"] == ">"
+        assert abs(rules[0]["value"] - 0.85) < 1e-9
+        # Grounded rule second
+        assert rules[1]["field"] == "grounded"
+        assert rules[1]["op"] == "="
+        assert rules[1]["value"] == "True"
+
+    def test_extraction_editor_seeds_grounded_when_data_has_it(
+        self, editor: ExtractionEditor, qtbot: object,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When ``_on_auto_approve`` opens the dialog and the data
+        carries grounding info, the dialog must arrive pre-seeded with
+        BOTH rules so the reviewer can't accidentally bypass the
+        precision gate."""
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            AutoApproveDialog, QDialog,
+        )
+        seen_rules: list[list[dict]] = []
+        real_exec = AutoApproveDialog.exec
+
+        def fake_exec(self):
+            # Capture the rules the dialog is about to show, then bail
+            # out without showing the modal.
+            seen_rules.append(list(self.rules()))
+            return QDialog.DialogCode.Rejected.value
+
+        monkeypatch.setattr(AutoApproveDialog, "exec", fake_exec)
+        editor._on_auto_approve()
+        assert seen_rules, "auto-approve flow never built a dialog"
+        rules = seen_rules[0]
+        # Two rules — confidence and grounded
+        fields = [r["field"] for r in rules]
+        assert "confidence" in fields
+        assert "grounded" in fields
+        grounded_rule = next(r for r in rules if r["field"] == "grounded")
+        assert grounded_rule["op"] == "="
+        assert grounded_rule["value"] == "True"
+
+    def test_extraction_editor_uses_single_default_when_no_grounding(
+        self, qtbot: object, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If the loaded entities do NOT carry grounding evidence
+        (e.g. an older ner_results.json from before F8 shipped), the
+        dialog falls back to the single default rule — no surprise
+        ``grounded = True`` filter when the field doesn't exist."""
+        if QApplication.instance() is None:
+            QApplication([])
+
+        from mhm_pipeline.gui.widgets.extraction_editor import (  # noqa: PLC0415
+            AutoApproveDialog, ExtractionEditor, QDialog,
+        )
+
+        widget = ExtractionEditor()
+        qtbot.addWidget(widget)  # type: ignore[attr-defined]
+        # Load entities WITHOUT grounded / exists_in fields (pre-F8 shape)
+        widget._model.load_from_records([{
+            "_control_number": "X1", "text": "foo",
+            "entities": [{
+                "person": "Yossi", "role": "AUTHOR", "source": "person_ner",
+                "confidence": 0.85,
+            }],
+        }])
+
+        seen_rules: list[list[dict]] = []
+
+        def fake_exec(self):
+            seen_rules.append(list(self.rules()))
+            return QDialog.DialogCode.Rejected.value
+
+        monkeypatch.setattr(AutoApproveDialog, "exec", fake_exec)
+        widget._on_auto_approve()
+        assert seen_rules
+        rules = seen_rules[0]
+        # Only the dialog's own default rule — not the pair seeded by
+        # ExtractionEditor when grounding is present.
+        assert len(rules) == 1

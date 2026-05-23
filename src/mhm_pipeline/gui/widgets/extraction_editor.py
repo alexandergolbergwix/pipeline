@@ -929,15 +929,22 @@ class EntityTextEditDialog(QDialog):
         return self._edit.toPlainText().strip()
 
 
-_AUTO_FIELDS: list[str] = ["confidence", "model_confidence", "type", "role", "source"]
+_AUTO_FIELDS: list[str] = [
+    "confidence", "model_confidence", "type", "role", "source", "grounded",
+]
 _NUMERIC_OPS: list[str] = [">", ">=", "=", "<=", "<", "≠"]
 _STRING_OPS: list[str] = ["=", "≠", "in", "not in"]
 
 # Map enum-type fields to the closed set of legal values the user may pick.
+# ``grounded`` is the F8 MARC-grounding flag: True iff the entity's text
+# appears in the MARC field its role/type implies. Treated as a string
+# enum so the existing rule-evaluation machinery can compare it without
+# special-casing booleans.
 _FIELD_OPTIONS: dict[str, list[str]] = {
     "type": VALID_ENTITY_TYPES,
     "role": [r for r in VALID_ROLES if r],   # drop the empty-string role
     "source": VALID_SOURCES,
+    "grounded": ["True", "False"],
 }
 
 
@@ -1194,6 +1201,61 @@ class _RuleRow(QWidget):
         # Fallback
         self.value_text.setVisible(True)
 
+    # ── Programmatic seeding ─────────────────────────────────────────────
+
+    def set_rule(self, field: str, op: str, value: object) -> None:
+        """Programmatically populate the row.
+
+        Used by callers (e.g. ExtractionEditor's "wire grounded into the
+        default auto-approve" seed) to construct a rule row in a known
+        state without going through user interaction. Routes by
+        field+op semantics — NOT by widget visibility — so the call
+        works on dialogs that haven't been shown yet (tests, headless
+        runs).
+        """
+        if field in [self.field_combo.itemText(i) for i in range(self.field_combo.count())]:
+            self.field_combo.setCurrentText(field)
+        # The signal handler above repopulates the op combo + selects
+        # the right value widget; setting the op afterwards is enough.
+        if op in [self.op_combo.itemText(i) for i in range(self.op_combo.count())]:
+            self.op_combo.setCurrentText(op)
+        self._on_field_or_op_changed()
+        if self._is_numeric(field):
+            try:
+                self.value_num.setValue(float(value))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                pass
+            return
+        options = self._options_for.get(field) or _FIELD_OPTIONS.get(field)
+        if options is not None and op in ("=", "≠"):
+            sval = str(value)
+            # Repopulate the single-enum combo defensively so the value
+            # set below matches one of its items.
+            self.value_enum_single.clear()
+            self.value_enum_single.addItems(options)
+            if sval in options:
+                self.value_enum_single.setCurrentText(sval)
+            return
+        if options is not None and op in ("in", "not in"):
+            # Multi-select: check the items in the value list.
+            wanted = value if isinstance(value, list) else [str(value)]
+            from PyQt6.QtGui import QStandardItemModel  # noqa: PLC0415
+            m = self.value_enum_multi.model()
+            if isinstance(m, QStandardItemModel):
+                for i in range(m.rowCount()):
+                    item = m.item(i)
+                    if item is not None:
+                        item.setCheckState(
+                            Qt.CheckState.Checked if item.text() in wanted
+                            else Qt.CheckState.Unchecked,
+                        )
+            return
+        # Fallback — free-text field
+        if isinstance(value, list):
+            self.value_text.setText(", ".join(str(v) for v in value))
+        else:
+            self.value_text.setText(str(value))
+
     # ── Export ───────────────────────────────────────────────────────────
 
     def to_rule(self) -> dict[str, Any]:
@@ -1205,9 +1267,14 @@ class _RuleRow(QWidget):
             if self.value_num.decimals() == 0:
                 raw = int(raw)
             return {"field": field, "op": op, "value": raw}
-        if op in ("=", "≠") and self.value_enum_single.isVisible():
+        # Route by field+op semantics so the export works on dialogs
+        # that haven't been shown yet (tests/headless seed flow). The
+        # widget that ``_on_field_or_op_changed`` showed is the right
+        # one regardless of ``isVisible()``.
+        options = self._options_for.get(field) or _FIELD_OPTIONS.get(field)
+        if op in ("=", "≠") and options is not None:
             return {"field": field, "op": op, "value": self.value_enum_single.currentText()}
-        if op in ("in", "not in") and self.value_enum_multi.isVisible():
+        if op in ("in", "not in") and options is not None:
             return {"field": field, "op": op, "value": list(self.value_enum_multi.checked_items())}
         raw = self.value_text.text().strip()
         if op in ("in", "not in"):
@@ -1388,6 +1455,24 @@ class AutoApproveDialog(QDialog):
         rule.removed.connect(self._remove_rule)
         self._rule_widgets.append(rule)
         self._rules_layout.addWidget(rule)
+
+    def seed_rules(self, rules: list[dict[str, Any]]) -> None:
+        """Replace the current rule rows with one row per ``rules`` entry.
+
+        Each rule dict is ``{"field": str, "op": str, "value": Any}``.
+        Used by ExtractionEditor to pre-populate the dialog with the
+        safe-default pair: ``confidence > 0.85`` AND ``grounded = True``.
+        """
+        # Drop any existing rows (init created one).
+        for row in list(self._rule_widgets):
+            self._remove_rule(row)
+        for r in rules:
+            self._add_rule()
+            self._rule_widgets[-1].set_rule(
+                r.get("field", "confidence"),
+                r.get("op", ">"),
+                r.get("value", 0.85),
+            )
 
     def _remove_rule(self, widget: _RuleRow) -> None:
         if widget in self._rule_widgets:
@@ -1780,6 +1865,20 @@ class ExtractionEditor(QWidget):
             "source": self.get_all_sources(),
         }
         dlg = AutoApproveDialog(self, options_for=options_for)
+        # Safe-default: when the loaded data carries F8 MARC-grounding
+        # evidence (``exists_in`` populated by NerWorker), seed the dialog
+        # with the proven-precise pair: confidence > 0.85 AND grounded =
+        # True. The reviewer can still remove the grounded clause, but the
+        # default starts from the calibrated precision floor.
+        has_grounding = any(
+            e.get("grounded") is True or e.get("grounded") is False
+            for e in self._model._entities
+        )
+        if has_grounding:
+            dlg.seed_rules([
+                {"field": "confidence", "op": ">", "value": 0.85},
+                {"field": "grounded", "op": "=", "value": "True"},
+            ])
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         rules = dlg.rules()
