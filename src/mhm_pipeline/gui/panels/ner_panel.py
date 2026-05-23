@@ -80,7 +80,6 @@ class NerPanel(QWidget):
 
         _prov_path = find_model_weights("provenance_ner_model.pt")
         _cont_path = find_model_weights("contents_ner_model.pt")
-        _marc500_path = find_model_weights("marc500_classifier_model.pt")
         _genre_path = find_model_weights("genre_classifier_model.pt")
 
         person_default = os.environ.get("MHM_BUNDLED_NER_MODEL", "")
@@ -109,11 +108,8 @@ class NerPanel(QWidget):
         if not cont_value:
             self._cont_model_edit.setPlaceholderText("(not found — contents NER unavailable)")
 
-        self._marc500_check = QCheckBox()
-        self._marc500_check.setChecked(bool(_marc500_path))
-        self._marc500_model_edit = QLineEdit(
-            str(_marc500_path) if _marc500_path else "(not found — keyword fallback)"
-        )
+        # MARC500 colophon classifier removed 2026-05-23 — see
+        # workers.py header comment for the rationale.
 
         self._genre_check = QCheckBox()
         self._genre_check.setChecked(bool(_genre_path))
@@ -203,8 +199,6 @@ class NerPanel(QWidget):
             active.append("Provenance NER")
         if self._cont_check.isChecked():
             active.append("Contents NER")
-        if self._marc500_check.isChecked():
-            active.append("Colophon ML")
         if self._genre_check.isChecked():
             active.append("Genre ML")
         return "Models: " + "  ·  ".join(active) if active else "No models selected"
@@ -304,18 +298,8 @@ class NerPanel(QWidget):
         )
         dlg_layout.addLayout(cont_row)
 
-        marc500_desc = (
-            "Colophon sentences (F1 = 96.4%) — routed to P1684"
-            if self._marc500_check.isChecked()
-            else "Not found on disk — keyword fallback active"
-        )
-        m500_row, _ = _make_row(
-            "Colophon ML ⚡",
-            marc500_desc,
-            "Detect colophon sentences in MARC 500 notes → P1684",
-            self._marc500_check,
-        )
-        dlg_layout.addLayout(m500_row)
+        # Colophon ML row removed 2026-05-23 (classifier retired).
+        # ``record["colophon_text"]`` now comes verbatim from MARC.
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -837,8 +821,6 @@ class NerPanel(QWidget):
             enabled.append("Provenance")
         if self._cont_check.isChecked():
             enabled.append("Contents")
-        if self._marc500_check.isChecked():
-            enabled.append("Colophon ML")
         if self._genre_check.isChecked():
             enabled.append("Genre ML")
         self._log_viewer.append_line(f"Running NER models: {', '.join(enabled)}")

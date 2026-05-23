@@ -1478,30 +1478,15 @@ class TestTranslatorCommentatorProperties:
 class TestNerEntitySchemaCleanliness:
     """The per-record ``entities`` list contains only real NER spans
     (sources ``person_ner`` / ``provenance_ner`` / ``contents_ner``).
-    Classifier outputs (colophon, genre) live in dedicated channels —
-    ``ml_colophon_sentences`` and ``ml_genres`` — so the Stage 3
-    reconciler and the GUI authority editor cannot accidentally route
-    a classifier prediction through Wikidata matching.
+    Classifier outputs live in dedicated channels — currently just
+    ``ml_genres`` — so the Stage 3 reconciler and the GUI authority
+    editor cannot accidentally route a classifier prediction through
+    Wikidata matching. The MARC500 colophon classifier was retired
+    2026-05-23 (see workers.py header comment).
 
     The checks below are source-level so they survive a refactor that
     re-imports the worker module without running it.
     """
-
-    def test_workers_does_not_emit_colophon_ml_source_string(self) -> None:
-        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
-        # Allowlist the audit-comment that mentions the legacy string;
-        # the actual emission line must NOT exist.
-        non_comment_lines = [
-            ln for ln in src.splitlines()
-            if "colophon_ml" in ln
-            and not ln.lstrip().startswith("#")
-            and '"colophon_ml"' in ln
-        ]
-        assert not non_comment_lines, (
-            "NER extraction must not emit entities with source=colophon_ml. "
-            "Use record['ml_colophon_sentences'] (list[str]) instead. "
-            f"Offending lines: {non_comment_lines}"
-        )
 
     def test_workers_does_not_emit_genre_ml_source_string(self) -> None:
         src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
@@ -1527,12 +1512,11 @@ class TestNerEntitySchemaCleanliness:
 
     def test_extraction_editor_lists_classifier_outputs_as_synthetic(self) -> None:
         """The GUI editor surfaces classifier predictions as synthetic
-        rows so reviewers can approve / reject them. The source labels
-        are valid filter values; on save (``to_records``) they round-
-        trip back to ``ml_colophon_sentences`` / ``ml_genres`` rather
-        than into the real ``entities`` list. The worker invariant
-        (no fake entities at emit time) is enforced by the two source-
-        level tests above on ``workers.py``.
+        rows so reviewers can approve / reject them. The source label
+        ``genre_ml`` is a valid filter value; on save (``to_records``)
+        it round-trips back to ``ml_genres`` rather than into the real
+        ``entities`` list. The MARC500 colophon classifier (``colophon_ml``)
+        was retired 2026-05-23 — its virtual source is gone.
         """
         from mhm_pipeline.gui.widgets.extraction_editor import (
             SYNTHETIC_SOURCES, VALID_SOURCES,
@@ -1542,31 +1526,31 @@ class TestNerEntitySchemaCleanliness:
         assert "person_ner" in VALID_SOURCES
         assert "provenance_ner" in VALID_SOURCES
         assert "contents_ner" in VALID_SOURCES
-        # Classifier sources are filterable in the GUI but live in the
-        # synthetic set so ``to_records`` knows to route them back to
-        # the dedicated record-level channels.
-        assert "colophon_ml" in VALID_SOURCES
+        # Genre is the remaining classifier source.
         assert "genre_ml" in VALID_SOURCES
-        assert "colophon_ml" in SYNTHETIC_SOURCES
         assert "genre_ml" in SYNTHETIC_SOURCES
         # The real NER sources must NOT be in the synthetic set.
         assert "person_ner" not in SYNTHETIC_SOURCES
         assert "provenance_ner" not in SYNTHETIC_SOURCES
         assert "contents_ner" not in SYNTHETIC_SOURCES
+        # The removed classifier source must NOT be present.
+        assert "colophon_ml" not in VALID_SOURCES
+        assert "colophon_ml" not in SYNTHETIC_SOURCES
 
 
 class TestEditorClassifierVirtualRows:
     """The GUI editor surfaces classifier predictions as virtual rows
     so reviewers can approve / reject them, then routes approved rows
-    back to ``ml_colophon_sentences`` / ``ml_genres`` on save. Real NER
-    spans round-trip into ``entities``; the two never mix.
+    back to ``ml_genres`` on save. Real NER spans round-trip into
+    ``entities``; the two never mix. The colophon classifier virtual
+    source was removed 2026-05-23.
     """
 
     def _qapp(self):  # noqa: ANN001
         from PyQt6.QtCore import QCoreApplication
         return QCoreApplication.instance() or QCoreApplication([])
 
-    def test_load_surfaces_colophon_and_genre_as_virtual_rows(self) -> None:
+    def test_load_surfaces_genre_as_virtual_row(self) -> None:
         self._qapp()
         from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
 
@@ -1578,14 +1562,13 @@ class TestEditorClassifierVirtualRows:
                 "confidence": 0.6, "source": "person_ner",
                 "start": 0, "end": 10,
             }],
-            "ml_colophon_sentences": ["נשלם הספר ביד משה"],
             "ml_genres": [{"label": "commentary", "confidence": 0.83}],
         }])
         sources = {e["source"] for e in m._entities}
-        assert sources == {"person_ner", "colophon_ml", "genre_ml"}
-        assert len(m._entities) == 3
+        assert sources == {"person_ner", "genre_ml"}
+        assert len(m._entities) == 2
 
-    def test_to_records_routes_synthetic_rows_back_to_channels(self) -> None:
+    def test_to_records_routes_genre_back_to_channel(self) -> None:
         self._qapp()
         from mhm_pipeline.gui.widgets.extraction_editor import EditableEntityModel
 
@@ -1597,7 +1580,6 @@ class TestEditorClassifierVirtualRows:
                 "confidence": 0.6, "source": "person_ner",
                 "start": 0, "end": 10,
             }],
-            "ml_colophon_sentences": ["נשלם"],
             "ml_genres": [{"label": "commentary", "confidence": 0.83}],
         }])
         for e in m._entities:
@@ -1606,12 +1588,13 @@ class TestEditorClassifierVirtualRows:
         # Real NER entity stays in entities[]
         assert len(out["entities"]) == 1
         assert out["entities"][0]["source"] == "person_ner"
-        # Synthetic rows route back to dedicated channels
-        assert out["ml_colophon_sentences"] == ["נשלם"]
+        # Genre routes back to its dedicated channel
         assert out["ml_genres"] == [{"label": "commentary", "confidence": 0.83}]
+        # Legacy colophon channel is normalised away on save
+        assert "ml_colophon_sentences" not in out
 
-    def test_to_records_drops_unapproved_synthetic_rows(self) -> None:
-        """Approving a colophon prediction keeps it; rejecting empties
+    def test_to_records_drops_unapproved_genre_rows(self) -> None:
+        """Approving a genre prediction keeps it; rejecting empties
         the channel. Symmetric with how the editor handles real entities.
         """
         self._qapp()
@@ -1621,15 +1604,12 @@ class TestEditorClassifierVirtualRows:
         m.load_from_records([{
             "_control_number": "X1",
             "entities": [],
-            "ml_colophon_sentences": ["a", "b"],
             "ml_genres": [{"label": "commentary", "confidence": 0.5}],
         }])
-        # Approve only the second colophon; leave the genre rejected.
+        # Reject the genre prediction.
         for e in m._entities:
-            if e["source"] == "colophon_ml" and e["text"] == "b":
-                e["approved"] = True
+            e["approved"] = False
         out = m.to_records()[0]
-        assert out["ml_colophon_sentences"] == ["b"]
         assert out["ml_genres"] == []
 
     def test_to_records_preserves_unrelated_record_channels(self) -> None:
@@ -2377,147 +2357,6 @@ class TestNerOffsetRebasing:
             "NerWorker must extend full_text with provenance and contents."
         )
 
-
-class TestMarc500ProvenanceRouting:
-    """The MARC 500 sentence classifier routes both COLOPHON and
-    PROVENANCE sentences. PROVENANCE hits run through the provenance
-    NER pipeline and emit entities flagged ``from_marc500: True`` so
-    downstream code knows the source segment. The current checkpoint
-    is single-head (COLOPHON), so :meth:`Marc500Classifier.is_provenance`
-    falls back to a Hebrew-vocabulary check matching the training-
-    corpus labels.
-    """
-
-    def test_classifier_exposes_is_provenance_method(self) -> None:
-        """``Marc500Classifier.is_provenance`` exists with the same
-        ``(bool, float)`` return shape as ``is_colophon``."""
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        assert hasattr(Marc500Classifier, "is_provenance")
-        assert callable(Marc500Classifier.is_provenance)
-
-    def test_is_provenance_keyword_match_returns_true(self) -> None:
-        """Sentence with ownership vocabulary should fire the heuristic."""
-        from converter.authority.marc500_classifier import (
-            _PROVENANCE_HEURISTIC_CONF, Marc500Classifier,
-        )
-
-        # Bypass __init__ since we don't need a loaded model for the
-        # is_provenance heuristic path.
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        above, conf = clf.is_provenance("נכתב עבור משה בן יצחק בשנת תפ\"ט")
-        assert above is True
-        assert conf == _PROVENANCE_HEURISTIC_CONF
-
-    def test_is_provenance_no_keyword_returns_false(self) -> None:
-        """Sentence with no ownership vocabulary returns False / 0.0."""
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        above, conf = clf.is_provenance("כתוב על קלף בכתב אשכנזי שתי עמודות")
-        assert above is False
-        assert conf == 0.0
-
-    def test_is_provenance_empty_returns_false(self) -> None:
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        assert clf.is_provenance("") == (False, 0.0)
-        assert clf.is_provenance("   ") == (False, 0.0)
-
-    def test_classify_sentence_returns_both_heads(self) -> None:
-        """Backwards-compat: ``classify_sentence`` now returns BOTH heads."""
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        # We don't have a loaded model so is_colophon would crash.
-        # Stub it to a known value.
-        clf.is_colophon = lambda s: (False, 0.0)  # type: ignore[method-assign]
-        result = clf.classify_sentence("נכתב עבור משה")
-        assert "COLOPHON" in result
-        assert "PROVENANCE" in result
-        assert result["PROVENANCE"][0] is True
-
-    def test_workers_calls_is_provenance_in_marc500_loop(self) -> None:
-        """Source-level: NerWorker must invoke is_provenance on each
-        MARC 500 sentence and route hits through provenance_pipeline."""
-        src = pathlib.Path("src/mhm_pipeline/controller/workers.py").read_text(encoding="utf-8")
-        assert "_marc500_clf.is_provenance(" in src, (
-            "NerWorker must call is_provenance on every MARC 500 "
-            "sentence so PROVENANCE hits route through provenance NER."
-        )
-        assert '"from_marc500"' in src, (
-            "Routed entities must be stamped with ``from_marc500`` so "
-            "downstream code can tell them from MARC-561 emissions."
-        )
-
-    def test_is_provenance_dropped_keyword_matana_no_fire(self) -> None:
-        """``מתנה`` alone is too weak — a "gift" can be spiritual /
-        non-transfer. Sentences with only this keyword should not fire.
-        """
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        above, conf = clf.is_provenance("התורה היא מתנה גדולה לעם ישראל")
-        assert above is False
-        assert conf == 0.0
-
-    def test_is_provenance_dropped_keyword_avur_no_fire(self) -> None:
-        """The lone preposition ``עבור`` ("for") fires on any work-
-        title rationale. Without the explicit ``נכתב`` prefix the
-        sentence should not fire.
-        """
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        above, conf = clf.is_provenance("ספר זה עבור לימוד התלמיד הצעיר")
-        assert above is False
-        assert conf == 0.0
-
-    def test_is_provenance_dropped_keyword_chatam_no_fire(self) -> None:
-        """Bare third-person ``חתם`` ("signed") can describe many
-        actions. Only the first-person ``חתמתי`` is kept as a strong
-        owner-signature signal.
-        """
-        from converter.authority.marc500_classifier import Marc500Classifier
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        above, conf = clf.is_provenance("הרב חתם על ההסכמה לספר")
-        assert above is False
-        assert conf == 0.0
-
-    def test_is_provenance_strong_keyword_still_fires(self) -> None:
-        """Strong ownership / acquisition / sale verbs must still fire
-        with the raised :data:`_PROVENANCE_HEURISTIC_CONF`.
-        """
-        from converter.authority.marc500_classifier import (
-            _PROVENANCE_HEURISTIC_CONF, Marc500Classifier,
-        )
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        for sentence in (
-            "קנה את הספר בשנת תק\"ה",
-            "הספר שייך למשפחת לוי",
-            "נמכר בשוק הספרים בליוורנו",
-            "נכתב עבור הרב יצחק לוריא",
-        ):
-            above, conf = clf.is_provenance(sentence)
-            assert above is True, f"strong keyword sentence should fire: {sentence!r}"
-            assert conf == _PROVENANCE_HEURISTIC_CONF
-        assert _PROVENANCE_HEURISTIC_CONF == 0.65
-
-    def test_is_provenance_explicit_marc_marker_still_fires(self) -> None:
-        """Explicit MARC ownership markers (``ציון בעלים``) are
-        unambiguous and must continue to fire the heuristic.
-        """
-        from converter.authority.marc500_classifier import (
-            _PROVENANCE_HEURISTIC_CONF, Marc500Classifier,
-        )
-
-        clf = Marc500Classifier.__new__(Marc500Classifier)
-        above, conf = clf.is_provenance("ציון בעלים: משה בן יצחק לוי")
-        assert above is True
-        assert conf == _PROVENANCE_HEURISTIC_CONF
 
 
 class TestRoleToLabelIncludesTranscriber:

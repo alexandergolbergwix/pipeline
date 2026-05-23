@@ -71,11 +71,12 @@ def _extract_fields(record: dict) -> list[tuple[str, str, str, str]]:
     for genre in record.get("genres") or []:
         add("P136", "genre", str(genre), "MARC")
 
-    # Colophon — amber when colophon ML sentences contributed
+    # Colophon — comes verbatim from MARC. The ML "colophon classifier"
+    # was retired 2026-05-23 (6% strict precision); the conditional
+    # "Colophon ML" source label is dead — every colophon is "MARC".
     colophon = str(record.get("colophon_text") or "").strip()
     if colophon:
-        ml_sents = record.get("ml_colophon_sentences") or []
-        add("P1684", "inscription", colophon[:400], "Colophon ML" if ml_sents else "MARC")
+        add("P1684", "inscription", colophon[:400], "MARC")
 
     # Notes (first 3)
     for note in list(record.get("notes") or [])[:3]:

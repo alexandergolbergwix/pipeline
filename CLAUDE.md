@@ -641,49 +641,45 @@ PYTHONPATH=src:. .venv/bin/python ner/train_genre_classifier.py \
 
 Tests added (3): `TestGenreClassifierIntegration` (3). Total now **181**.
 
-### 35. MARC 500 sentence classifier for P1684 + P127/P11603 coverage (added 2026-04-20)
+### 35. MARC 500 sentence classifier — RETIRED 2026-05-23
 
-P1684 (inscription/colophon) and P127/P11603 (owned by/transcribed by) are under-covered because MARC 500 general notes mix colophon and provenance sentences with unrelated codicological content. A sentence-level multi-label classifier routes each sentence to the appropriate downstream processor.
+**Status:** REMOVED from the app, bundle, paper, slides, and docs.
+**Reason:** The 2026-05-23 eval-agent run at confidence ≥ 0.90 on the
+68-record test_subset corpus showed only 6 % strict / 16 % lenient
+precision — 76 % of its high-confidence predictions were judged
+``fail`` by Gemini. Even at lower thresholds the classifier head
+fired on non-colophon sentences (title statements, ownership
+inscriptions, codicological observations) with near-1.0 confidence.
 
-**Architecture:** Single model with two independent sigmoid heads — COLOPHON (head 0) and PROVENANCE (head 1). Reuses `GenreClassificationModel` with `num_genres=2`. Trained with per-class focal loss and per-class threshold tuning.
+**What was removed:**
+- ``converter/authority/marc500_classifier.py``
+- ``ner/train_marc500_classifier.py``
+- ``ner/marc500_sentence_model.py``
+- ``scripts/extract_marc500_sentences.py``
+- ``_MARC500_CLASSIFIER`` singleton + ``_split_marc500_sentences`` +
+  the entire COLOPHON/PROVENANCE routing loop in ``NerWorker.run``
+- ``ml_colophon_sentences`` channel from per-record results
+- The ``_merge_ner_into_records`` augmentation of ``colophon_text``
+- ``Colophon ML`` toggle from the NER panel models dialog
+- ``colophon_ml`` virtual source from ``ExtractionEditor``
+- ``Marc500ColophonEvaluator`` + rubric + REGISTRY entry in the
+  eval-agent project
+- ``TestMarc500ProvenanceRouting`` + ``TestMarc500ModelRealInference``
+  test classes
 
-**Files:**
-- `ner/marc500_sentence_model.py` — thin re-export of GenreClassificationModel for app bundle
-- `scripts/extract_marc500_sentences.py` — extraction script → `data/tsvs/marc500_sentences.tsv`
-- `ner/train_marc500_classifier.py` — training script (5-fold CV, per-class thresholds)
-- `converter/authority/marc500_classifier.py` — inference wrapper (`classify_sentence`, `is_colophon`, `is_provenance`)
-- `ner/marc500_classifier_model.pt` — trained checkpoint (generated; not committed to git)
+**What stays:**
+- ``ner/marc500_classifier_model.pt`` on disk locally (gitignored —
+  too large for the repo anyway). Kept in case the model is ever
+  revisited; the runtime no longer loads or surfaces it.
+- ``record["colophon_text"]`` populated VERBATIM from MARC (no ML
+  augmentation). P1684 emission from ``item_builder.py`` is
+  unchanged — it just sees a smaller set of records with usable
+  colophon text.
 
-**Integration in `workers.py`:**
-- Module-level lazy singleton `_MARC500_CLASSIFIER` with graceful degradation (model absent → skipped)
-- `NerWorker.run()` routes each MARC 500 sentence: COLOPHON sentences → `ml_colophon_sentences` list; PROVENANCE sentences → provenance NER pipeline (same as MARC 561)
-- `AuthorityWorker._merge_ner_into_records()` appends `ml_colophon_sentences` to `record["colophon_text"]`
-- `item_builder.py` already reads `record["colophon_text"]` for P1684 — no changes needed
-
-**To train:**
-```bash
-# Step 1 (one-time): extract sentences
-PYTHONPATH=src:. .venv/bin/python scripts/extract_marc500_sentences.py
-
-# Step 2: train (~1h on M4 Pro)
-PYTHONPATH=src:. .venv/bin/python ner/train_marc500_classifier.py
-```
-
-**Checkpoint format:**
-```python
-{
-    "model_state_dict": ...,
-    "label2id": {"COLOPHON": 0, "PROVENANCE": 1},
-    "task": "marc500_sentence_classification",
-    "threshold": {"COLOPHON": float, "PROVENANCE": float},
-    "num_classes": 2,
-    "max_length": 64,
-}
-```
-
-**Expected coverage impact:** P1684: 41% → ~55%. P127/P11603: 43%/18% → ~50%/25%. Graceful degradation when model absent.
-
-Tests added (8): `TestMarc500ModelRealInference` (8). Total now **189**.
+**Impact on P1684 coverage:** drops from the 2026-04-20 claim of
+~55 % back to the MARC-only baseline of ~41 %. Acceptable trade —
+the 14-point lift bought ~94 % wrong inscriptions on the items it
+fired on.
 
 ### 36. Centralized GUI design system in `theme.py` (added 2026-04-22)
 
@@ -917,17 +913,19 @@ Stage 2 (`NerWorker`) emits a per-record JSON with the following invariants. Eac
 | Channel | Type | Carries |
 |---|---|---|
 | `record["entities"]` | `list[dict]` | Real NER spans only — `source` ∈ {`person_ner`, `provenance_ner`, `contents_ner`}. Classifier outputs MUST NOT appear here. |
-| `record["ml_colophon_sentences"]` | `list[str]` | MARC-500 sentences classified as colophons. Feeds P1684 (inscription). |
 | `record["ml_genres"]` | `list[{"label": str, "confidence": float}]` | Genre classifier predictions for the P136 fallback. |
 | `record["catalog_references"]` | `list[str]` | Catalog citations (`"מ' גסטר."`) routed out of COLLECTION; lands in P7535 notes, never in P195. |
 | `record["provenance_inscriptions"]` | `list[str]` | OWNER spans longer than 80 characters (full bills of sale); land in P7535, never in P127 / P2093. |
 
+NOTE: ``ml_colophon_sentences`` was removed 2026-05-23 with the MARC500
+colophon classifier (Rule 35). ``record["colophon_text"]`` now comes
+verbatim from MARC — no ML augmentation.
+
 **Entity-shape rules:**
 
-* Every entity has `source` set to one of the three real NER sources. `colophon_ml` / `genre_ml` source values are forbidden.
+* Every entity has `source` set to one of the three real NER sources. `genre_ml` (the classifier virtual source) is allowed only in the GUI editor's synthetic-row layer, not in `entities`. The legacy `colophon_ml` virtual source was removed 2026-05-23.
 * `start` and `end` are integers indexing into `record["text"]` (the global concatenation of every NER input) such that `record["text"][start:end] == entity_payload`, OR they are `None` when the entity payload was not locatable in the global text. Never `start=0, end=0` as a placeholder.
 * Person entities carry `confidence` (the keyword-classifier 0.60 / 0.85 signal that Stage 3 guards key on per Rule 23) AND `model_confidence` (the real softmax probability averaged across the entity's tokens). Do not collapse the two — they have different semantics and different consumers.
-* Provenance entities flagged `from_marc500: True` came from MARC 500 sentences that the sentence classifier routed through the provenance NER pipeline (rather than from MARC 561). They also carry `marc500_confidence`.
 
 **Post-filters** (`converter/authority/ner_post_filters.py`). Applied once per record after every NER model emits its spans. Adding a new NER mistake-class to filter goes here — never in the worker inline:
 
@@ -938,7 +936,7 @@ Stage 2 (`NerWorker`) emits a per-record JSON with the following invariants. Eac
 
 Adding a new false-positive class is a one-line denylist extension followed by a unit test. The two surname allowlists in B2 and the two topic denylists in B4 are documented inline in `ner_post_filters.py` with rationale + how to add an entry.
 
-**Tests**: `tests/unit/test_safety_guards.py::TestNerPostFilters` (17 tests), `TestNerEntitySchemaCleanliness` (4), `TestMarc500ProvenanceRouting` (6), `TestNerOffsetRebasing` (5), `TestPersonNerModelConfidence` (2), `TestRoleToLabelIncludesTranscriber` (3). The wiring tests in `test_entity_normalize.py` (4) guard the normaliser invocation. Total: **545 unit tests passing**.
+**Tests**: `tests/unit/test_safety_guards.py::TestNerPostFilters` (17 tests), `TestNerEntitySchemaCleanliness` (3), `TestNerOffsetRebasing` (5), `TestPersonNerModelConfidence` (2), `TestRoleToLabelIncludesTranscriber` (3). The wiring tests in `test_entity_normalize.py` (4) guard the normaliser invocation. ``TestMarc500ProvenanceRouting`` was removed 2026-05-23 with the classifier (Rule 35). Total: **827 unit tests passing**.
 
 ### 42. HMO-faithful Wikidata projection — Phase 1 enrichment (added 2026-05-17)
 
@@ -1489,8 +1487,9 @@ The agent emits a per-run folder under `eval-agent/state/runs/<ts>/`
 with `results.jsonl` (per-candidate verdicts), `summary.csv` (per-model
 precision metrics), and `report.md` (human-readable summary).
 
-**Scope (eval-agent MVP)**: the 5 Stage-2 trained models (Joint
-Person NER, Provenance NER, Contents NER, Genre classifier, MARC500
-Colophon classifier). Stage 3 (authority resolution), Stage 4 (RDF
-mapping), Stage 5 (SHACL violation triage), Stage 6 (Wikidata upload
-diff) are on the eval-agent roadmap but not in MVP.
+**Scope (eval-agent MVP)**: the 4 Stage-2 trained models (Joint
+Person NER, Provenance NER, Contents NER, Genre classifier). The
+MARC500 Colophon classifier was retired 2026-05-23 (see Rule 35).
+Stage 3 (authority resolution), Stage 4 (RDF mapping), Stage 5
+(SHACL violation triage), Stage 6 (Wikidata upload diff) are on
+the eval-agent roadmap but not in MVP.

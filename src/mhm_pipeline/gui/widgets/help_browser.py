@@ -205,7 +205,7 @@ where the name lives in the role-mapped MARC field.
 | model_confidence | numeric | Softmax probability from the BIO head |
 | type             | enum    | PERSON / OWNER / WORK / FOLIO / … |
 | role             | enum    | AUTHOR / TRANSCRIBER / … (persons only) |
-| source           | enum    | person_ner / provenance_ner / contents_ner / colophon_ml / genre_ml |
+| source           | enum    | person_ner / provenance_ner / contents_ner / genre_ml |
 | **grounded**     | enum    | True / False (F8 MARC grounding) |
 
 ## Operators
@@ -251,7 +251,7 @@ dict with all bibliographic fields.
 with `confidence`, `model_confidence`, `grounded`, `grounded_field`,
 `exists_in`.
 
-Five models run:
+Four models run:
 
 | Model | Output channel | Purpose |
 |-------|---------------|---------|
@@ -259,7 +259,6 @@ Five models run:
 | Provenance NER (OWNER/DATE/COLLECTION) | `entities[source=provenance_ner]` | Ownership inscriptions |
 | Contents NER (WORK/FOLIO/WORK_AUTHOR)  | `entities[source=contents_ner]` | Cited works + folios |
 | Genre classifier                       | `ml_genres[]` | MARC 655 fallback |
-| MARC500 colophon classifier            | `ml_colophon_sentences[]` | Identifies colophon sentences |
 
 ## Stage 3 — Authority Resolution
 

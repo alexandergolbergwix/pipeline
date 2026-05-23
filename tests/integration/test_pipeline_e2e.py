@@ -486,35 +486,23 @@ class TestNerWorker:
 
     The mock at the ``ner.inference_pipeline`` level only stops the joint
     Person/Provenance/Contents NER load. ``NerWorker.run()`` ALSO calls
-    two module-level lazy singletons — ``_get_marc500_classifier()`` and
-    ``_get_genre_classifier()`` — which independently load real ~700 MB
-    ``.pt`` checkpoints from disk on first invocation. The first test
-    triggers those loads; the second test re-enters the worker and the
-    PyTorch deserialiser deadlocks against the still-extant tokeniser
-    Rust workers from the first load (see investigator I1's report,
-    2026-05-06). The autouse fixture below stubs both singletons to
-    ``None`` for the duration of every test in this class so the multi-
-    test session never touches the real ``.pt`` files.
+    ``_get_genre_classifier()`` — a module-level lazy singleton that
+    independently loads a ~700 MB ``.pt`` checkpoint from disk on first
+    invocation. The autouse fixture below stubs it to ``None`` for the
+    duration of every test in this class so the multi-test session never
+    touches the real ``.pt`` file (avoids tokeniser-Rust worker deadlock
+    across consecutive tests in the same pytest process — investigator
+    I1's report, 2026-05-06).
     """
 
     _MODEL_PATH = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
 
     @pytest.fixture(autouse=True)
     def _stub_aux_classifier_loaders(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Force aux classifier loaders to return None for the whole class.
-
-        Without this, ``_get_marc500_classifier()`` / ``_get_genre_classifier()``
-        execute ``torch.load(...)`` on real 700 MB checkpoints and the
-        resulting tokeniser-Rust workers deadlock across consecutive
-        tests in the same pytest process.
-        """
+        """Force the genre classifier loader to return None for the whole class."""
         from mhm_pipeline.controller import workers as _workers_mod
 
-        monkeypatch.setattr(_workers_mod, "_get_marc500_classifier", lambda: None)
         monkeypatch.setattr(_workers_mod, "_get_genre_classifier", lambda: None)
-        # Also reset the module-level cached singletons so a previous
-        # test's partially-loaded classifier doesn't leak through.
-        monkeypatch.setattr(_workers_mod, "_MARC500_CLASSIFIER", "unloaded")
         monkeypatch.setattr(_workers_mod, "_GENRE_CLASSIFIER", "unloaded")
 
     def _make_mock_ner_modules(self) -> dict[str, MagicMock]:
@@ -1804,17 +1792,12 @@ class TestFullGuiProgressChain:
 _PROV_MODEL = _ROOT / "ner" / "provenance_ner_model.pt"
 _CONT_MODEL = _ROOT / "ner" / "contents_ner_model.pt"
 _GENRE_MODEL = _ROOT / "ner" / "genre_classifier_model.pt"
-_MARC500_MODEL = _ROOT / "ner" / "marc500_classifier_model.pt"
 
 _require_prov_model = pytest.mark.skipif(
     IN_CI or not _PROV_MODEL.exists(),
     reason="Provenance NER model not present or CI",
 )
 
-_require_marc500_model = pytest.mark.skipif(
-    IN_CI or not _MARC500_MODEL.exists(),
-    reason="MARC 500 classifier model not present or CI",
-)
 _require_cont_model = pytest.mark.skipif(
     IN_CI or not _CONT_MODEL.exists(),
     reason="Contents NER model not present or CI",
@@ -2018,138 +2001,6 @@ class TestNerModelsRealInference:
                 f"Confidence out of range for {genre!r}: {conf}"
             )
 
-
-# ── MARC 500 Sentence Classifier — real-inference tests ──────────────────────
-# Require ner/marc500_classifier_model.pt.  Skipped in CI and when model absent.
-
-
-class TestMarc500ModelRealInference:
-    """Verify the MARC 500 sentence classifier produces correct predictions.
-
-    Guards against:
-    - Broken checkpoint format or architecture mismatch
-    - Per-class threshold stored as wrong type (float vs dict)
-    - COLOPHON head silent failure (classic colophon sentence → False)
-    - PROVENANCE head silent failure (ownership sentence → False)
-    - False positives on clearly codicological sentences
-    """
-
-    # Loads the MARC 500 ~700 MB .pt checkpoint; hangs in multi-test pytest sessions.
-    # Opt in with `pytest -m slow_models`.
-    pytestmark = pytest.mark.slow_models
-
-    @_require_marc500_model
-    def test_marc500_classifier_loads_without_error(self) -> None:
-        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
-
-        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
-        assert clf is not None
-        assert "COLOPHON" in clf.label2id
-        # colophon-only model: threshold is a plain float (not a dict)
-        assert isinstance(clf.threshold, float)
-
-    @_require_marc500_model
-    def test_colophon_detected_in_classic_colophon_sentence(self) -> None:
-        """נשלם הספר ביד משה הסופר should be classified as COLOPHON."""
-        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
-
-        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
-        above_thr, conf = clf.is_colophon("נשלם הספר הזה ביד משה הסופר בשנת תפ")
-        assert above_thr, (
-            f"Expected COLOPHON=True for classic colophon sentence; conf={conf:.3f}"
-        )
-
-    @_require_marc500_model
-    def test_physical_description_not_colophon(self) -> None:
-        """Pure codicological note should NOT be classified as COLOPHON."""
-        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
-
-        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
-        above_thr, conf = clf.is_colophon("כתוב על קלף בכתב אשכנזי שתי עמודות")
-        assert not above_thr, (
-            f"Expected COLOPHON=False for codicological note; conf={conf:.3f}"
-        )
-
-    @_require_marc500_model
-    def test_sentence_splitter_returns_nonempty_list(self) -> None:
-        from mhm_pipeline.controller.workers import _split_marc500_sentences  # noqa: PLC0415
-
-        note = "נשלם הספר הזה. כתוב על קלף בכתב אשכנזי."
-        sents = _split_marc500_sentences(note)
-        assert isinstance(sents, list)
-        assert len(sents) >= 1
-
-    @_require_marc500_model
-    def test_classify_sentence_confidence_in_range(self) -> None:
-        from converter.authority.marc500_classifier import Marc500Classifier  # noqa: PLC0415
-
-        clf = Marc500Classifier(str(_MARC500_MODEL), device="cpu")
-        result = clf.classify_sentence("נשלם הספר הזה ביד משה הסופר")
-        # colophon-only model: only COLOPHON key
-        assert "COLOPHON" in result
-        above_thr, conf = result["COLOPHON"]
-        assert isinstance(above_thr, bool)
-        assert 0.0 <= conf <= 1.0, f"COLOPHON confidence out of range: {conf}"
-
-    @_require_marc500_model
-    def test_ner_worker_output_contains_ml_colophon_sentences_key(
-        self, tmp_path: Path,
-    ) -> None:
-        """NerWorker must emit ml_colophon_sentences in its JSON output."""
-        import json  # noqa: PLC0415
-
-        from mhm_pipeline.controller.workers import NerWorker  # noqa: PLC0415
-
-        # Minimal MARC extract with a colophon note
-        record = {
-            "_control_number": "TEST001",
-            "title": "ספר בדיקה",
-            "notes": ["נשלם הספר הזה ביד משה הסופר בשנת תפ"],
-            "provenance": "",
-            "contents": [],
-        }
-        marc_extract = tmp_path / "marc.json"
-        marc_extract.write_text(json.dumps([record], ensure_ascii=False), encoding="utf-8")
-
-        model_path = str(_ROOT / "ner" / "alexgoldberg" / "hebrew-manuscript-joint-ner-v2")
-        hf_id = "alexgoldberg/hebrew-manuscript-joint-ner-v2"
-        person_model = model_path if Path(model_path).exists() else hf_id
-
-        worker = NerWorker(
-            input_path=marc_extract,
-            output_dir=tmp_path,
-            model_path=person_model,
-            device="cpu",
-            batch_size=1,
-        )
-        from PyQt6.QtCore import Qt  # noqa: PLC0415
-
-        finished_paths: list[Path] = []
-        worker.finished.connect(
-            lambda p: finished_paths.append(p),
-            Qt.ConnectionType.DirectConnection,
-        )
-        worker.start()
-        worker.wait(120_000)
-
-        assert finished_paths, "NerWorker did not emit finished signal"
-        results = json.loads(finished_paths[0].read_text(encoding="utf-8"))
-        assert results, "NerWorker output is empty"
-        assert "ml_colophon_sentences" in results[0], (
-            "NerWorker output missing ml_colophon_sentences key"
-        )
-
-    @_require_marc500_model
-    def test_merge_propagates_ml_colophon_into_record(self) -> None:
-        """_merge_ner_into_records must copy ml_colophon_sentences into colophon_text."""
-        from mhm_pipeline.controller.workers import AuthorityWorker  # noqa: PLC0415
-
-        colophon_sent = "נשלם הספר הזה ביד משה הסופר"
-        marc_records = [{"_control_number": "X1", "colophon_text": ""}]
-        ner_by_cn = {"X1": {"entities": [], "ml_colophon_sentences": [colophon_sent]}}
-
-        AuthorityWorker._merge_ner_into_records(marc_records, ner_by_cn)
-        assert marc_records[0].get("colophon_text") == colophon_sent
 
 
 # ── Wikidata Preview Panel Tests ──────────────────────────────────────────────

@@ -61,27 +61,13 @@ def _find_classifier_weights(filename: str) -> Path | None:
     return None
 
 
-# ── MARC 500 sentence classifier — lazy singleton ─────────────────────────────
-_MARC500_CLASSIFIER: object | None = "unloaded"
-
-
-def _get_marc500_classifier() -> object | None:
-    global _MARC500_CLASSIFIER
-    if _MARC500_CLASSIFIER == "unloaded":
-        model_path = _find_classifier_weights("marc500_classifier_model.pt")
-        if model_path is not None:
-            try:
-                from converter.authority.marc500_classifier import (
-                    Marc500Classifier,  # noqa: PLC0415
-                )
-
-                _MARC500_CLASSIFIER = Marc500Classifier(str(model_path))
-            except Exception as _exc:
-                logger.warning("Could not load MARC 500 classifier: %s", _exc)
-                _MARC500_CLASSIFIER = None
-        else:
-            _MARC500_CLASSIFIER = None
-    return _MARC500_CLASSIFIER
+# NOTE: The MARC500 sentence colophon classifier was removed
+# 2026-05-23. The 2026-05-22 eval-agent run at threshold 0.90 showed
+# only 6% strict precision on its high-confidence predictions
+# (76% fail rate). The other four trained models (3 NER + genre
+# classifier) land at 95.7% full-success when the colophon classifier
+# is excluded. The trained weights are kept on disk locally for
+# future revisits but no longer loaded, bundled, or surfaced.
 
 
 # ── Genre classifier (Stage 3 P136 fallback) — lazy singleton ─────────────────
@@ -103,13 +89,6 @@ def _get_genre_classifier() -> object | None:
         else:
             _GENRE_CLASSIFIER = None
     return _GENRE_CLASSIFIER
-
-
-def _split_marc500_sentences(text: str) -> list[str]:
-    import re as _re  # noqa: PLC0415
-
-    parts = _re.split(r"(?<=[.!?])\s+|\n", text)
-    return [s.strip() for s in parts if len(s.strip()) >= 10]
 
 
 class StageWorker(QThread):
@@ -474,7 +453,6 @@ class NerWorker(StageWorker):
 
             results: list[dict[str, Any]] = []
             substep_every = max(1, total // 100)
-            marc500_announced = False
             genre_announced = False
             for idx, record in enumerate(records):
                 cn = str(record.get("_control_number", ""))
@@ -532,44 +510,9 @@ class NerWorker(StageWorker):
                             except Exception as cont_exc:
                                 logger.warning("Contents NER error: %s", cont_exc)
 
-                # MARC 500 sentence classifier. Both heads land in
-                # dedicated record-level channels (not in ``entities``)
-                # so Stage 3's source filter and the GUI authority
-                # editor can never route a classifier prediction
-                # through Wikidata reconciliation.
-                ml_colophon_sentences: list[str] = []
-                if not marc500_announced:
-                    self.substep.emit("Loading MARC 500 sentence classifier")
-                    marc500_announced = True
-                _marc500_clf = _get_marc500_classifier()
-                if _marc500_clf is not None:
-                    for note in record.get("notes") or []:
-                        for sent in _split_marc500_sentences(str(note)):
-                            # COLOPHON head — sentence becomes a colophon
-                            # source for P1684, accumulated in
-                            # ``ml_colophon_sentences``.
-                            try:
-                                col_above, col_conf = _marc500_clf.is_colophon(sent)
-                                if col_above:
-                                    ml_colophon_sentences.append(sent)
-                            except Exception as _col_exc:
-                                logger.debug("MARC 500 colophon clf error: %s", _col_exc)
-                            # PROVENANCE head — sentence is fed through
-                            # the provenance NER pipeline so any owners
-                            # / dates / collections it mentions become
-                            # entities flagged ``from_marc500: True`` so
-                            # downstream code knows the source segment.
-                            try:
-                                prov_above, prov_conf = _marc500_clf.is_provenance(sent)
-                                if prov_above and provenance_pipeline is not None:
-                                    from500_entities = provenance_pipeline.process_text(sent)
-                                    for ent in from500_entities:
-                                        ent["source"] = "provenance_ner"
-                                        ent["from_marc500"] = True
-                                        ent["marc500_confidence"] = float(prov_conf)
-                                    all_entities.extend(from500_entities)
-                            except Exception as _prov_exc:
-                                logger.debug("MARC 500 provenance routing error: %s", _prov_exc)
+                # MARC 500 sentence classifier was removed 2026-05-23
+                # (6 % strict precision — see header comment above the
+                # _GENRE_CLASSIFIER singleton).
 
                 # Genre classifier — Stage 3 P136 fallback. Predictions
                 # land in ``ml_genres`` (NOT in the entity list) so they
@@ -699,7 +642,6 @@ class NerWorker(StageWorker):
                         "_control_number": record.get("_control_number"),
                         "text": full_text,
                         "entities": all_entities,
-                        "ml_colophon_sentences": ml_colophon_sentences,
                         "ml_genres": ml_genres,
                         "catalog_references": catalog_refs,
                         "provenance_inscriptions": prov_inscriptions,
@@ -721,13 +663,11 @@ class NerWorker(StageWorker):
             person_count = _count("person_ner")
             prov_count = _count("provenance_ner")
             cont_count = _count("contents_ner")
-            col_count = sum(len(r.get("ml_colophon_sentences") or []) for r in results)
             genre_count = sum(len(r.get("ml_genres") or []) for r in results)
             self.log_line.emit(
                 f"NER complete — {total} records, "
                 f"{person_count} person + {prov_count} provenance + "
                 f"{cont_count} contents entities; "
-                f"{col_count} ml-colophon sentences + "
                 f"{genre_count} ml-genre predictions"
             )
             self.finished.emit(output_path)
@@ -1620,14 +1560,10 @@ class AuthorityWorker(StageWorker):
                 # empty) so downstream consumers can rely on the field
                 # being present without defensive ``.get(..., [])``.
                 record.setdefault("entities", [])
-            ml_col = ner_rec.get("ml_colophon_sentences") if ner_rec else None
-            if ml_col:
-                existing = str(record.get("colophon_text") or "").strip()
-                new_sents = [s for s in ml_col if s not in existing]
-                if new_sents:
-                    record["colophon_text"] = (
-                        (existing + " " if existing else "") + " ".join(new_sents)
-                    ).strip()
+            # ``ml_colophon_sentences`` merging removed 2026-05-23
+            # with the MARC500 colophon classifier (6 % strict precision).
+            # ``record["colophon_text"]`` now comes verbatim from MARC
+            # only — no ML-augmented colophon synthesis.
         return enriched
 
     def _init_viaf(self, viaf_matcher_class: type) -> VIAFMatcher | None:
