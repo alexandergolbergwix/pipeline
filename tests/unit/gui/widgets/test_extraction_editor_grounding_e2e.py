@@ -302,7 +302,8 @@ class TestTooltip:
         idx = editor._model.index(0, COL_EXISTS_IN)
         tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
         assert isinstance(tip, str)
-        # Each of the 4 evidence rows appears on its own line
+        # Tooltip is now HTML — content is still inside the string.
+        assert tip.startswith("<div"), "tooltip must be HTML to mask the macOS native popover"
         for field in ("authors[0].name", "contributors[0].name",
                       "provenance", "notes[0]"):
             assert field in tip, f"tooltip missing '{field}': {tip}"
@@ -315,6 +316,24 @@ class TestTooltip:
         idx = editor._model.index(0, COL_EXISTS_IN)
         tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
         assert "full" in tip and "partial" in tip
+
+    def test_tooltip_uses_theme_token_colors(
+        self, editor: ExtractionEditor,
+    ) -> None:
+        """The HTML tooltip must paint with the active theme's tooltip
+        tokens (background + text). Verified by checking that the
+        inline style contains the token value, not a hardcoded hex."""
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+        bg_token = theme.ui("tooltip_bg")
+        text_token = theme.ui("tooltip_text")
+        idx = editor._model.index(0, COL_EXISTS_IN)
+        tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
+        assert f"background:{bg_token}" in tip, (
+            f"tooltip must inline the tooltip_bg token; got: {tip[:200]}"
+        )
+        assert f"color:{text_token}" in tip, (
+            f"tooltip must inline the tooltip_text token; got: {tip[:200]}"
+        )
 
     def test_tooltip_explains_discovery_for_empty_evidence(
         self, editor: ExtractionEditor,
@@ -532,9 +551,15 @@ class TestEntityColumnHoverAndClick:
         idx = editor._model.index(0, COL_TEXT)
         tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
         assert isinstance(tip, str)
+        # HTML tooltip — same content + theme-aware inline colours
+        assert tip.startswith("<div"), "tooltip must be HTML"
         assert "Yossi Stiwi" in tip
         # The tooltip also tells the user the click affordance
         assert "Double-click" in tip or "double-click" in tip.lower()
+        # Inline style must use the theme tokens
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+        assert theme.ui("tooltip_bg") in tip
+        assert theme.ui("tooltip_text") in tip
 
     def test_entity_cell_tooltip_empty_when_no_text(
         self, editor: ExtractionEditor,

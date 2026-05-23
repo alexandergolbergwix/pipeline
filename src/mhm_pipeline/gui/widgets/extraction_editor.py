@@ -232,6 +232,119 @@ _CONTENTS_TYPE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+# ── HTML tooltip helpers ────────────────────────────────────────────────────
+#
+# macOS Qt6 uses native NSTooltip for tooltip popovers. NSTooltip ignores
+# both QSS rules and ``QToolTip.setPalette()`` for its background — the
+# only way to make the tooltip surface paint with the active theme colours
+# is to wrap the content in HTML with explicit inline ``background-color``
+# + ``color`` styles. Qt's QToolTip detects HTML content and renders it
+# via QTextDocument, whose paint output masks the native popover frame.
+#
+# Colour sources: the central theme token registry (``theme.ui(...)``).
+# Same tokens as the QSS QToolTip rule + the QApplication palette + the
+# QToolTip palette — so every tooltip surface is in lock-step with
+# whichever theme is active.
+
+
+def _tooltip_colours() -> tuple[str, str, str]:
+    """Return ``(bg, text, subtle)`` for the active theme."""
+    from mhm_pipeline.gui import theme  # noqa: PLC0415
+    return theme.ui("tooltip_bg"), theme.ui("tooltip_text"), theme.ui("subtext")
+
+
+def _esc(text: object) -> str:
+    """HTML-escape a string for tooltip content. Avoids tag injection
+    from unexpected MARC text."""
+    import html  # noqa: PLC0415
+    return html.escape(str(text or ""))
+
+
+def _build_entity_text_tooltip(full_text: str) -> str:
+    """HTML tooltip for the Entity (text) column."""
+    bg, text, subtle = _tooltip_colours()
+    return (
+        f'<div style="background:{bg}; color:{text};'
+        f' padding:6px 10px; border-radius:6px;">'
+        f'<div>{_esc(full_text)}</div>'
+        f'<div style="color:{subtle}; margin-top:6px;">Double-click to edit</div>'
+        f'</div>'
+    )
+
+
+def _build_exists_in_tooltip(
+    ent: dict, evidence: list[dict], is_grounded: bool, has_match: bool,
+) -> str:
+    """HTML tooltip for the "Exists in" column — green / yellow / blue
+    state header + a list of every matched MARC field with its match type.
+    """
+    bg, text, subtle = _tooltip_colours()
+    rows: list[str] = []
+
+    if is_grounded:
+        rows.append(
+            f'<div style="color:#16a34a; font-weight:600;">'
+            f'✓ Role-grounded — name is in the MARC field the role implies'
+            f'</div>'
+        )
+    elif has_match:
+        role_fields = _expected_role_fields(ent)
+        rows.append(
+            f'<div style="color:#d97706; font-weight:600;">'
+            f'⚠ Wrong field — name is in MARC but NOT in the field the role implies'
+            f'</div>'
+        )
+        if role_fields:
+            rows.append(
+                f'<div style="color:{subtle}; margin-top:2px;">'
+                f'Expected role-mapped field(s): {_esc(", ".join(role_fields))}'
+                f'</div>'
+            )
+    else:
+        rows.append(
+            f'<div style="color:#2563eb; font-weight:600;">'
+            f'🆕 NEW — name not found in any structured MARC field'
+            f'</div>'
+            f'<div style="color:{subtle}; margin-top:2px;">'
+            f'The NER model found this in the source text but it was'
+            f'<br/>never indexed by hand. Could be a real discovery'
+            f'<br/>worth capturing, OR a hallucination — open the popup'
+            f'<br/>to inspect the source text.'
+            f'</div>'
+        )
+
+    if evidence:
+        items_html = []
+        for r in evidence[:12]:
+            mt = str(r.get("match_type", "?"))
+            field = _esc(r.get("field", "?"))
+            marker = "●" if mt == "full" else "○"
+            items_html.append(
+                f'<div>&nbsp;&nbsp;{marker} {field}'
+                f'<span style="color:{subtle};">&nbsp;&nbsp;({_esc(mt)})</span>'
+                f'</div>'
+            )
+        if len(evidence) > 12:
+            items_html.append(
+                f'<div style="color:{subtle};">&nbsp;&nbsp;… +{len(evidence) - 12} more</div>'
+            )
+        rows.append(f'<div style="margin-top:6px;">Found in:</div>')
+        rows.extend(items_html)
+
+    rows.append(
+        f'<div style="color:{subtle}; margin-top:6px;">'
+        f'Click to see full MARC record'
+        f'</div>'
+    )
+
+    return (
+        f'<div style="background:{bg}; color:{text};'
+        f' padding:6px 10px; border-radius:6px;">'
+        + "".join(rows)
+        + "</div>"
+    )
+
+
 class EditableEntityModel(QAbstractTableModel):
     """Table model for editable NER entity data.
 
@@ -408,11 +521,12 @@ class EditableEntityModel(QAbstractTableModel):
 
         # Hover tooltip for the entity text — always shows the FULL
         # string so the reviewer can read long Hebrew names that the
-        # cell width truncates.
+        # cell width truncates. HTML so the theme colours stick on
+        # macOS (see _build_exists_in_tooltip for the rationale).
         if role == Qt.ItemDataRole.ToolTipRole and col == COL_TEXT:
             full = str(ent.get("text") or "")
             if full:
-                return f"{full}\n\nDouble-click to edit"
+                return _build_entity_text_tooltip(full)
 
         # Display / edit values
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
@@ -518,43 +632,14 @@ class EditableEntityModel(QAbstractTableModel):
                 # Make the "🆕 new" text visible on the blue tint
                 return QColor(59, 130, 246)
             if role == Qt.ItemDataRole.ToolTipRole:
-                # Cell ALWAYS has a tooltip now — even the discovery
-                # case explains itself.
-                lines = []
-                if is_grounded:
-                    lines.append("✓ Role-grounded — name is in the MARC "
-                                 "field the role implies")
-                elif has_match:
-                    grounded_role_fields = _expected_role_fields(ent)
-                    lines.append("⚠ Wrong field — name is in MARC but NOT "
-                                 "in the field the role implies")
-                    if grounded_role_fields:
-                        lines.append(
-                            f"  Expected role-mapped field(s): "
-                            f"{', '.join(grounded_role_fields)}"
-                        )
-                else:
-                    # Discovery / novel — most interesting case.
-                    lines.append("🆕 NEW — name not found in any structured "
-                                 "MARC field")
-                    lines.append("  The NER model found this in the source")
-                    lines.append("  text but it was never indexed by hand.")
-                    lines.append("  Could be a real discovery worth")
-                    lines.append("  capturing, OR a hallucination — open")
-                    lines.append("  the popup to inspect the source text.")
-                if evidence:
-                    lines.append("")
-                    lines.append("Found in:")
-                    for r in evidence[:12]:
-                        mt = r.get("match_type", "?")
-                        field = r.get("field", "?")
-                        marker = "●" if mt == "full" else "○"
-                        lines.append(f"  {marker} {field}  ({mt})")
-                    if len(evidence) > 12:
-                        lines.append(f"  … +{len(evidence) - 12} more")
-                lines.append("")
-                lines.append("Click to see full MARC record")
-                return "\n".join(lines)
+                # Tooltip rendered as HTML with EXPLICIT bg+text colours
+                # sourced from the theme tokens. Qt detects HTML
+                # tooltips and renders them via QTextDocument, so the
+                # inline ``background-color`` masks macOS's native
+                # NSTooltip popover frame (which otherwise ignores
+                # both QSS and QToolTip.setPalette).
+                return _build_exists_in_tooltip(ent, evidence, is_grounded,
+                                                  has_match)
 
         # Approved row emphasis — subtle green wash
         if role == Qt.ItemDataRole.BackgroundRole and ent.get("approved", False):
