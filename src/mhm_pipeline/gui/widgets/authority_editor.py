@@ -221,6 +221,12 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
     out: list[dict] = []
     for record in records:
         cn = str(record.get("_control_number", ""))
+        # Manuscript catalogued year (Stage 0 ``record["dates"]["year"]``).
+        # Surfaced onto every row so the Dates column can render the
+        # MS-vs-candidate comparison without re-reading the parent record.
+        _dates_field = record.get("dates")
+        _ms_year_raw = _dates_field.get("year") if isinstance(_dates_field, dict) else None
+        ms_year = _ms_year_raw if isinstance(_ms_year_raw, int) else None
 
         # 1. MARC authority matches (persons from MARC fields)
         for i, m in enumerate(record.get("marc_authority_matches") or []):
@@ -270,6 +276,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "_preferred_name_lat": str(m.get("preferred_name_lat") or ""),
                 "_birth_year": m.get("birth_year"),
                 "_death_year": m.get("death_year"),
+                "_ms_year": ms_year,
                 "_entity_kind": str(m.get("entity_kind") or ""),
             })
 
@@ -339,6 +346,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "_preferred_name_lat": str(e.get("preferred_name_lat") or ""),
                 "_birth_year": None,
                 "_death_year": None,
+                "_ms_year": ms_year,
                 "_entity_kind": str(entity_type or ""),
                 "_ner_keyword_conf": _coerce_confidence(e.get("confidence")),
                 "_ner_model_conf": _coerce_confidence(e.get("model_confidence")),
@@ -380,6 +388,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                     "_preferred_name_lat": "",
                     "_birth_year": None,
                     "_death_year": None,
+                    "_ms_year": ms_year,
                     "_entity_kind": "place",
                 })
     return out
@@ -685,18 +694,185 @@ def _build_authority_confidence_tooltip(row: dict) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Dates column — at-a-glance MS-vs-candidate comparison
+# ────────────────────────────────────────────────────────────────────────────
+#
+# The Stage 3 date-conflict guard already vets every match (rejecting
+# candidates born after the manuscript was made, etc.). The verdict
+# surfaces in the row's tri-level confidence and in the Conf. tooltip,
+# but a curator scanning 200 rows cannot tell at a glance *which*
+# matches were date-checked or *what years* drove the decision. The
+# Dates column shows both years and a status glyph.
+
+
+def _format_dates_cell(row: dict) -> str:
+    """Render the Dates column DisplayRole text.
+
+    - Both MS and candidate dates present: ``"MS 1650 | 1138–1204 ✓"``
+      where the glyph is ✓ (no conflict), ✗ (date-guard fired), or
+      ⚠ (partial: only one candidate-side year known).
+    - Only candidate dates: ``"1138–1204"``
+    - Only MS year: ``"MS 1650"``
+    - Neither: ``"—"``
+    - KIMA / place rows (no birth/death semantics): always ``"—"``
+    """
+    if str(row.get("_auth_kind") or "") == "kima":
+        return "—"
+
+    ms_year = row.get("_ms_year")
+    birth = row.get("_birth_year")
+    death = row.get("_death_year")
+
+    has_ms = isinstance(ms_year, int)
+    has_birth = isinstance(birth, int)
+    has_death = isinstance(death, int)
+
+    if not (has_ms or has_birth or has_death):
+        return "—"
+
+    # Candidate range string.
+    if has_birth and has_death:
+        candidate = f"{birth}–{death}"
+    elif has_birth:
+        candidate = f"{birth}–?"
+    elif has_death:
+        candidate = f"?–{death}"
+    else:
+        candidate = ""
+
+    if has_ms and candidate:
+        guard_fired = "date_conflict" in (row.get("_guard_flags") or [])
+        if guard_fired:
+            glyph = "✗"   # ✗ conflict
+        elif has_birth and has_death:
+            glyph = "✓"   # ✓ both sides present + no conflict
+        else:
+            glyph = "⚠"   # ⚠ partial
+        return f"MS {ms_year} | {candidate} {glyph}"
+    if candidate:
+        return candidate
+    if has_ms:
+        return f"MS {ms_year}"
+    return "—"
+
+
+def _build_authority_dates_tooltip(row: dict) -> str:
+    """HTML tooltip for the Dates column — enumerates every input the
+    Stage 3 date-conflict guard considered and the rule that applied."""
+    bg, text, subtle = _auth_tooltip_colours()
+    role = str(row.get("role") or "")
+    ms_year = row.get("_ms_year")
+    birth = row.get("_birth_year")
+    death = row.get("_death_year")
+    guard_flags = row.get("_guard_flags") or []
+    auth_kind = str(row.get("_auth_kind") or "")
+
+    parts: list[str] = []
+    parts.append(
+        f'<div style="background:{bg}; color:{text};'
+        f' padding:8px 12px; border-radius:6px; max-width:420px;">'
+    )
+
+    if auth_kind == "kima":
+        parts.append(
+            f'<div style="color:{subtle}; line-height:1.4;">'
+            f'KIMA place row — no birth/death dates apply.'
+            f'</div>'
+            f'</div>'
+        )
+        return "".join(parts)
+
+    # Header: verdict
+    if "date_conflict" in guard_flags:
+        parts.append(
+            '<div style="color:#dc2626; font-weight:600; margin-bottom:6px;">'
+            'Date conflict fired'
+            '</div>'
+        )
+    elif isinstance(ms_year, int) and isinstance(birth, int) and isinstance(death, int):
+        parts.append(
+            '<div style="color:#16a34a; font-weight:600; margin-bottom:6px;">'
+            'No date conflict'
+            '</div>'
+        )
+    else:
+        parts.append(
+            f'<div style="color:{subtle}; font-weight:600; margin-bottom:6px;">'
+            'Date check incomplete (missing years)'
+            '</div>'
+        )
+
+    # Inputs
+    parts.append(
+        f'<div><b>Manuscript year:</b> '
+        f'{_auth_esc(ms_year) if isinstance(ms_year, int) else "—"}</div>'
+    )
+    parts.append(
+        f'<div><b>Candidate birth:</b> '
+        f'{_auth_esc(birth) if isinstance(birth, int) else "—"}</div>'
+    )
+    parts.append(
+        f'<div><b>Candidate death:</b> '
+        f'{_auth_esc(death) if isinstance(death, int) else "—"}</div>'
+    )
+    parts.append(
+        f'<div style="margin-top:4px;"><b>Role:</b> {_auth_esc(role or "—")}</div>'
+    )
+
+    # Rule explanation by role.
+    role_l = role.lower()
+    if role_l in {"scribe", "transcriber", "copyist"}:
+        rule = (
+            "Physical-production role: candidate must have been alive "
+            "near the manuscript date (death-side check active, "
+            "80-year tolerance)."
+        )
+    elif role_l in {"author", "translator", "commentator", "editor"}:
+        rule = (
+            "Textual-authorship role: candidate must have existed before "
+            "the manuscript was made (only birth-side check active; "
+            "Hebrew manuscripts routinely copy authors centuries later)."
+        )
+    elif role_l == "subject":
+        rule = (
+            "Subject role: the manuscript is ABOUT this person. Only "
+            "the birth-side check fires (a manuscript can be about "
+            "someone who died centuries before it was made, but not "
+            "about someone born after it)."
+        )
+    else:
+        rule = (
+            "Universal birth check: candidate cannot have been born "
+            "more than 5 years after the manuscript date "
+            "(DATE_BIRTH_BUFFER_YEARS)."
+        )
+    parts.append(
+        f'<div style="color:{subtle}; margin-top:6px; line-height:1.4;">'
+        f'{_auth_esc(rule)}</div>'
+    )
+
+    parts.append('</div>')
+    return "".join(parts)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Proxy / filtering
 # ────────────────────────────────────────────────────────────────────────────
 
 
 class AuthorityFilterProxy(QSortFilterProxyModel):
-    """Proxy filtering by source / match_type / confidence-band + free search."""
+    """Proxy filtering by source / match_type / confidence-band + free search,
+    plus per-column value filters (Rule 49 §E)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.source_filter: set[str] = set()
         self.type_filter: set[str] = set()
         self.band_filter: set[str] = set()
+        # Per-column include-sets. Empty dict = no per-column filters
+        # active. Each entry MUST be a non-empty set (the setter
+        # treats an empty set as "clear this column").
+        self._column_filters: dict[int, set[str]] = {}
 
     def set_dimension_filters(
         self,
@@ -708,6 +884,29 @@ class AuthorityFilterProxy(QSortFilterProxyModel):
         self.type_filter = set(types)
         self.band_filter = set(bands)
         self.invalidateFilter()
+
+    # ── per-column filter API (Rule 49 §E) ──────────────────────────
+
+    def set_column_filter(self, column: int, values: set[str]) -> None:
+        """Replace the include-set for ``column``. An empty set CLEARS
+        the filter on that column."""
+        if values:
+            self._column_filters[column] = set(values)
+        else:
+            self._column_filters.pop(column, None)
+        self.invalidateFilter()
+
+    def clear_all_column_filters(self) -> None:
+        self._column_filters.clear()
+        self.invalidateFilter()
+
+    def column_filter(self, column: int) -> set[str]:
+        return set(self._column_filters.get(column, set()))
+
+    def has_any_column_filter(self) -> bool:
+        return bool(self._column_filters)
+
+    # ── filter pipeline ─────────────────────────────────────────────
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802
         m = self.sourceModel()
@@ -722,7 +921,74 @@ class AuthorityFilterProxy(QSortFilterProxyModel):
             return False
         if self.band_filter and _conf_band(row.get("confidence")) not in self.band_filter:
             return False
+        # Per-column value filters AND with the dimension chips above.
+        for col, allowed in self._column_filters.items():
+            if cell_value_for_filter(m, source_row, col) not in allowed:
+                return False
         return super().filterAcceptsRow(source_row, source_parent)
+
+    # ── header decoration: append ▾ to filtered columns ─────────────
+
+    def headerData(  # noqa: N802
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
+        base = super().headerData(section, orientation, role)
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+            and section in self._column_filters
+        ):
+            label = "" if base is None else str(base)
+            return f"{label} ▾".lstrip()
+        return base
+
+
+def cell_value_for_filter(
+    model: "AuthorityMatchModel",
+    source_row: int,
+    column: int,
+) -> str:
+    """Return the canonical string used by the popup for ``(row, col)``.
+
+    Mirrors :meth:`AuthorityMatchModel.data` for ``DisplayRole`` so the
+    popup's checkbox list and the proxy filter agree on what each
+    cell's value is.
+    """
+    if source_row < 0 or source_row >= len(model._rows):
+        return ""
+    row = model._rows[source_row]
+    if column == COL_RECORD:
+        return str(row.get("_control_number", ""))
+    if column == COL_ENTITY:
+        return str(row.get("entity_text", ""))
+    if column == COL_MATCH:
+        mid = str(row.get("matched_id", "") or "")
+        mname = str(row.get("matched_name", "") or "")
+        if mname and mid:
+            return f"{mname} ({mid})"
+        return mname or mid or ""
+    if column == COL_SOURCE:
+        return str(row.get("source", "") or "")
+    if column == COL_TYPE:
+        return str(row.get("match_type", "") or "")
+    if column == COL_CONF:
+        # Filter on the confidence BAND ("high"/"medium"/"low") rather
+        # than the numeric value, so a user choosing "high" matches
+        # every row above the threshold without needing to click
+        # individual 0.95 / 0.96 values.
+        return _conf_band(row.get("confidence"))
+    if column == COL_DATES:
+        return _format_dates_cell(row)
+    if column == COL_APPROVED:
+        return "approved" if row.get("approved", False) else "pending"
+    if column == COL_WIKIDATA_QID:
+        return str(row.get("wikidata_qid", "") or "")
+    if column == COL_ACTIONS:
+        return ""
+    return ""
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -735,17 +1001,18 @@ COL_MATCH = 2
 COL_SOURCE = 3
 COL_TYPE = 4
 COL_CONF = 5
-COL_APPROVED = 6
-COL_WIKIDATA_QID = 7
-COL_ACTIONS = 8
+COL_DATES = 6
+COL_APPROVED = 7
+COL_WIKIDATA_QID = 8
+COL_ACTIONS = 9
 
 
 class AuthorityMatchModel(QAbstractTableModel):
     """Flat model over authority matches, supporting approval + editing."""
 
     HEADERS = [
-        "Record", "Entity", "Match", "Source", "Type", "Conf.", "Approved",
-        "Wikidata QID", " ",
+        "Record", "Entity", "Match", "Source", "Type", "Conf.", "Dates",
+        "Approved", "Wikidata QID", " ",
     ]
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -824,6 +1091,10 @@ class AuthorityMatchModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole and col == COL_CONF:
             return _build_authority_confidence_tooltip(r)
 
+        # Dates-column tooltip — MS-vs-candidate breakdown + role rule.
+        if role == Qt.ItemDataRole.ToolTipRole and col == COL_DATES:
+            return _build_authority_dates_tooltip(r)
+
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             if col == COL_RECORD:
                 return r["_control_number"]
@@ -842,6 +1113,8 @@ class AuthorityMatchModel(QAbstractTableModel):
             if col == COL_CONF:
                 c = r.get("confidence", 0.0)
                 return f"{c:.2f}" if c else ""
+            if col == COL_DATES:
+                return _format_dates_cell(r)
             if col == COL_WIKIDATA_QID:
                 return r.get("wikidata_qid", "")
 
@@ -1304,6 +1577,14 @@ class AuthorityEditor(QWidget):
         header.addWidget(_ghost("Approve visible", lambda: self._set_visible(True)))
         header.addWidget(_ghost("Clear approval", lambda: self._set_visible(False)))
         header.addWidget(_ghost("Revert", self._on_revert))
+        # Rule 49 §E — top-level escape hatch for per-column filters
+        # (the chip-row dimension filter is independent and has its
+        # own control). Greyed out when no column filter is active.
+        self._clear_col_filters_btn = _ghost(
+            "🗑 Clear column filters", self._on_clear_column_filters,
+        )
+        self._clear_col_filters_btn.setEnabled(False)
+        header.addWidget(self._clear_col_filters_btn)
         self._save_btn = QPushButton("Save")
         self._save_btn.setStyleSheet(theme.success_btn_style())
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1344,6 +1625,7 @@ class AuthorityEditor(QWidget):
         h.setSectionResizeMode(COL_SOURCE, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_TYPE, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_CONF, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(COL_DATES, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_APPROVED, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_WIKIDATA_QID, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
@@ -1351,6 +1633,32 @@ class AuthorityEditor(QWidget):
         # Rule 48: enable horizontal scroll-when-too-wide.
         from mhm_pipeline.gui import theme as _theme  # noqa: PLC0415
         _theme.install_table_overflow_scroll(self._table)
+
+        # Rule 49 §E — per-column value filters via right-click header menu.
+        from mhm_pipeline.gui.widgets.column_filter_popup import (  # noqa: PLC0415
+            install_column_filters,
+        )
+
+        def _distinct_values_for_authority_col(col: int) -> list[str]:
+            seen: set[str] = set()
+            for i in range(len(self._model._rows)):
+                seen.add(cell_value_for_filter(self._model, i, col))
+            return sorted(seen, key=lambda s: (s != "", s.lower(), s))
+
+        def _counts_for_authority_col(col: int) -> dict[str, int]:
+            counts: dict[str, int] = {}
+            for i in range(len(self._model._rows)):
+                v = cell_value_for_filter(self._model, i, col)
+                counts[v] = counts.get(v, 0) + 1
+            return counts
+
+        install_column_filters(
+            self._table,
+            self._proxy,
+            distinct_values_for=_distinct_values_for_authority_col,
+            counts_for=_counts_for_authority_col,
+            on_filter_changed=self._update_stats,
+        )
 
         layout.addWidget(self._table, stretch=1)
 
@@ -1765,6 +2073,19 @@ class AuthorityEditor(QWidget):
             self._stats.setText(f"{total} matches · {approved} approved ({pct:.0f}%){dirty}")
         else:
             self._stats.setText(f"{visible} of {total} visible · {approved} approved ({pct:.0f}%){dirty}")
+        # Rule 49 §E — clear-column-filters button reflects active state.
+        clear_btn = getattr(self, "_clear_col_filters_btn", None)
+        if clear_btn is not None and isinstance(self._proxy, AuthorityFilterProxy):
+            clear_btn.setEnabled(self._proxy.has_any_column_filter())
+
+    def _on_clear_column_filters(self) -> None:
+        """Slot wired to the 🗑 Clear column filters button. Drops every
+        per-column include-set without touching the chip-row dimension
+        filter (Rule 49 §E)."""
+        if isinstance(self._proxy, AuthorityFilterProxy):
+            self._proxy.clear_all_column_filters()
+            self._refresh_actions()
+            self._update_stats()
 
     def _on_search(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)

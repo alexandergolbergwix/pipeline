@@ -1626,3 +1626,73 @@ backfill) flow through the existing `evaluate_match` verdict — no
 guard bypassed, no identity-conflict shortcut. The
 `flatten_authority_records` extension is additive (new
 underscore-prefixed keys only); no existing row consumer regressed.
+
+### Rule 49 §E — Dates column + per-column value filters (added 2026-05-23)
+
+Two related curator-workflow improvements that ship alongside Rule 49
+A–D, sharing the same `flatten_authority_records` row schema and the
+same `evaluate_date_conflict` verdict.
+
+**E1. Dates column on the authority table.** A new
+[COL_DATES](src/mhm_pipeline/gui/widgets/authority_editor.py)
+between `Conf.` and `Approved` renders the at-a-glance date-guard
+verdict as `"MS {ms_year} | {birth}–{death} {glyph}"` where the
+glyph is `✓` (no conflict), `✗` (`date_conflict` in `_guard_flags`),
+or `⚠` (only one candidate-side year known). KIMA / place rows
+render `"—"`. The manuscript year is plumbed onto every row via a
+new `_ms_year` key in `flatten_authority_records` (reads
+`record["dates"]["year"]`). The column carries its own
+`ToolTipRole` (`_build_authority_dates_tooltip`) enumerating MS
+year, candidate birth, candidate death, role, and the role-specific
+date-guard rule that applies (`PHYSICAL_PRODUCTION_ROLES` get the
+death check; `TEXTUAL_AUTHORSHIP_ROLES` and `role="subject"` get
+only the birth check). `COL_APPROVED`, `COL_WIKIDATA_QID`, and
+`COL_ACTIONS` shift down by one index.
+
+**E2. Per-column value filters (Excel-style).** Both
+[AuthorityFilterProxy](src/mhm_pipeline/gui/widgets/authority_editor.py)
+and
+[EntityFilterProxy](src/mhm_pipeline/gui/widgets/extraction_editor.py)
+gain a `_column_filters: dict[int, set[str]]` and three new methods
+`set_column_filter(col, values)`, `clear_all_column_filters()`,
+`column_filter(col)`. The new
+[column_filter_popup.py](src/mhm_pipeline/gui/widgets/column_filter_popup.py)
+module ships `ColumnFilterPopup` (a `GlassDialog`-based modal with a
+search box, select-all / clear-all, and per-value `(count)` labels)
+plus an `install_column_filters` helper that wires a `QTableView`'s
+horizontal header to a right-click context menu (`Filter…` /
+`Sort ↑` / `Sort ↓` / `Clear filter on this column` /
+`Clear all column filters`). Left-click on the header still SORTS
+(Qt's built-in behaviour, unchanged). When a column has an active
+filter the proxy's `headerData` decorates the header label with a
+trailing `▾` glyph. Filters AND with the existing chip-row dimension
+filter — both must accept a row.
+
+Both editors gain a small `🗑 Clear column filters` button in the
+toolbar that greys out when no per-column filter is active.
+
+Cell-value canonicalisation: a `cell_value_for_filter(model, row,
+col)` helper in each editor returns the same string the popup put
+in the checkbox list. For the `Conf.` column this is the
+tri-level BAND (`"high"` / `"medium"` / `"low"`) rather than the
+numeric value — choosing the band filters every row above the
+threshold without per-value clicking. For the new `Dates` column
+this is the formatted display string (`"MS 1650 | 1138–1204 ✓"`).
+
+**Tests added (31):** `tests/unit/gui/widgets/test_column_filter_popup.py`
+covers `TestDistinctValuesAndCounts` (2),
+`TestColumnFilterPopupConstruction` (5),
+`TestColumnFilterPopupSearch` (3),
+`TestColumnFilterPopupApply` (2),
+`TestAuthorityFilterProxyPerColumn` (6),
+`TestAuthorityMsYearPlumbing` (2),
+`TestDatesColumnRendering` (7),
+`TestEntityFilterProxyPerColumn` (4). Total unit-test count
+884 → 915 (+31). Zero regressions.
+
+**Safety invariants preserved:** Rule 37 (every `QDialog` uses the
+liquid-glass backdrop — `ColumnFilterPopup` inherits `GlassDialog`).
+Rule 36 (theme tokens — popup chrome reads `theme.ui(...)`, no
+hardcoded hex). Existing chip-row dimension filter behaviour is
+unchanged; the per-column filter is purely additive in
+`filterAcceptsRow` and ANDs after the existing checks.

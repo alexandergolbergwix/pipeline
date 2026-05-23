@@ -128,13 +128,15 @@ def _type_colors() -> dict[str, tuple[str, str]]:
 # ────────────────────────────────────────────────────────────────────────────
 
 class EntityFilterProxy(QSortFilterProxyModel):
-    """Proxy filtering by source/type/role, plus the default text search."""
+    """Proxy filtering by source/type/role, plus the default text search,
+    plus per-column value filters (Rule 49 §E)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.source_filter: set[str] = set()
         self.type_filter: set[str] = set()
         self.role_filter: set[str] = set()
+        self._column_filters: dict[int, set[str]] = {}
 
     def set_dimension_filters(
         self,
@@ -146,6 +148,25 @@ class EntityFilterProxy(QSortFilterProxyModel):
         self.type_filter = set(types)
         self.role_filter = set(roles)
         self.invalidateFilter()
+
+    # ── per-column filter API (Rule 49 §E) ──────────────────────────
+
+    def set_column_filter(self, column: int, values: set[str]) -> None:
+        if values:
+            self._column_filters[column] = set(values)
+        else:
+            self._column_filters.pop(column, None)
+        self.invalidateFilter()
+
+    def clear_all_column_filters(self) -> None:
+        self._column_filters.clear()
+        self.invalidateFilter()
+
+    def column_filter(self, column: int) -> set[str]:
+        return set(self._column_filters.get(column, set()))
+
+    def has_any_column_filter(self) -> bool:
+        return bool(self._column_filters)
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802
         model = self.sourceModel()
@@ -162,7 +183,74 @@ class EntityFilterProxy(QSortFilterProxyModel):
             r = str(ent.get("role") or "")
             if r and r not in self.role_filter:
                 return False
+        for col, allowed in self._column_filters.items():
+            if entity_cell_value_for_filter(model, source_row, col) not in allowed:
+                return False
         return super().filterAcceptsRow(source_row, source_parent)
+
+    def headerData(  # noqa: N802
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
+        base = super().headerData(section, orientation, role)
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+            and section in self._column_filters
+        ):
+            label = "" if base is None else str(base)
+            return f"{label} ▾".lstrip()
+        return base
+
+
+def entity_cell_value_for_filter(
+    model: "EditableEntityModel",
+    source_row: int,
+    column: int,
+) -> str:
+    """Return the canonical filter string for an entity row × column.
+
+    Mirrors :meth:`EditableEntityModel.data` ``DisplayRole`` so the
+    popup's checkbox list and the proxy filter agree on the cell value.
+    """
+    if source_row < 0 or source_row >= len(model._entities):
+        return ""
+    ent = model._entities[source_row]
+    if column == COL_RECORD:
+        return str(ent.get("_control_number", "") or "")
+    if column == COL_TEXT:
+        return str(ent.get("text", "") or "")
+    if column == COL_TYPE:
+        return str(ent.get("type", "") or "")
+    if column == COL_ROLE:
+        return str(ent.get("role", "") or "")
+    if column == COL_CONF:
+        c = float(ent.get("confidence") or 0.0)
+        return f"{c:.2f}" if c else ""
+    if column == MODEL_CONF:
+        m = float(ent.get("model_confidence") or 0.0)
+        return f"{m:.2f}" if m else ""
+    if column == COL_SOURCE:
+        return str(ent.get("source", "") or "")
+    if column == COL_EXISTS_IN:
+        evidence = ent.get("exists_in") or []
+        if not evidence:
+            return "—"
+        fields: list[str] = []
+        for rec in evidence:
+            if not isinstance(rec, dict):
+                continue
+            f = str(rec.get("field", "") or "")
+            if f and f not in fields:
+                fields.append(f)
+        return ", ".join(fields) if fields else "—"
+    if column == COL_APPROVED:
+        return "approved" if ent.get("approved", False) else "pending"
+    if column == COL_ACTIONS:
+        return ""
+    return ""
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1892,6 +1980,15 @@ class ExtractionEditor(QWidget):
         self._revert_btn.clicked.connect(self._on_revert)
         header.addWidget(self._revert_btn)
 
+        # Rule 49 §E — clear every per-column filter at once. Independent
+        # of the source / type / role chip filter below.
+        self._clear_col_filters_btn = QPushButton("🗑 Clear column filters")
+        self._clear_col_filters_btn.setStyleSheet(theme.ghost_button_style())
+        self._clear_col_filters_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_col_filters_btn.clicked.connect(self._on_clear_column_filters)
+        self._clear_col_filters_btn.setEnabled(False)
+        header.addWidget(self._clear_col_filters_btn)
+
         self._save_btn = QPushButton("Save")
         self._save_btn.setStyleSheet(theme.success_btn_style())
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1961,6 +2058,32 @@ class ExtractionEditor(QWidget):
         # on COL_TEXT absorbs slack on wide screens; on narrow screens this
         # adds a horizontal scrollbar instead of clipping the right edge.
         theme.install_table_overflow_scroll(self._table)
+
+        # Rule 49 §E — per-column value filters via right-click header menu.
+        from mhm_pipeline.gui.widgets.column_filter_popup import (  # noqa: PLC0415
+            install_column_filters,
+        )
+
+        def _distinct_values_for_ner_col(col: int) -> list[str]:
+            seen: set[str] = set()
+            for i in range(len(self._model._entities)):
+                seen.add(entity_cell_value_for_filter(self._model, i, col))
+            return sorted(seen, key=lambda s: (s != "", s.lower(), s))
+
+        def _counts_for_ner_col(col: int) -> dict[str, int]:
+            counts: dict[str, int] = {}
+            for i in range(len(self._model._entities)):
+                v = entity_cell_value_for_filter(self._model, i, col)
+                counts[v] = counts.get(v, 0) + 1
+            return counts
+
+        install_column_filters(
+            self._table,
+            self._proxy,
+            distinct_values_for=_distinct_values_for_ner_col,
+            counts_for=_counts_for_ner_col,
+            on_filter_changed=self._update_stats,
+        )
 
         layout.addWidget(self._table, stretch=1)
 
@@ -2258,6 +2381,19 @@ class ExtractionEditor(QWidget):
             self._stats_label.setText(
                 f"{visible} of {total} visible · {approved} approved ({pct:.0f}%){dirty}"
             )
+        # Rule 49 §E — clear-column-filters button reflects active state.
+        clear_btn = getattr(self, "_clear_col_filters_btn", None)
+        if clear_btn is not None and isinstance(self._proxy, EntityFilterProxy):
+            clear_btn.setEnabled(self._proxy.has_any_column_filter())
+
+    def _on_clear_column_filters(self) -> None:
+        """Slot wired to the 🗑 Clear column filters button. Drops every
+        per-column include-set without touching the chip-row dimension
+        filter (Rule 49 §E)."""
+        if isinstance(self._proxy, EntityFilterProxy):
+            self._proxy.clear_all_column_filters()
+            self._refresh_action_widgets()
+            self._update_stats()
 
     def _on_search(self, text: str) -> None:
         self._proxy.setFilterFixedString(text)
