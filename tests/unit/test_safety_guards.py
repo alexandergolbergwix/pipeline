@@ -7699,5 +7699,528 @@ class TestMarcEvidenceSearch:
         assert out[0]["exists_in"] == []
 
 
+# ── Rule 49 — MARC field-coverage expansion + Wikidata date backfill ─────
+
+
+class TestHandle752Hierarchical:
+    """MARC 752 (hierarchical place name) — new in Rule 49.
+
+    Returns ``{"place": <most-specific>, "hierarchy": [...], ...}`` so
+    Stage 3 can route the most-specific component through KIMA while
+    keeping the full hierarchy for display.
+    """
+
+    def _field(self, subfields: dict[str, str]) -> object:
+        m = MagicMock()
+        m.tag = "752"
+        m.get_subfield.side_effect = lambda code: subfields.get(code)
+        return m
+
+    def test_752_prefers_city_over_country(self) -> None:
+        from converter.transformer.field_handlers import FieldHandlers
+        out = FieldHandlers.handle_752(self._field({"a": "France", "d": "Paris"}))
+        assert out["place"] == "Paris"
+        assert out["country"] == "France"
+        assert out["city"] == "Paris"
+        assert "Paris" in out["hierarchy"]
+        assert "France" in out["hierarchy"]
+
+    def test_752_falls_back_to_region_then_state_then_country(self) -> None:
+        from converter.transformer.field_handlers import FieldHandlers
+        out = FieldHandlers.handle_752(self._field({"a": "Italy", "c": "Tuscany"}))
+        assert out["place"] == "Tuscany"
+        # Country-only:
+        out = FieldHandlers.handle_752(self._field({"a": "Germany"}))
+        assert out["place"] == "Germany"
+
+    def test_752_empty_field_returns_none_place(self) -> None:
+        from converter.transformer.field_handlers import FieldHandlers
+        out = FieldHandlers.handle_752(self._field({}))
+        assert out["place"] is None
+        assert out["hierarchy"] == []
+
+
+class TestHandle800810811SeriesEntries:
+    """MARC 800/810/811 series added entries — new in Rule 49."""
+
+    def _field(self, tag: str, subfields: dict[str, str]) -> object:
+        m = MagicMock()
+        m.tag = tag
+        m.get_subfield.side_effect = lambda code: subfields.get(code)
+        return m
+
+    def test_handle_800_carries_name_and_field_annotation(self) -> None:
+        from converter.transformer.field_handlers import FieldHandlers
+        out = FieldHandlers.handle_800(self._field("800", {"a": "Maimonides", "4": "aut"}))
+        assert out.get("name")
+        assert "Maimonides" in str(out.get("name"))
+        assert out.get("field") == "800"
+        assert out.get("relator_code") == "aut"
+
+    def test_handle_810_returns_corporate_name(self) -> None:
+        from converter.transformer.field_handlers import FieldHandlers
+        out = FieldHandlers.handle_810(self._field("810", {"a": "Jewish Theological Seminary"}))
+        assert out.get("name")
+        assert out.get("field") == "810"
+
+    def test_handle_811_returns_meeting_name(self) -> None:
+        from converter.transformer.field_handlers import FieldHandlers
+        out = FieldHandlers.handle_811(self._field("811", {"a": "World Congress of Jewish Studies"}))
+        assert out.get("name")
+        assert out.get("field") == "811"
+
+
+class TestMarcSubjectCoverage:
+    """Rule 49 — ``_match_marc_persons`` consumes ``record["subjects"]``."""
+
+    def _make_worker(self):  # type: ignore[no-untyped-def]
+        from mhm_pipeline.controller.workers import AuthorityWorker
+        return AuthorityWorker(
+            input_path=pathlib.Path("/tmp/_unused_marc.json"),
+            output_dir=pathlib.Path("/tmp"),
+            ner_path=None,
+            enable_viaf=True,
+            enable_kima=False,
+        )
+
+    def _make_mazal_mock(self, mazal_id: str | None = None) -> MagicMock:
+        m = MagicMock()
+        m.match_person.return_value = mazal_id
+        m.get_person_details.return_value = {}
+        return m
+
+    def _make_viaf_mock(self, viaf_uri: str | None = None) -> MagicMock:
+        v = MagicMock()
+        v.match_person.return_value = viaf_uri
+        v.get_cluster_identifiers.return_value = {}
+        v.get_cluster_raw.return_value = None
+        return v
+
+    def test_subject_person_field_600_reaches_matcher(self) -> None:
+        """A 600-subject person feeds ``_match_marc_person_entry`` with
+        ``field='600'`` and ``role='subject'``."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        marc_by_cn = {
+            "990001": {
+                "_control_number": "990001",
+                "authors": [],
+                "contributors": [],
+                "subjects": [
+                    {"term": "משה בן מימון", "type": "person", "dates": "1138-1204"},
+                ],
+                "dates": {"year": 1650},
+            }
+        }
+        worker = self._make_worker()
+        mazal = self._make_mazal_mock("987001234567890")
+        viaf = self._make_viaf_mock(None)
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value=None),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value=None),
+            patch.object(WikidataMatcher, "find_dates_by_qid", return_value=(None, None)),
+            patch.object(WikidataMatcher, "last_match_was_latin_only", return_value=False),
+            patch.object(
+                AuthorityWorker, "_match_marc_person_entry", autospec=True,
+            ) as spy,
+        ):
+            spy.return_value = None
+            worker._match_marc_persons(
+                control_number="990001",
+                marc_by_cn=marc_by_cn,
+                mazal=mazal,
+                viaf=viaf,
+                wd_matcher=WikidataMatcher(),
+            )
+        # Spy was called for the subject row with field="600", role="subject".
+        subject_calls = [
+            c for c in spy.call_args_list
+            if c.kwargs.get("field") == "600" and c.kwargs.get("role") == "subject"
+        ]
+        assert subject_calls, f"No 600 subject call recorded; got {spy.call_args_list}"
+        person_arg = subject_calls[0].kwargs["person"]
+        assert person_arg["name"] == "משה בן מימון"
+        assert person_arg["type"] == "person"
+
+    def test_subject_org_field_610_reaches_matcher(self) -> None:
+        """A 610-subject organisation feeds ``_match_marc_person_entry`` with
+        ``field='610'``."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        marc_by_cn = {
+            "990002": {
+                "_control_number": "990002",
+                "authors": [],
+                "contributors": [],
+                "subjects": [
+                    {"term": "National Library of Israel", "type": "organization"},
+                ],
+                "dates": {},
+            }
+        }
+        worker = self._make_worker()
+        mazal = self._make_mazal_mock(None)
+        viaf = self._make_viaf_mock(None)
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value=None),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value=None),
+            patch.object(WikidataMatcher, "find_dates_by_qid", return_value=(None, None)),
+            patch.object(
+                AuthorityWorker, "_match_marc_person_entry", autospec=True,
+            ) as spy,
+        ):
+            spy.return_value = None
+            worker._match_marc_persons(
+                control_number="990002",
+                marc_by_cn=marc_by_cn,
+                mazal=mazal,
+                viaf=viaf,
+                wd_matcher=WikidataMatcher(),
+            )
+        org_calls = [
+            c for c in spy.call_args_list
+            if c.kwargs.get("field") == "610"
+        ]
+        assert org_calls, "No 610 organisation match call"
+        assert org_calls[0].kwargs["person"]["type"] == "organization"
+
+    def test_topic_subjects_are_skipped(self) -> None:
+        """``type='topic'`` subjects (650 topical) are NOT routed through
+        the person matcher — they aren't person/org entities."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        marc_by_cn = {
+            "990003": {
+                "_control_number": "990003",
+                "authors": [],
+                "contributors": [],
+                "subjects": [
+                    {"term": "Jewish prayer", "type": "topic"},
+                    {"term": "Hebrew language", "type": "topic"},
+                ],
+                "dates": {},
+            }
+        }
+        worker = self._make_worker()
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value=None),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value=None),
+            patch.object(
+                AuthorityWorker, "_match_marc_person_entry", autospec=True,
+            ) as spy,
+        ):
+            spy.return_value = None
+            worker._match_marc_persons(
+                control_number="990003",
+                marc_by_cn=marc_by_cn,
+                mazal=self._make_mazal_mock(None),
+                viaf=self._make_viaf_mock(None),
+                wd_matcher=WikidataMatcher(),
+            )
+        assert spy.call_args_list == [], "Topic subjects must NOT trigger matching"
+
+    def test_series_added_entry_carries_field_annotation_into_match(self) -> None:
+        """A contributor dict carrying ``field='800'`` (from ``handle_800``)
+        reaches the matcher tagged with the actual MARC tag, not the
+        generic ``'700/710/711'`` label."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+        from mhm_pipeline.controller.workers import AuthorityWorker
+
+        marc_by_cn = {
+            "990004": {
+                "_control_number": "990004",
+                "authors": [],
+                "contributors": [
+                    {"name": "Maimonides", "field": "800", "type": "person"},
+                ],
+                "subjects": [],
+                "dates": {},
+            }
+        }
+        worker = self._make_worker()
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value=None),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value=None),
+            patch.object(
+                AuthorityWorker, "_match_marc_person_entry", autospec=True,
+            ) as spy,
+        ):
+            spy.return_value = None
+            worker._match_marc_persons(
+                control_number="990004",
+                marc_by_cn=marc_by_cn,
+                mazal=self._make_mazal_mock(None),
+                viaf=self._make_viaf_mock(None),
+                wd_matcher=WikidataMatcher(),
+            )
+        # Find the call for the series contributor.
+        series_calls = [
+            c for c in spy.call_args_list
+            if c.kwargs.get("field") == "800"
+        ]
+        assert series_calls, (
+            f"Series contributor with field='800' must reach matcher with "
+            f"field='800'; got calls {[c.kwargs.get('field') for c in spy.call_args_list]}"
+        )
+        assert series_calls[0].kwargs.get("role") == "series_contributor"
+
+
+class TestMarcPlaceCoverage:
+    """Rule 49 — geographic subjects (651) + hierarchical places (752) reach KIMA."""
+
+    def _make_worker(self):  # type: ignore[no-untyped-def]
+        from mhm_pipeline.controller.workers import AuthorityWorker
+        return AuthorityWorker(
+            input_path=pathlib.Path("/tmp/_unused_marc.json"),
+            output_dir=pathlib.Path("/tmp"),
+            ner_path=None,
+            enable_viaf=False,
+            enable_kima=True,
+        )
+
+    def test_651_geographic_subject_routed_to_kima(self) -> None:
+        marc_by_cn = {
+            "990010": {
+                "_control_number": "990010",
+                "related_places": [],
+                "subjects": [
+                    {"term": "Jerusalem", "type": "place"},
+                ],
+            }
+        }
+        kima = MagicMock()
+        kima.match_place.return_value = "https://www.wikidata.org/entity/Q1218"
+
+        worker = self._make_worker()
+        result = worker._match_marc_places(
+            control_number="990010",
+            marc_by_cn=marc_by_cn,
+            kima=kima,
+        )
+        assert result is not None
+        assert "Jerusalem" in result
+        kima.match_place.assert_called_once_with("Jerusalem")
+
+    def test_752_hierarchical_place_already_in_related_places_reaches_kima(self) -> None:
+        """``handle_752`` writes the most-specific component into
+        ``related_places`` during extraction, so the place-matcher loop
+        already sees it without any further wiring."""
+        marc_by_cn = {
+            "990011": {
+                "_control_number": "990011",
+                "related_places": ["Tunis"],  # produced by handle_752
+                "subjects": [],
+            }
+        }
+        kima = MagicMock()
+        kima.match_place.return_value = "https://www.wikidata.org/entity/Q3572"
+        worker = self._make_worker()
+        result = worker._match_marc_places(
+            control_number="990011",
+            marc_by_cn=marc_by_cn,
+            kima=kima,
+        )
+        assert result == {"Tunis": "https://www.wikidata.org/entity/Q3572"}
+
+    def test_651_and_related_places_dedup(self) -> None:
+        """When the same place name appears in both ``related_places`` and
+        ``subjects[type='place']``, KIMA is queried ONCE."""
+        marc_by_cn = {
+            "990012": {
+                "_control_number": "990012",
+                "related_places": ["Jerusalem"],
+                "subjects": [{"term": "Jerusalem", "type": "place"}],
+            }
+        }
+        kima = MagicMock()
+        kima.match_place.return_value = "https://www.wikidata.org/entity/Q1218"
+        worker = self._make_worker()
+        worker._match_marc_places(
+            control_number="990012",
+            marc_by_cn=marc_by_cn,
+            kima=kima,
+        )
+        assert kima.match_place.call_count == 1
+
+
+class TestSubjectPersonDateGuard:
+    """Rule 49 — ``role='subject'`` skips death-side date check but keeps birth check."""
+
+    def test_subject_role_does_not_trigger_death_check(self) -> None:
+        """A subject person who died centuries before the manuscript must
+        NOT be rejected — the manuscript is ABOUT them, not authored BY
+        them. Only ``PHYSICAL_PRODUCTION_ROLES`` get the death gate."""
+        from converter.authority.stage3_guards import evaluate_date_conflict
+        # Maimonides d.1204, 18th-century manuscript ABOUT him.
+        reason = evaluate_date_conflict(
+            role="subject",
+            ms_year=1750,
+            person_birth_year=1138,
+            person_death_year=1204,
+        )
+        assert reason is None
+
+    def test_subject_role_still_rejects_post_ms_birth(self) -> None:
+        """Universal birth check still fires for subjects: a manuscript
+        cannot be ABOUT someone born long after it was made."""
+        from converter.authority.stage3_guards import evaluate_date_conflict
+        reason = evaluate_date_conflict(
+            role="subject",
+            ms_year=1500,
+            person_birth_year=1700,
+            person_death_year=None,
+        )
+        assert reason is not None
+        assert "1700" in reason and "1500" in reason
+
+    def test_subject_role_allows_birth_within_buffer(self) -> None:
+        """The 5-year birth buffer (``DATE_BIRTH_BUFFER_YEARS``) applies
+        across roles, including ``subject``."""
+        from converter.authority.stage3_guards import evaluate_date_conflict
+        reason = evaluate_date_conflict(
+            role="subject",
+            ms_year=1500,
+            person_birth_year=1504,  # within the 5y buffer
+            person_death_year=None,
+        )
+        assert reason is None
+
+
+class TestWikidataDateBackfill:
+    """Rule 49 — Wikidata P569/P570 feed the Stage 3 date-conflict guard.
+
+    The integration in ``_match_marc_person_entry``:
+      1. Resolve a candidate via Step 4 (find_qid_by_viaf / find_qid_by_mazal),
+         Step 4a (canonical-QID preference), Step 4b (VIAF backfill) or
+         Step 5 (Hebrew label fallback).
+      2. Call ``WikidataMatcher.find_dates_by_qid`` and fall through
+         VIAF → Mazal → Wikidata precedence into ``person_birth_year`` /
+         ``person_death_year`` passed to ``evaluate_match``.
+    """
+
+    def _make_worker(self):  # type: ignore[no-untyped-def]
+        from mhm_pipeline.controller.workers import AuthorityWorker
+        return AuthorityWorker(
+            input_path=pathlib.Path("/tmp/_unused.json"),
+            output_dir=pathlib.Path("/tmp"),
+            ner_path=None,
+            enable_viaf=True,
+            enable_kima=False,
+        )
+
+    def _make_mazal_mock(self) -> MagicMock:
+        m = MagicMock()
+        m.match_person.return_value = None
+        m.get_person_details.return_value = {}
+        return m
+
+    def _make_viaf_mock(self, viaf_uri: str | None = None) -> MagicMock:
+        v = MagicMock()
+        v.match_person.return_value = viaf_uri
+        v.get_cluster_identifiers.return_value = {}
+        v.get_cluster_raw.return_value = None
+        return v
+
+    def test_wikidata_only_candidate_surfaces_dates_into_match_info(self) -> None:
+        """Step 5 fallback yields a QID; Wikidata is the SOLE date source.
+        ``birth_year`` and ``death_year`` must appear on match_info so
+        downstream consumers see the data."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+
+        worker = self._make_worker()
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value=None),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value="Q189554"),
+            patch.object(WikidataMatcher, "find_dates_by_qid", return_value=(1138, 1204)),
+            patch.object(WikidataMatcher, "last_match_was_latin_only", return_value=False),
+        ):
+            result = worker._match_marc_person_entry(
+                person={"name": "משה בן מימון", "type": "person"},
+                role="author",
+                field="100",
+                mazal=self._make_mazal_mock(),
+                viaf=self._make_viaf_mock(None),
+                ms_year=1650,
+                wd_matcher=WikidataMatcher(),
+            )
+        assert result is not None
+        assert result.get("wikidata_qid") == "Q189554"
+        assert result.get("birth_year") == 1138
+        assert result.get("death_year") == 1204
+
+    def test_wikidata_date_triggers_guard_when_birth_postdates_ms(self) -> None:
+        """A Wikidata-only candidate born 200 years after the manuscript
+        must be REJECTED by Guard 1, with VIAF cleared and a
+        ``date_conflict`` flag on the verdict."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+
+        worker = self._make_worker()
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value=None),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value="Q888888"),
+            patch.object(WikidataMatcher, "find_dates_by_qid", return_value=(1700, 1770)),
+            patch.object(WikidataMatcher, "last_match_was_latin_only", return_value=False),
+        ):
+            result = worker._match_marc_person_entry(
+                person={"name": "Sebastian Mueller", "type": "person"},
+                role="author",
+                field="100",
+                mazal=self._make_mazal_mock(),
+                viaf=self._make_viaf_mock(None),
+                ms_year=1500,  # MS predates the candidate's birth by 200y
+                wd_matcher=WikidataMatcher(),
+            )
+        # The guard must flag date_conflict and surface a rejection_reason.
+        assert result is not None
+        flags = result.get("guard_flags") or []
+        assert "date_conflict" in flags, (
+            f"Expected date_conflict flag from Wikidata-sourced dates; got {flags}"
+        )
+
+    def test_viaf_dates_take_precedence_over_wikidata(self) -> None:
+        """When VIAF supplies birth/death years, they trump Wikidata
+        regardless of agreement. Wikidata only fills in when VIAF (and
+        Mazal) have no values."""
+        from converter.authority.wikidata_matcher import WikidataMatcher
+
+        worker = self._make_worker()
+        viaf = self._make_viaf_mock("https://viaf.org/viaf/100184235")
+        viaf.get_cluster_identifiers.return_value = {
+            "birth_date": "1138-03-30",
+            "death_date": "1204-12-13",
+        }
+        with (
+            patch.object(WikidataMatcher, "find_qid_by_viaf", return_value="Q189554"),
+            patch.object(WikidataMatcher, "find_qid_by_mazal", return_value=None),
+            patch.object(WikidataMatcher, "match_person", return_value=None),
+            # Wikidata reports DIFFERENT dates — must be ignored because
+            # VIAF wins the precedence ladder.
+            patch.object(WikidataMatcher, "find_dates_by_qid", return_value=(999, 999)),
+            patch.object(WikidataMatcher, "last_match_was_latin_only", return_value=False),
+        ):
+            result = worker._match_marc_person_entry(
+                person={"name": "משה בן מימון", "type": "person"},
+                role="author",
+                field="100",
+                mazal=self._make_mazal_mock(),
+                viaf=viaf,
+                ms_year=1300,  # well within the (1138-1204) window
+                wd_matcher=WikidataMatcher(),
+            )
+        assert result is not None
+        # No date_conflict because VIAF's 1138-1204 is consistent with ms_year=1300.
+        flags = result.get("guard_flags") or []
+        assert "date_conflict" not in flags
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

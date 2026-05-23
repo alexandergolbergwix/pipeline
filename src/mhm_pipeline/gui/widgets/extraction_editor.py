@@ -345,6 +345,121 @@ def _build_exists_in_tooltip(
     )
 
 
+# Human-readable labels for the NER source channels surfaced by Stage 2.
+_NER_SOURCE_LABELS: dict[str, str] = {
+    "person_ner":      "Person NER (alexgoldberg/hebrew-manuscript-joint-ner-v2, F1 85.7 %)",
+    "provenance_ner":  "Provenance NER v2 (ner/provenance_ner_model.pt, F1 95.9 %)",
+    "contents_ner":    "Contents NER (ner/contents_ner_model.pt, F1 99.9 %)",
+    "genre_ml":        "Genre classifier (distant-supervision DictaBERT, micro-F1 0.88)",
+}
+
+
+def _ner_confidence_band(score: float) -> tuple[str, str]:
+    """Map a 0–1 model confidence into ``(label, colour-hex)``."""
+    if score >= 0.85:
+        return ("HIGH", "#16a34a")
+    if score >= 0.6:
+        return ("MEDIUM", "#d97706")
+    if score > 0:
+        return ("LOW", "#dc2626")
+    return ("UNSCORED", "#6b7280")
+
+
+def _build_ner_keyword_conf_tooltip(ent: dict) -> str:
+    """Tooltip for the ``Conf.`` (keyword-classifier) column.
+
+    The keyword-classifier signal is two-bucket: 0.85 when a role-keyword
+    matched in the surrounding text, 0.60 otherwise (Rule 41). Stage 3
+    guards key on this score, not on the BIO model softmax.
+    """
+    bg, text, subtle = _tooltip_colours()
+    score = float(ent.get("confidence") or 0.0)
+    label, colour = _ner_confidence_band(score)
+    role = str(ent.get("role") or "")
+    source = str(ent.get("source") or "")
+    source_label = _NER_SOURCE_LABELS.get(source, source or "—")
+
+    bucket_explanation = (
+        "Role-keyword matched in the surrounding MARC text → 0.85 bucket."
+        if score >= 0.85
+        else "No role-keyword match → 0.60 fallback bucket."
+        if score >= 0.6
+        else "No score available."
+    )
+
+    parts: list[str] = [
+        f'<div style="background:{bg}; color:{text};'
+        f' padding:8px 12px; border-radius:6px; max-width:420px;">',
+        f'<div style="font-weight:600; color:{colour}; margin-bottom:6px;">'
+        f'Keyword classifier: {label} ({score:.2f})'
+        f'</div>',
+        f'<div style="color:{subtle}; line-height:1.4;">{_esc(bucket_explanation)}</div>',
+    ]
+    if role:
+        parts.append(
+            f'<div style="margin-top:6px;"><b>Predicted role:</b> {_esc(role)}</div>'
+        )
+    if source:
+        parts.append(
+            f'<div style="margin-top:4px; color:{subtle};">'
+            f'<b>Source channel:</b> {_esc(source_label)}'
+            f'</div>'
+        )
+    parts.append(
+        f'<div style="color:{subtle}; margin-top:8px; font-size:11px;">'
+        f'See the Model Conf. column for the BIO softmax probability '
+        f'averaged across the entity\'s tokens.'
+        f'</div>'
+    )
+    parts.append('</div>')
+    return "".join(parts)
+
+
+def _build_ner_model_conf_tooltip(ent: dict) -> str:
+    """Tooltip for the ``Model Conf.`` (BIO softmax) column.
+
+    This is the real model probability averaged across the tokens that
+    make up the entity span. Use it for auto-approve rules.
+    """
+    bg, text, subtle = _tooltip_colours()
+    score = float(ent.get("model_confidence") or 0.0)
+    label, colour = _ner_confidence_band(score)
+    etype = str(ent.get("type") or "")
+    source = str(ent.get("source") or "")
+    source_label = _NER_SOURCE_LABELS.get(source, source or "—")
+
+    parts: list[str] = [
+        f'<div style="background:{bg}; color:{text};'
+        f' padding:8px 12px; border-radius:6px; max-width:420px;">',
+        f'<div style="font-weight:600; color:{colour}; margin-bottom:6px;">'
+        f'Model confidence: {label} ({score:.2f})'
+        f'</div>',
+        f'<div style="color:{subtle}; line-height:1.4;">'
+        f'BIO softmax probability averaged across the entity\'s tokens '
+        f'(Rule 41 — model_confidence channel).'
+        f'</div>',
+    ]
+    if etype:
+        parts.append(
+            f'<div style="margin-top:6px;"><b>Entity type:</b> {_esc(etype)}</div>'
+        )
+    if source:
+        parts.append(
+            f'<div style="margin-top:4px; color:{subtle};">'
+            f'<b>Source channel:</b> {_esc(source_label)}'
+            f'</div>'
+        )
+    parts.append(
+        f'<div style="color:{subtle}; margin-top:8px; font-size:11px;">'
+        f'High ≥ 0.85 — auto-approve safe. '
+        f'Medium 0.60–0.85 — review. '
+        f'Low &lt; 0.60 — likely false positive.'
+        f'</div>'
+    )
+    parts.append('</div>')
+    return "".join(parts)
+
+
 class EditableEntityModel(QAbstractTableModel):
     """Table model for editable NER entity data.
 
@@ -517,6 +632,14 @@ class EditableEntityModel(QAbstractTableModel):
             full = str(ent.get("text") or "")
             if full:
                 return _build_entity_text_tooltip(full)
+
+        # Confidence tooltips — explain HOW each score was calculated.
+        # COL_CONF carries the keyword-classifier signal; MODEL_CONF
+        # carries the BIO transformer softmax.
+        if role == Qt.ItemDataRole.ToolTipRole and col == COL_CONF:
+            return _build_ner_keyword_conf_tooltip(ent)
+        if role == Qt.ItemDataRole.ToolTipRole and col == MODEL_CONF:
+            return _build_ner_model_conf_tooltip(ent)
 
         # Display / edit values
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):

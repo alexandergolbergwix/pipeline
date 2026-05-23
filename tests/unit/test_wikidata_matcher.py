@@ -420,5 +420,131 @@ def test_disable_kill_switch_via_env_var(monkeypatch: pytest.MonkeyPatch) -> Non
         assert matcher.match_work("ספר הזוהר") is None
         assert matcher.find_qid_by_viaf("12345678") is None
         assert matcher.find_qid_by_mazal("987654") is None
+        # Rule 49: ``find_dates_by_qid`` honours the same kill switch.
+        assert matcher.find_dates_by_qid("Q42") == (None, None)
 
+    assert mock_get.call_count == 0
+
+
+# ── find_dates_by_qid (Rule 49: Wikidata P569/P570 backfill) ─────────
+
+
+def _dates_payload(births: list[str], deaths: list[str]) -> dict[str, Any]:
+    """Build a multi-OPTIONAL SPARQL response with paired ?birth / ?death rows.
+
+    The matcher iterates each ``?var`` independently via
+    :func:`_extract_literal_values`, so the row pairing doesn't matter —
+    only the set of literal values per variable. We pad the shorter
+    list with absent bindings to keep the row count consistent.
+    """
+    rows: list[dict[str, Any]] = []
+    n = max(len(births), len(deaths))
+    for i in range(n):
+        row: dict[str, Any] = {}
+        if i < len(births):
+            row["birth"] = {"type": "literal", "value": births[i]}
+        if i < len(deaths):
+            row["death"] = {"type": "literal", "value": deaths[i]}
+        rows.append(row)
+    return {
+        "head": {"vars": ["birth", "death"]},
+        "results": {"bindings": rows},
+    }
+
+
+def test_find_dates_by_qid_single_birth_and_death() -> None:
+    """Rule 49: one P569 row + one P570 row → ``(birth_year, death_year)``."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _dates_payload(
+        births=["1138-01-01T00:00:00Z"],
+        deaths=["1204-12-13T00:00:00Z"],
+    )
+    with patch.object(requests.Session, "get", return_value=_ok(payload)) as mock_get:
+        result = WikidataMatcher().find_dates_by_qid("Q189554")
+
+    assert result == (1138, 1204)
+    sent_query = mock_get.call_args.kwargs.get("params", {}).get("query", "")
+    assert "wdt:P569" in sent_query
+    assert "wdt:P570" in sent_query
+    assert "wd:Q189554" in sent_query
+
+
+def test_find_dates_by_qid_only_birth() -> None:
+    """Living person: P569 present, P570 absent → ``(birth, None)``."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _dates_payload(births=["1980-05-12T00:00:00Z"], deaths=[])
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_dates_by_qid("Q123")
+
+    assert result == (1980, None)
+
+
+def test_find_dates_by_qid_abstains_on_disagreement() -> None:
+    """Two distinct P569 values on the same QID → abstain (return None).
+
+    Mirrors the abstain-on-disagreement rule of ``find_viaf_by_qid``.
+    A consensus death year still propagates even when birth disagrees.
+    """
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _dates_payload(
+        births=["1138-01-01T00:00:00Z", "1135-01-01T00:00:00Z"],
+        deaths=["1204-12-13T00:00:00Z", "1204-12-13T00:00:00Z"],
+    )
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_dates_by_qid("Q189554")
+
+    assert result == (None, 1204)  # birth abstained, death consensus
+
+
+def test_find_dates_by_qid_caches() -> None:
+    """Subsequent calls for the same QID must not re-hit SPARQL."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _dates_payload(
+        births=["1138-01-01T00:00:00Z"],
+        deaths=["1204-12-13T00:00:00Z"],
+    )
+    with patch.object(requests.Session, "get", return_value=_ok(payload)) as mock_get_1:
+        first = WikidataMatcher().find_dates_by_qid("Q42")
+    assert first == (1138, 1204)
+    assert mock_get_1.call_count == 1
+
+    with patch.object(requests.Session, "get") as mock_get_2:
+        second = WikidataMatcher().find_dates_by_qid("Q42")
+    assert second == (1138, 1204)
+    assert mock_get_2.call_count == 0
+
+
+def test_find_dates_by_qid_returns_pair_of_none_for_unparseable_dates() -> None:
+    """When SPARQL returns a string that isn't a parseable year, both
+    components surface as None — never crashes, never raises."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = _dates_payload(births=["unparseable"], deaths=["also bad"])
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_dates_by_qid("Q42")
+    assert result == (None, None)
+
+
+def test_find_dates_by_qid_handles_empty_results() -> None:
+    """Empty bindings list → ``(None, None)``."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    payload = {"head": {"vars": ["birth", "death"]}, "results": {"bindings": []}}
+    with patch.object(requests.Session, "get", return_value=_ok(payload)):
+        result = WikidataMatcher().find_dates_by_qid("Q9999")
+    assert result == (None, None)
+
+
+def test_find_dates_by_qid_empty_qid_returns_none_pair_without_http() -> None:
+    """Defensive: empty/falsy QID short-circuits — no SPARQL call."""
+    from converter.authority.wikidata_matcher import WikidataMatcher
+
+    with patch.object(requests.Session, "get") as mock_get:
+        result = WikidataMatcher().find_dates_by_qid("")
+
+    assert result == (None, None)
     assert mock_get.call_count == 0

@@ -1083,6 +1083,27 @@ class AuthorityWorker(StageWorker):
             except Exception as exc:  # defensive
                 logger.debug("WikidataMatcher label fallback failed for %s: %s", name, exc)
 
+        # ── Step 5b — backfill biographical years from Wikidata QID ─────
+        # When any path (Step 4, 4a, 4b, or 5) resolved a Wikidata QID,
+        # query ``wdt:P569`` / ``wdt:P570`` so the Stage 3 date-conflict
+        # guard has something to check on Wikidata-only candidates
+        # (CLAUDE.md Rule 49). Surfaced into ``match_info`` further down
+        # alongside VIAF/Mazal values.
+        wd_birth: int | None = None
+        wd_death: int | None = None
+        if (
+            wd_matcher is not None
+            and wikidata_qid is not None
+            and entity_type == "person"
+        ):
+            try:
+                wd_birth, wd_death = wd_matcher.find_dates_by_qid(wikidata_qid)
+            except Exception as exc:  # defensive
+                logger.debug(
+                    "WikidataMatcher.find_dates_by_qid failed for %s: %s",
+                    wikidata_qid, exc,
+                )
+
         # ``source`` is derived from the IDs that survive the verdict
         # (see the "Derive authority source" block below). The empty
         # placeholder here is overwritten then.
@@ -1159,10 +1180,19 @@ class AuthorityWorker(StageWorker):
         # ── Stage 3 guards 1, 2, 5 ───────────────────────────────────────
         from converter.authority.stage3_guards import evaluate_match  # noqa: PLC0415
 
-        # Prefer VIAF biographical years (more authoritative + machine-checked
-        # against the cluster) but fall back to Mazal when VIAF has none.
-        person_birth = viaf_birth if viaf_birth is not None else mazal_birth
-        person_death = viaf_death if viaf_death is not None else mazal_death
+        # Prefer VIAF biographical years (machine-checked against the
+        # cluster), fall back to Mazal, then Wikidata (P569/P570). The
+        # Wikidata path lets the Stage 3 date-conflict guard fire on
+        # candidates resolved purely via SPARQL — without this fallback
+        # such candidates bypassed the guard entirely.
+        person_birth = viaf_birth or mazal_birth or wd_birth
+        person_death = viaf_death or mazal_death or wd_death
+        # When Wikidata was the only source of dates, surface into
+        # match_info so QuickStatements / downstream consumers see them.
+        if wd_birth is not None and "birth_year" not in match_info:
+            match_info["birth_year"] = wd_birth
+        if wd_death is not None and "death_year" not in match_info:
+            match_info["death_year"] = wd_death
         # Pick the most-disambiguating Latin form for guard 2.
         preferred_lat_for_guard = match_info.get("preferred_name_lat") or viaf_preferred_lat
         # Detect MARC 100$d / 700$d biographical date subfield in source name.
@@ -1433,10 +1463,55 @@ class AuthorityWorker(StageWorker):
 
         # Match contributors (700, 710 fields)
         for contributor in marc_rec.get("contributors") or []:
+            # Series added entries (800/810/811) inject a ``field``
+            # annotation in :mod:`field_handlers`; honour it so the
+            # match row reports the actual MARC tag rather than the
+            # generic 700/710/711 label.
+            contributor_field = str(contributor.get("field") or "")
+            if contributor_field in {"800", "810", "811"}:
+                field_label = contributor_field
+                role_label = "series_contributor"
+            else:
+                field_label = "700/710/711"
+                role_label = "contributor"
             result = self._match_marc_person_entry(
                 person=contributor,
-                role="contributor",
-                field="700/710/711",
+                role=role_label,
+                field=field_label,
+                mazal=mazal,
+                viaf=viaf,
+                ms_year=ms_year,
+                over_merge_table=over_merge_table,
+                ms_title=ms_title,
+                ms_place=ms_place,
+                wd_matcher=wd_matcher,
+                on_substep=on_substep,
+            )
+            if result:
+                matches.append(result)
+
+        # Subject persons / organizations from MARC 600 / 610 (CLAUDE.md
+        # Rule 49). The manuscript is ABOUT this person / org rather
+        # than authored / contributed by them, so the death-side check
+        # in :func:`stage3_guards.evaluate_date_conflict` is silent for
+        # ``role="subject"``. The universal birth-year check still
+        # fires: a manuscript cannot be ABOUT someone born after it
+        # was made by more than ``DATE_BIRTH_BUFFER_YEARS``.
+        for subject in marc_rec.get("subjects") or []:
+            s_type = str(subject.get("type", ""))
+            if s_type not in {"person", "organization"}:
+                continue
+            subject_person = {
+                "name": subject.get("term"),
+                "role": "subject",
+                "type": s_type,
+                "dates": subject.get("dates"),
+            }
+            field_tag = "600" if s_type == "person" else "610"
+            result = self._match_marc_person_entry(
+                person=subject_person,
+                role="subject",
+                field=field_tag,
                 mazal=mazal,
                 viaf=viaf,
                 ms_year=ms_year,
@@ -1510,6 +1585,18 @@ class AuthorityWorker(StageWorker):
 
         marc_rec = marc_by_cn[control_number]
         places: list[str] = [str(p) for p in (marc_rec.get("related_places") or []) if p]
+
+        # Geographic subjects (MARC 651) are parsed into ``subjects``
+        # with ``type="place"`` by :func:`handle_6xx`. Route them
+        # through KIMA alongside the 751/752 added-entry places. Dedup
+        # by string so duplicates from multiple MARC fields collapse to
+        # one KIMA hit (CLAUDE.md Rule 49).
+        for subject in marc_rec.get("subjects") or []:
+            if str(subject.get("type", "")) != "place":
+                continue
+            term = str(subject.get("term") or "").strip()
+            if term and term not in places:
+                places.append(term)
 
         if not places:
             return None

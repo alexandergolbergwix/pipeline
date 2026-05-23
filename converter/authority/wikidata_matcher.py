@@ -478,6 +478,56 @@ class WikidataMatcher:
         self._cache_put(cache_key, {"viaf_id": chosen})
         return chosen
 
+    def find_dates_by_qid(self, qid: str) -> tuple[int | None, int | None]:
+        """Return ``(birth_year, death_year)`` for a Wikidata person QID.
+
+        Reads ``wdt:P569`` (date of birth) and ``wdt:P570`` (date of death).
+        Years are parsed from the leading 4 digits of the xsd:dateTime
+        value via :func:`stage3_guards._parse_year`. Either component may
+        be ``None`` if the property is absent or the value is unparseable.
+
+        **Abstain on disagreement** — matching ``find_viaf_by_qid``,
+        when SPARQL returns multiple distinct values for either date
+        the value is treated as ``None``. Community-edited items with
+        conflicting birth dates are not trustworthy enough to enforce
+        a guard against (Rule 23 / Rule 40 spirit). The combined
+        ``(birth, death)`` tuple is cached on disk regardless so the
+        SPARQL hop is not repeated.
+        """
+        if not is_enabled() or not qid:
+            return (None, None)
+        cache_key = f"qid_to_dates:{qid}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            b = cached.get("birth_year")
+            d = cached.get("death_year")
+            return (
+                b if isinstance(b, int) else None,
+                d if isinstance(d, int) else None,
+            )
+
+        query = (
+            f"SELECT ?birth ?death WHERE {{ "
+            f"OPTIONAL {{ wd:{qid} wdt:P569 ?birth . }} "
+            f"OPTIONAL {{ wd:{qid} wdt:P570 ?death . }} "
+            f"}} LIMIT 5"
+        )
+        payload = _http_sparql(query)
+        births = _extract_literal_values(payload, "birth")
+        deaths = _extract_literal_values(payload, "death")
+
+        from converter.authority.stage3_guards import _parse_year  # noqa: PLC0415
+
+        # Abstain on disagreement: distinct year values across rows → None.
+        def _consensus_year(values: list[str]) -> int | None:
+            years = {y for y in (_parse_year(v) for v in values) if y is not None}
+            return years.pop() if len(years) == 1 else None
+
+        birth_year = _consensus_year(births)
+        death_year = _consensus_year(deaths)
+        self._cache_put(cache_key, {"birth_year": birth_year, "death_year": death_year})
+        return (birth_year, death_year)
+
     def last_match_was_latin_only(self) -> bool:
         """True iff the most recent successful match came from Mode 3
         (Latin transliteration fallback). The worker can use this to

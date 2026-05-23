@@ -254,6 +254,7 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "matched_id": str(mazal or viaf or ""),
                 "wikidata_qid": str(m.get("wikidata_qid") or ""),
                 "confidence": _coerce_confidence(m.get("confidence")),
+                "_confidence_bucket": str(m.get("confidence") or ""),
                 "dates": str(m.get("dates") or ""),
                 "gnd_id": str(m.get("gnd_id") or ""),
                 "lc_id": str(m.get("lc_id") or ""),
@@ -261,6 +262,15 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "bnf_id": str(m.get("bnf_id") or ""),
                 "field_origin": str(m.get("field") or ""),
                 "approved": bool(m.get("approved", False)),
+                # Tooltip breakdown signals (Stage 3 ``evaluate_match`` verdict).
+                "_guard_flags": list(m.get("guard_flags") or []),
+                "_rejection_reason": str(m.get("rejection_reason") or ""),
+                "_sources": list(m.get("sources") or []),
+                "_source_count": int(m.get("source_count") or 0),
+                "_preferred_name_lat": str(m.get("preferred_name_lat") or ""),
+                "_birth_year": m.get("birth_year"),
+                "_death_year": m.get("death_year"),
+                "_entity_kind": str(m.get("entity_kind") or ""),
             })
 
         # 2. NER entities — emit one row per entity, matched or not.
@@ -314,10 +324,25 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                 "matched_id": str(mazal or viaf or ""),
                 "wikidata_qid": str(e.get("wikidata_qid") or ""),
                 "confidence": _coerce_confidence(confidence_value),
+                "_confidence_bucket": "",
                 "dates": "",
                 "gnd_id": "", "lc_id": "", "isni": "", "bnf_id": "",
                 "field_origin": "ner",
                 "approved": bool(e.get("authority_approved", False)),
+                # Tooltip breakdown signals — NER entities carry the raw
+                # model and keyword-classifier scores rather than the
+                # tri-level guard verdict (no Stage 3 verdict yet).
+                "_guard_flags": list(e.get("guard_flags") or []),
+                "_rejection_reason": str(e.get("rejection_reason") or ""),
+                "_sources": [],
+                "_source_count": (1 if (mazal or viaf) else 0),
+                "_preferred_name_lat": str(e.get("preferred_name_lat") or ""),
+                "_birth_year": None,
+                "_death_year": None,
+                "_entity_kind": str(entity_type or ""),
+                "_ner_keyword_conf": _coerce_confidence(e.get("confidence")),
+                "_ner_model_conf": _coerce_confidence(e.get("model_confidence")),
+                "_ner_source": str(ner_source or ""),
             })
 
         # 3. KIMA places (name → Wikidata URI)
@@ -343,10 +368,19 @@ def flatten_authority_records(records: list[dict]) -> list[dict]:
                     "matched_id": str(uri),
                     "wikidata_qid": qid,
                     "confidence": 1.0,          # KIMA is a direct-index lookup
+                    "_confidence_bucket": "",
                     "dates": "",
                     "gnd_id": "", "lc_id": "", "isni": "", "bnf_id": "",
                     "field_origin": "marc_place",
                     "approved": False,
+                    "_guard_flags": [],
+                    "_rejection_reason": "",
+                    "_sources": ["kima"],
+                    "_source_count": 1,
+                    "_preferred_name_lat": "",
+                    "_birth_year": None,
+                    "_death_year": None,
+                    "_entity_kind": "place",
                 })
     return out
 
@@ -423,6 +457,231 @@ def unflatten_rows_into_records(
             if name and uri:
                 rec["kima_places"][name] = uri
     return out
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Confidence-tooltip helpers
+# ────────────────────────────────────────────────────────────────────────────
+#
+# Hover tooltip on the ``Conf.`` column explains *how* the tri-level
+# verdict was computed: which authority sources matched, which
+# stage3_guards fired, whether a Latin preferred name was present, and
+# what the rejection_reason was when a guard hard-rejected.
+#
+# HTML wrapper follows the same pattern as ``extraction_editor`` — Qt
+# QToolTip detects HTML content and renders it via QTextDocument,
+# overriding the macOS NSTooltip native frame so the theme colours stick.
+
+
+def _auth_tooltip_colours() -> tuple[str, str, str]:
+    """Return ``(bg, text, subtle)`` for the active theme."""
+    from mhm_pipeline.gui import theme  # noqa: PLC0415
+    return theme.ui("tooltip_bg"), theme.ui("tooltip_text"), theme.ui("subtext")
+
+
+def _auth_esc(value: object) -> str:
+    """HTML-escape arbitrary content for tooltip bodies."""
+    import html  # noqa: PLC0415
+    return html.escape(str(value or ""))
+
+
+# Human-readable labels for the guard flags surfaced by
+# :func:`converter.authority.stage3_guards.evaluate_match`. Keys match
+# the strings appended to ``guard_flags`` in ``stage3_guards.py``.
+_GUARD_FLAG_LABELS: dict[str, str] = {
+    "placeholder_name":      "Placeholder name (cataloguer abbreviation)",
+    "date_conflict":         "Date conflict — biographical years incompatible with manuscript date",
+    "short_name_homonym":    "Short-name homonym — single-token MARC name on a richly-disambiguated cluster",
+    "cluster_collapse":      "Cluster collapse — two distinct MARC names share one VIAF cluster",
+    "over_merge_detected":   "Over-merge — Mazal pair-collision on the same VIAF cluster",
+    "wikidata_disagrees":    "Wikidata disagrees with VIAF/Mazal candidate",
+    "wikidata_confirms":     "Wikidata confirms VIAF/Mazal candidate",
+    "has_wikidata":          "Wikidata QID resolved",
+    "cross_source_conflict": "Cross-source identifier conflict — sticky-low",
+}
+
+
+def _confidence_band_label(confidence: float, bucket_hint: str = "") -> tuple[str, str]:
+    """Map a 0–1 confidence into ``(label, colour-hex)``.
+
+    Stage 3 produces the tri-level via :func:`stage3_guards.score_confidence`;
+    when the original string is present in ``bucket_hint`` we honour that
+    directly. Otherwise fall through to the band table.
+    """
+    if bucket_hint:
+        s = bucket_hint.strip().lower()
+        if s in {"high", "medium", "low"}:
+            return {
+                "high":   ("HIGH",   "#16a34a"),
+                "medium": ("MEDIUM", "#d97706"),
+                "low":    ("LOW",    "#dc2626"),
+            }[s]
+    if confidence >= 0.8:
+        return ("HIGH", "#16a34a")
+    if confidence >= 0.45:
+        return ("MEDIUM", "#d97706")
+    return ("LOW", "#dc2626")
+
+
+def _build_authority_confidence_tooltip(row: dict) -> str:
+    """Structured HTML breakdown explaining the authority confidence.
+
+    Surfaces every signal that fed the tri-level score: which authority
+    sources matched (Mazal / VIAF / Wikidata / KIMA), whether a Latin
+    preferred name was found, every guard flag with a human-readable
+    description, and any hard ``rejection_reason``.
+    """
+    bg, text, subtle = _auth_tooltip_colours()
+    confidence = float(row.get("confidence") or 0.0)
+    bucket = str(row.get("_confidence_bucket") or "")
+    label, colour = _confidence_band_label(confidence, bucket)
+
+    parts: list[str] = []
+    parts.append(
+        f'<div style="background:{bg}; color:{text};'
+        f' padding:8px 12px; border-radius:6px;'
+        f' max-width:440px;">'
+    )
+    parts.append(
+        f'<div style="font-weight:600; color:{colour}; margin-bottom:6px;">'
+        f'Authority confidence: {_auth_esc(label)} '
+        f'({confidence:.2f})'
+        f'</div>'
+    )
+
+    auth_kind = str(row.get("_auth_kind") or "")
+    if auth_kind == "kima":
+        parts.append(
+            f'<div style="color:{subtle}; line-height:1.4;">'
+            f'KIMA direct-index lookup — place name resolved against the '
+            f'KIMA SQLite index. Confidence is constant 1.0 because the '
+            f'index is authoritative (no fuzzy match, no SPARQL).'
+            f'</div>'
+        )
+        parts.append('</div>')
+        return "".join(parts)
+
+    # ── Source breakdown ────────────────────────────────────────────────
+    sources_present: list[str] = []
+    if row.get("matched_id") and row.get("_auth_kind") in {"mazal", "ner_mazal"}:
+        sources_present.append("Mazal (NLI)")
+    if row.get("matched_id") and row.get("_auth_kind") in {"viaf", "ner_viaf"}:
+        sources_present.append("VIAF SRU")
+    sources_list = row.get("_sources") or []
+    for s in sources_list:
+        s_l = str(s).strip().lower()
+        if s_l == "mazal" and "Mazal (NLI)" not in sources_present:
+            sources_present.append("Mazal (NLI)")
+        elif s_l == "viaf" and "VIAF SRU" not in sources_present:
+            sources_present.append("VIAF SRU")
+        elif s_l == "wikidata":
+            sources_present.append("Wikidata SPARQL")
+    if row.get("wikidata_qid") and "Wikidata SPARQL" not in sources_present:
+        sources_present.append("Wikidata SPARQL")
+
+    source_count = int(row.get("_source_count") or 0) or len(sources_present)
+
+    parts.append(
+        f'<div style="margin-bottom:4px;"><b>Sources agreed:</b> '
+        f'{source_count}'
+        f'</div>'
+    )
+
+    def _row(matched: bool, name: str, value: str = "") -> str:
+        glyph = "✓" if matched else "—"
+        colour_inner = "#16a34a" if matched else subtle
+        suffix = f' <span style="color:{subtle};">({_auth_esc(value)})</span>' if value else ""
+        return (
+            f'<div style="margin-left:6px; color:{colour_inner};">'
+            f'{glyph} {_auth_esc(name)}{suffix}'
+            f'</div>'
+        )
+
+    parts.append(_row(
+        bool(row.get("matched_id")) and "Mazal" in " ".join(sources_present),
+        "Mazal (NLI)",
+        str(row.get("matched_id") if row.get("_auth_kind") in {"mazal", "ner_mazal"} else ""),
+    ))
+    parts.append(_row(
+        "VIAF" in " ".join(sources_present),
+        "VIAF SRU",
+        str(row.get("matched_id") if row.get("_auth_kind") in {"viaf", "ner_viaf"} else ""),
+    ))
+    parts.append(_row(
+        bool(row.get("wikidata_qid")),
+        "Wikidata SPARQL",
+        str(row.get("wikidata_qid") or ""),
+    ))
+    parts.append(_row(
+        bool(row.get("_preferred_name_lat")),
+        "Latin preferred name (cross-script verification)",
+        str(row.get("_preferred_name_lat") or ""),
+    ))
+
+    # ── Cluster identifiers (VIAF cross-references) ─────────────────────
+    cluster_ids = [
+        ("GND",  row.get("gnd_id")),
+        ("LCCN", row.get("lc_id")),
+        ("ISNI", row.get("isni")),
+        ("BnF",  row.get("bnf_id")),
+    ]
+    cluster_present = [(k, v) for k, v in cluster_ids if v]
+    if cluster_present:
+        bits = ", ".join(f"{k}: {_auth_esc(v)}" for k, v in cluster_present)
+        parts.append(
+            f'<div style="color:{subtle}; margin-top:4px;">'
+            f'<b>VIAF cluster IDs:</b> {bits}'
+            f'</div>'
+        )
+
+    # ── Biographical years (Stage 3 guard input) ────────────────────────
+    by = row.get("_birth_year")
+    dy = row.get("_death_year")
+    if by is not None or dy is not None:
+        parts.append(
+            f'<div style="color:{subtle}; margin-top:4px;">'
+            f'<b>Biographical years:</b> '
+            f'birth {_auth_esc(by if by is not None else "—")}, '
+            f'death {_auth_esc(dy if dy is not None else "—")}'
+            f'</div>'
+        )
+
+    # ── Guard flags ─────────────────────────────────────────────────────
+    flags = row.get("_guard_flags") or []
+    if flags:
+        parts.append(
+            '<div style="margin-top:6px;"><b>Guards fired:</b></div>'
+        )
+        for flag in flags:
+            label_text = _GUARD_FLAG_LABELS.get(
+                str(flag), str(flag).replace("_", " ").capitalize()
+            )
+            sign_colour = (
+                "#16a34a" if flag in {"wikidata_confirms", "has_wikidata"}
+                else "#dc2626"
+            )
+            parts.append(
+                f'<div style="margin-left:6px; color:{sign_colour};">'
+                f'• {_auth_esc(label_text)}'
+                f'</div>'
+            )
+
+    rejection = str(row.get("_rejection_reason") or "")
+    if rejection:
+        parts.append(
+            f'<div style="color:#dc2626; margin-top:6px;">'
+            f'<b>Rejection reason:</b> {_auth_esc(rejection)}'
+            f'</div>'
+        )
+
+    parts.append(
+        f'<div style="color:{subtle}; margin-top:8px; font-size:11px;">'
+        f'Scoring: 2+ sources + Latin name → high. 1 source → medium. '
+        f'Any guard fired → low (sticky).'
+        f'</div>'
+    )
+    parts.append('</div>')
+    return "".join(parts)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -558,6 +817,12 @@ class AuthorityMatchModel(QAbstractTableModel):
             return None
         r = self._rows[index.row()]
         col = index.column()
+
+        # Confidence-column tooltip — structured breakdown of every signal
+        # that fed the Stage 3 verdict (sources matched, guards fired,
+        # rejection reason, biographical years, etc).
+        if role == Qt.ItemDataRole.ToolTipRole and col == COL_CONF:
+            return _build_authority_confidence_tooltip(r)
 
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             if col == COL_RECORD:

@@ -464,15 +464,27 @@ The parser handles the following MARC fields:
 \hline
 561 & Ownership/Custody History & Provenance narrative; NER extraction target \\
 \hline
-600 & Subject (Person) & Subject persons \\
+600 & Subject (Person) & Subject persons; routed through Stage 3 authority matcher with \code{role="subject"} (Rule 49) \\
+\hline
+610 & Subject (Corporate) & Subject organisations; routed through Stage 3 authority matcher (Rule 49) \\
 \hline
 650 & Subject (Topical) & Subject headings \\
 \hline
-651 & Subject (Geographic) & Geographic subjects \\
+651 & Subject (Geographic) & Geographic subjects; routed through KIMA in Stage 3 (Rule 49) \\
 \hline
 700 & Added Entry (Person) & Additional persons; subfields \$a, \$d, \$e \\
 \hline
-800 & Series Added Entry & Series person entries \\
+710 & Added Entry (Corporate) & Added corporate names; subfields \$a, \$4 \\
+\hline
+711 & Added Entry (Meeting) & Added meeting names; subfields \$a, \$4 \\
+\hline
+752 & Hierarchical Place Name & Country/state/city hierarchy; most-specific component routed through KIMA (Rule 49) \\
+\hline
+800 & Series Added Entry (Person) & Series person entries; tagged \code{field="800"} for downstream authority matching (Rule 49) \\
+\hline
+810 & Series Added Entry (Corporate) & Series corporate entries; tagged \code{field="810"} (Rule 49) \\
+\hline
+811 & Series Added Entry (Meeting) & Series meeting entries; tagged \code{field="811"} (Rule 49) \\
 \hline
 856 & Electronic Location & Digital facsimile URLs \\
 \hline
@@ -953,11 +965,13 @@ The \code{KimaIndex} normalises queries by stripping Hebrew niqqud, diacritics, 
 
 Authority resolution follows a cascading priority by entity type:
 
-\textbf{Persons (NER-extracted):}
+\textbf{Persons (NER-extracted \emph{or} from MARC name fields 100/110/111/700/710/711/600/610/800/810/811, see Rule 49):}
 \begin{enumerate}
 \item \textbf{Local (Mazal):} Query the NLI authority file first (fastest, domain-specific).
-\item \textbf{VIAF:} If no Mazal match, query VIAF via the public SRU API (no API key required).
-\item \textbf{Unresolved:} Entity flagged with name only; manual review.
+\item \textbf{VIAF:} If no Mazal match, query VIAF via the public SRU API (no API key required). VIAF cluster harvesting also surfaces birth/death years (\code{ns1:birthDate}~/~\code{ns1:deathDate}).
+\item \textbf{Wikidata SPARQL:} Triangulation by VIAF~ID (P214) or NLI~J9U~ID (P8189). If no identifier resolves, fall back to a Hebrew label search. When a candidate QID resolves, query \code{wdt:P569}~/~\code{wdt:P570} via \code{find\_dates\_by\_qid} so birth/death years feed the Stage~3 date-conflict guard for Wikidata-only candidates as well (Rule 49).
+\item \textbf{Date-conflict guard} (\code{stage3\_guards.evaluate\_date\_conflict}, 5-year birth buffer, 80-year death-after-life threshold). Roles in \code{PHYSICAL\_PRODUCTION\_ROLES} (scribe, transcriber, copyist) get the death check; \code{TEXTUAL\_AUTHORSHIP\_ROLES} (author, translator, commentator, editor) get only the birth check; \code{role="subject"} (MARC 600/610) gets only the birth check because a manuscript can be ABOUT someone who died centuries before its production.
+\item \textbf{Unresolved:} Entity flagged with name only; manual review in the Authority editor (with structured-breakdown tooltip on the confidence column, Rule 49).
 \end{enumerate}
 
 \textbf{Places (from MARC fields):}

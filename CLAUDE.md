@@ -1493,3 +1493,136 @@ MARC500 Colophon classifier was retired 2026-05-23 (see Rule 35).
 Stage 3 (authority resolution), Stage 4 (RDF mapping), Stage 5
 (SHACL violation triage), Stage 6 (Wikidata upload diff) are on
 the eval-agent roadmap but not in MVP.
+
+### 49. MARC field-coverage expansion + Wikidata P569/P570 date backfill + confidence tooltips (added 2026-05-23)
+
+Three orthogonal pieces of Stage 3 authority-resolution work that
+ship together:
+
+**A. Expanded MARC field coverage.** Stage 3 previously consulted
+only 100/110/111 (authors) + 700/710/711 (contributors). Seven more
+name- and place-bearing tags now feed the matcher:
+
+| Tag | Carries | Routing |
+|---|---|---|
+| **600** | Personal subject | `_match_marc_persons` extra loop → `_match_marc_person_entry(role="subject", field="600")` |
+| **610** | Corporate subject | `_match_marc_persons` extra loop → `field="610"`; routed to `match_corporate` |
+| **651** | Geographic subject | `_match_marc_places` reads `subjects[type="place"]` and routes through KIMA |
+| **752** | Hierarchical place name | `handle_752` (new) writes most-specific component (`$d→$c→$b→$a`) into `related_places`; full hierarchy preserved in `hierarchy[]` |
+| **800** | Series added personal name | `handle_800` (new) → `contributors` with `field="800"` annotation |
+| **810** | Series added corporate name | `handle_810` (new) → `contributors` with `field="810"` |
+| **811** | Series added meeting name | `handle_811` (new) → `contributors` with `field="811"` |
+
+The series tag annotation (`field` key on each contributor dict) is
+honoured by `_match_marc_persons`: contributors carrying
+`field ∈ {"800","810","811"}` are passed to the matcher with the
+actual MARC tag and `role="series_contributor"` instead of the
+generic `"700/710/711"` / `"contributor"` labels.
+
+Subject scoring is **identical to 700/710** — full matches eligible
+for QID assignment. Subjects of type `topic` (650 topical) and
+`genre` (655 form/genre) are NOT routed to the person matcher; they
+remain consumers of the existing P136 / P921 paths in `item_builder`.
+
+**B. Wikidata P569/P570 date backfill.**
+`WikidataMatcher.find_dates_by_qid(qid) -> tuple[int|None, int|None]`
+is a new SPARQL probe modelled on `find_viaf_by_qid` (Rule 40). It
+queries `wdt:P569` (birth) + `wdt:P570` (death) in one SPARQL call
+with `OPTIONAL` blocks, parses years via `stage3_guards._parse_year`,
+and **abstains on disagreement** — multiple distinct values for
+either property → that property surfaces as `None`. Cached on disk
+under the key `qid_to_dates:<qid>` at the same TTL as the other
+identifier lookups.
+
+A new "Step 5b" inside `_match_marc_person_entry` fires
+`find_dates_by_qid` whenever any path (Step 4 / 4a / 4b / 5)
+resolved a Wikidata QID. Years feed the existing precedence chain:
+
+```python
+person_birth = viaf_birth or mazal_birth or wd_birth
+person_death = viaf_death or mazal_death or wd_death
+```
+
+When Wikidata is the sole date source, the years are also surfaced
+into `match_info["birth_year"]` / `match_info["death_year"]` so
+QuickStatements / downstream consumers see them. The existing Stage
+3 date-conflict guard in `stage3_guards.evaluate_date_conflict`
+needs no change — it consumes whichever pair feeds it.
+
+**C. Role="subject" date-guard semantics.** A subject person is
+neither `PHYSICAL_PRODUCTION_ROLES` (scribe/transcriber/copyist) nor
+`TEXTUAL_AUTHORSHIP_ROLES` (author/translator/commentator/editor).
+The death check is silent for subjects — a manuscript can be ABOUT
+someone who died centuries before its production (Maimonides d.1204
+in an 18th-c. manuscript ABOUT him is fine). The universal birth
+check still fires: a manuscript cannot be ABOUT someone born more
+than 5 years (`DATE_BIRTH_BUFFER_YEARS`) after its production date.
+
+**D. Confidence-column tooltips.** Both the NER entities editor
+(`extraction_editor.py`) and the authority editor
+(`authority_editor.py`) now render structured HTML tooltips on
+hover over the confidence column. The authority tooltip surfaces
+every signal that fed the tri-level Stage 3 verdict (sources
+matched, guards fired, biographical years, rejection reason, VIAF
+cluster IDs); the NER tooltips distinguish the keyword-classifier
+bucket (0.60 / 0.85, Rule 41) from the BIO softmax averaged across
+the entity's tokens. `flatten_authority_records` was extended to
+copy `guard_flags`, `rejection_reason`, `sources`, `source_count`,
+`birth_year`, `death_year`, and `preferred_name_lat` from
+`authority_enriched.json` into the row dict (under underscore-
+prefixed keys: `_guard_flags`, `_rejection_reason`, `_sources`,
+`_source_count`, `_birth_year`, `_death_year`,
+`_preferred_name_lat`, `_confidence_bucket`, plus
+`_ner_keyword_conf` / `_ner_model_conf` / `_ner_source` on NER-
+entity rows) so the tooltip builder can read them without re-
+running Stage 3.
+
+**Files touched:**
+
+- `converter/transformer/field_handlers.py` — `handle_752`,
+  `handle_800`, `handle_810`, `handle_811` static methods; new
+  iteration loops in `extract_all_data` for tags 752 / 800 / 810 / 811.
+- `converter/authority/wikidata_matcher.py` — `find_dates_by_qid`
+  method (~55 lines).
+- `src/mhm_pipeline/controller/workers.py` — `_match_marc_persons`
+  series-tag honouring + subjects loop; `_match_marc_places`
+  651-subject ingestion; `_match_marc_person_entry` Step 5b Wikidata
+  date backfill + extended precedence chain.
+- `src/mhm_pipeline/gui/widgets/authority_editor.py` — extended
+  `flatten_authority_records` (three branches: marc / entity / kima);
+  `_build_authority_confidence_tooltip` HTML helper; `data()`
+  `ToolTipRole` hook on `COL_CONF`.
+- `src/mhm_pipeline/gui/widgets/extraction_editor.py` —
+  `_build_ner_keyword_conf_tooltip` + `_build_ner_model_conf_tooltip`
+  HTML helpers; `data()` `ToolTipRole` hooks on `COL_CONF` and
+  `MODEL_CONF`.
+
+**Tests added (57 new):**
+
+- `tests/unit/gui/widgets/test_confidence_tooltips.py` (31):
+  `TestAuthorityConfidenceTooltip` (6),
+  `TestConfidenceBandLabel` (7),
+  `TestNerKeywordConfidenceTooltip` (4),
+  `TestNerModelConfidenceTooltip` (4),
+  `TestNerConfidenceBand` (6),
+  `TestFlattenAuthorityRowsCarryBreakdownSignals` (4).
+- `tests/unit/test_wikidata_matcher.py` (7):
+  `find_dates_by_qid` — single value, only birth, abstain on
+  disagreement, cache, unparseable dates, empty results, empty QID
+  short-circuit. (Also extends the kill-switch test.)
+- `tests/unit/test_safety_guards.py` (19):
+  `TestHandle752Hierarchical` (3),
+  `TestHandle800810811SeriesEntries` (3),
+  `TestMarcSubjectCoverage` (4),
+  `TestMarcPlaceCoverage` (3),
+  `TestSubjectPersonDateGuard` (3),
+  `TestWikidataDateBackfill` (3).
+
+Total unit-test count grows 827 → 884 (+57).
+
+**Safety invariants preserved:** Rules 23, 25, 26, 28, 38, 42 all
+unchanged. The new Stage 3 paths (subject persons + Wikidata date
+backfill) flow through the existing `evaluate_match` verdict — no
+guard bypassed, no identity-conflict shortcut. The
+`flatten_authority_records` extension is additive (new
+underscore-prefixed keys only); no existing row consumer regressed.

@@ -1016,6 +1016,86 @@ class FieldHandlers:
         return field.get_subfield("a")
 
     @staticmethod
+    def handle_752(field: MarcField) -> dict[str, Any]:
+        """Extract hierarchical place name (added entry) from 752 field.
+
+        MARC 752 subfields encode a country/region/city hierarchy:
+
+        * ``$a`` country (or larger entity)
+        * ``$b`` first-order political jurisdiction (state / province)
+        * ``$c`` intermediate political jurisdiction
+        * ``$d`` city
+        * ``$f`` city subsection / district
+        * ``$g`` other non-jurisdictional geographic region
+
+        For authority lookups we want the MOST-SPECIFIC component — KIMA
+        and Wikidata both index cities best — so the ``place`` key falls
+        through ``$d → $c → $b → $a``. The full hierarchy survives in
+        ``hierarchy`` for display / future enrichment.
+        """
+        a = field.get_subfield("a")
+        b = field.get_subfield("b")
+        c = field.get_subfield("c")
+        d = field.get_subfield("d")
+        f = field.get_subfield("f")
+        g = field.get_subfield("g")
+        place = d or c or b or a or g or f
+        hierarchy: list[str] = [v for v in (a, b, c, d, f, g) if v]
+        return {
+            "place": place,
+            "hierarchy": hierarchy,
+            "country": a,
+            "state": b,
+            "region": c,
+            "city": d,
+        }
+
+    @staticmethod
+    def handle_800(field: MarcField) -> dict[str, Any]:
+        """Extract series added personal name from MARC 800.
+
+        Mirrors :meth:`handle_700` — same name + birth/death dates +
+        relator code structure as an added person entry, but the field
+        flags this as a SERIES contribution rather than a manuscript-
+        level contributor. The ``field`` annotation lets downstream
+        consumers (e.g. authority resolution) tag the match accordingly.
+        """
+        result = FieldHandlers.handle_100(field)
+        relator_code = field.get_subfield("4")
+        if relator_code:
+            result["relator_code"] = relator_code
+        result["field"] = "800"
+        return result
+
+    @staticmethod
+    def handle_810(field: MarcField) -> dict[str, Any]:
+        """Extract series added corporate name from MARC 810.
+
+        Mirrors :meth:`handle_110` — same corporate-name shape as a
+        710 added entry but flagged as a series contribution.
+        """
+        result = FieldHandlers.handle_110(field)
+        relator_code = field.get_subfield("4")
+        if relator_code:
+            result["relator_code"] = relator_code
+        result["field"] = "810"
+        return result
+
+    @staticmethod
+    def handle_811(field: MarcField) -> dict[str, Any]:
+        """Extract series added meeting name from MARC 811.
+
+        Mirrors :meth:`handle_711` — meeting-name + relator code +
+        ``field`` annotation marking this as a series entry.
+        """
+        result = FieldHandlers.handle_111(field)
+        relator_code = field.get_subfield("4")
+        if relator_code:
+            result["relator_code"] = relator_code
+        result["field"] = "811"
+        return result
+
+    @staticmethod
     def handle_852(field: MarcField) -> dict[str, Any]:
         """Extract physical location / holding information from 852 field."""
         return {
@@ -1461,6 +1541,26 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         if meeting.get("name"):
             data.contributors.append(meeting)
 
+    # ── 800/810/811: series added entries (CLAUDE.md Rule 49) ────────────
+    # Series added entries mirror 700/710/711 but flag the contribution
+    # as series-level rather than manuscript-level. Authority resolution
+    # consumes them through the same path as 700/710/711, tagged via the
+    # ``field`` annotation on each dict.
+    for field in record.get_fields("800"):
+        person = handlers.handle_800(field)
+        if person.get("name"):
+            data.contributors.append(person)
+
+    for field in record.get_fields("810"):
+        org = handlers.handle_810(field)
+        if org.get("name"):
+            data.contributors.append(org)
+
+    for field in record.get_fields("811"):
+        meeting = handlers.handle_811(field)
+        if meeting.get("name"):
+            data.contributors.append(meeting)
+
     for field in record.get_fields("856"):
         url_info = handlers.handle_856(field)
         if url_info.get("url"):
@@ -1541,6 +1641,13 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         place = handlers.handle_751(field)
         if place and place not in data.related_places:
             data.related_places.append(place)
+
+    # ── 752: hierarchical place name (CLAUDE.md Rule 49) ──────────────────────
+    for field in record.get_fields("752"):
+        hp = handlers.handle_752(field)
+        place_752 = hp.get("place")
+        if place_752 and place_752 not in data.related_places:
+            data.related_places.append(place_752)
 
     # ── 852: physical location / holding ─────────────────────────────────────
     field_852 = record.get_field("852")
