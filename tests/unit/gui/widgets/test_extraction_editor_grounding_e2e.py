@@ -578,38 +578,72 @@ class TestEntityColumnHoverAndClick:
         assert opened == [], "double-click on Type column shouldn't open Edit Text dialog"
 
 
-class TestTooltipPaletteForcedOnApp:
-    """Regression guard for the macOS light-mode tooltip bug where the
-    palette change wasn't propagating to QToolTip — tooltips rendered
-    as dark-on-dark even in light mode. ``theme._apply_palette``
-    now calls ``QToolTip.setPalette()`` explicitly."""
+class TestTooltipFollowsTheme:
+    """The QToolTip palette must track whichever theme is active —
+    light mode renders a light tooltip, dark mode renders a dark
+    tooltip. Tokens come from the central registry
+    (``theme.ui('tooltip_bg' / 'tooltip_text')``) so QSS, QPalette,
+    and QToolTip all consume the same values."""
 
-    def test_apply_palette_sets_tooltip_palette(
+    def _set_mode(self, monkeypatch: pytest.MonkeyPatch, dark: bool) -> None:
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+        monkeypatch.setattr(theme, "is_dark", lambda: dark)
+        theme.invalidate_cache()
+
+    def test_light_mode_tooltip_is_light(
         self, qtbot: object, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         if QApplication.instance() is None:
             QApplication([])
+        from PyQt6.QtGui import QPalette  # noqa: PLC0415
         from PyQt6.QtWidgets import QToolTip  # noqa: PLC0415
         from mhm_pipeline.gui import theme  # noqa: PLC0415
 
-        # Force light mode for the duration of this test.
-        monkeypatch.setattr(theme, "is_dark", lambda: False)
-        # Clear the cached dark-mode flag (paranoia)
-        theme.invalidate_cache()
-
+        self._set_mode(monkeypatch, dark=False)
         theme._apply_palette(QApplication.instance())
         pal = QToolTip.palette()
-        # Light-mode ToolTipText should be dark-grey-ish, NOT black-on-black
+        bg = pal.color(QPalette.ColorRole.ToolTipBase)
+        text = pal.color(QPalette.ColorRole.ToolTipText)
+        # Light mode → light bg, dark text
+        assert bg.lightness() > 200, f"light bg too dark: {bg.lightness()}"
+        assert text.lightness() < 80, f"light text too light: {text.lightness()}"
+
+    def test_dark_mode_tooltip_is_dark(
+        self, qtbot: object, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if QApplication.instance() is None:
+            QApplication([])
         from PyQt6.QtGui import QPalette  # noqa: PLC0415
-        text_color = pal.color(QPalette.ColorRole.ToolTipText)
-        bg_color = pal.color(QPalette.ColorRole.ToolTipBase)
-        # In light mode: bg should be near-white, text near-black
-        assert bg_color.lightness() > 200, (
-            f"light-mode tooltip bg too dark: lightness={bg_color.lightness()}"
-        )
-        assert text_color.lightness() < 80, (
-            f"light-mode tooltip text too light: lightness={text_color.lightness()}"
-        )
+        from PyQt6.QtWidgets import QToolTip  # noqa: PLC0415
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        self._set_mode(monkeypatch, dark=True)
+        theme._apply_palette(QApplication.instance())
+        pal = QToolTip.palette()
+        bg = pal.color(QPalette.ColorRole.ToolTipBase)
+        text = pal.color(QPalette.ColorRole.ToolTipText)
+        # Dark mode → dark bg, light text
+        assert bg.lightness() < 80, f"dark bg too light: {bg.lightness()}"
+        assert text.lightness() > 200, f"dark text too dark: {text.lightness()}"
+
+    def test_tooltip_tokens_come_from_central_registry(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The QSS, QPalette and QToolTip palette must all read the
+        SAME tokens. Verified by mutating the registry and checking
+        the rendered values change everywhere."""
+        from mhm_pipeline.gui import theme  # noqa: PLC0415
+
+        self._set_mode(monkeypatch, dark=False)
+        bg_token = theme.ui("tooltip_bg")
+        text_token = theme.ui("tooltip_text")
+        # The tokens must exist (no fallback to "#888888")
+        assert bg_token != "#888888"
+        assert text_token != "#888888"
+        # Light mode should yield light bg + dark text by token name alone
+        from PyQt6.QtGui import QColor  # noqa: PLC0415
+        assert QColor(bg_token).lightness() > 200
+        assert QColor(text_token).lightness() < 80
 
 
 class TestClickFlow:

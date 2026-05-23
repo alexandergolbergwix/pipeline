@@ -374,6 +374,11 @@ _UI_LIGHT: dict[str, str] = {
     "record_header": "#6b7280",
     "record_content": "#f9fafb",
     "connector": "#a0a0a0",
+    # Tooltip tokens — used by BOTH the QSS rule AND ``QToolTip.setPalette``
+    # so the on-screen popover always tracks the theme regardless of
+    # which paint path Qt picks on the current platform.
+    "tooltip_bg":   "#fcfcfe",
+    "tooltip_text": "#1f2937",
 }
 _UI_DARK: dict[str, str] = {
     "text": "#cdd6f4",
@@ -392,6 +397,8 @@ _UI_DARK: dict[str, str] = {
     "record_header": "#4b5563",
     "record_content": "#1e1e2e",
     "connector": "#6c7086",
+    "tooltip_bg":   "#1e2028",
+    "tooltip_text": "#f3f4f6",
 }
 
 # ── Public accessors ─────────────────────────────────────────────────────────
@@ -950,8 +957,11 @@ def generate_app_stylesheet() -> str:
         tab_bg         = "transparent"
         tab_hover      = "rgba(255, 255, 255, 14)"
         tab_sel        = "rgba(255, 255, 255, 22)"
-        tooltip_bg     = "rgba(30, 32, 40, 244)"
-        tooltip_text   = "#f3f4f6"
+        # Tooltip colours sourced from the central token registry
+        # (``_UI_DARK / _UI_LIGHT``) so QSS + QPalette + QToolTip all
+        # consume the SAME values. Single source of truth.
+        tooltip_bg     = ui("tooltip_bg")
+        tooltip_text   = ui("tooltip_text")
         # Glass button tokens — bright top catch, dim bottom body
         btn_top        = "rgba(255, 255, 255, 34)"
         btn_mid        = "rgba(255, 255, 255, 18)"
@@ -980,8 +990,10 @@ def generate_app_stylesheet() -> str:
         tab_bg         = "transparent"
         tab_hover      = "rgba(0, 0, 0, 8)"
         tab_sel        = "rgba(0, 0, 0, 18)"
-        tooltip_bg     = "rgba(255, 255, 255, 248)"
-        tooltip_text   = "#111827"
+        # Tooltip colours sourced from the central token registry — see
+        # the dark-branch comment above for the rationale.
+        tooltip_bg     = ui("tooltip_bg")
+        tooltip_text   = ui("tooltip_text")
         # Glass button tokens (light): near-opaque white with a Fresnel rim
         btn_top        = "rgba(255, 255, 255, 230)"
         btn_mid        = "rgba(250, 250, 252, 200)"
@@ -1315,7 +1327,13 @@ def apply_stylesheet(app: object) -> None:
 
 
 def _apply_palette(app: object) -> None:
-    """Mirror the active theme onto the QApplication palette."""
+    """Mirror the active theme onto the QApplication palette.
+
+    Tooltip colours are sourced from the central token registry
+    (``ui("tooltip_bg")`` / ``ui("tooltip_text")``) so QSS, QPalette,
+    and the QToolTip palette below all read the SAME tokens. Light
+    mode → light tooltip; dark mode → dark tooltip. Single source.
+    """
     from PyQt6.QtGui import QColor, QPalette  # noqa: PLC0415
 
     dark = is_dark()
@@ -1325,15 +1343,15 @@ def _apply_palette(app: object) -> None:
         base = QColor(28, 30, 36)
         text = QColor(229, 231, 235)
         subtle = QColor(156, 163, 175)
-        tooltip_bg = QColor(30, 32, 40)
-        tooltip_text = QColor(243, 244, 246)
     else:
         window = QColor(250, 250, 252)
         base = QColor(255, 255, 255)
         text = QColor(31, 41, 55)
         subtle = QColor(107, 114, 128)
-        tooltip_bg = QColor(252, 252, 254)
-        tooltip_text = QColor(31, 41, 55)
+    # Single source of truth — central token registry. Same values
+    # the QSS rule reads → no drift between QSS / QPalette / QToolTip.
+    tooltip_bg = QColor(ui("tooltip_bg"))
+    tooltip_text = QColor(ui("tooltip_text"))
 
     # Top-level surfaces
     pal.setColor(QPalette.ColorRole.Window, window)
@@ -1355,18 +1373,18 @@ def _apply_palette(app: object) -> None:
 
     app.setPalette(pal)  # type: ignore[union-attr]
 
-    # macOS quirk: ``QToolTip`` does NOT pick up ``app.setPalette()``
-    # changes on its own — the global QSS rule alone isn't enough either
-    # because the macOS native tooltip painter ignores QSS for its
-    # background. Explicitly force-set the tooltip palette so light-mode
-    # tooltips don't render as dark-on-dark when the OS is in dark
-    # mode (or vice versa).
+    # ``QToolTip`` is a singleton whose palette is independent of the
+    # QApplication palette on macOS, AND the macOS native tooltip
+    # painter doesn't pick up the QSS rule for QToolTip. Apply the
+    # SAME theme tokens (``ui("tooltip_bg")`` / ``ui("tooltip_text")``)
+    # directly to it so the tooltip popover tracks the active theme —
+    # light mode → light tooltip, dark mode → dark tooltip. WindowText
+    # and Text are also set so multi-line tooltips with bullet markers
+    # (●/○) don't fall through to the OS default colour mid-string.
     from PyQt6.QtWidgets import QToolTip  # noqa: PLC0415
     tooltip_pal = QPalette()
     tooltip_pal.setColor(QPalette.ColorRole.ToolTipBase, tooltip_bg)
     tooltip_pal.setColor(QPalette.ColorRole.ToolTipText, tooltip_text)
-    # Also set WindowText so multi-line tooltips with ●/○ markers
-    # don't fall through to the OS default colour mid-string.
     tooltip_pal.setColor(QPalette.ColorRole.WindowText, tooltip_text)
     tooltip_pal.setColor(QPalette.ColorRole.Text, tooltip_text)
     QToolTip.setPalette(tooltip_pal)
