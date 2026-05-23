@@ -1437,3 +1437,60 @@ the new guard. They originate from Stage-2 contents NER extracting the
 folio marker `"דף"` ("Daf"/"page") and the MARC 505 list numbering as
 part of the work title. Cleaning that is a Stage-2 NER concern, out of
 scope for Rule 47.
+
+### 48. Eval-agent lives outside this repo (added 2026-05-22)
+
+Model evaluation has been extracted from this pipeline into a separate
+standalone project at `/Users/alexandergo/Documents/Doctorat/eval-agent`.
+The agent reads pipeline JSON outputs from disk and uses Gemini 3.x as
+judge to score every NER entity + classifier prediction against the
+original MARC record.
+
+**Why a separate project**: the previous in-tree script
+(`scripts/evaluate_models_with_gemini.py`, ~838 lines) accumulated
+enough surface area — Gemini client, sliding-window rate limiter,
+verdict cache, per-model prompt builders, structured-output enforcement
+— that keeping it next to pipeline code muddled the boundary between
+"the system" and "the tool that measures the system." Following
+Anthropic's [effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+pattern, the eval-agent is its own project with its own git history,
+its own dependencies, its own `CLAUDE.md` operating manual, and
+**file-coupled** (not Python-coupled) to this pipeline.
+
+**Hard invariants this pipeline must respect:**
+
+1. **No Python imports from `eval-agent/`** in this repo. The pipeline
+   writes JSON outputs to disk (`marc_extracted.json`, `ner_results.json`);
+   the eval-agent reads them. That is the only contract.
+2. **No write-backs from eval-agent** into this repo. The eval-agent
+   never modifies pipeline source or data.
+3. **The in-tree script `scripts/evaluate_models_with_gemini.py` is
+   preserved for now** as the canonical reference for the lifted
+   logic, but it is **deprecated** — any new evaluation work goes into
+   the standalone eval-agent. Once the eval-agent is at feature parity,
+   the in-tree script can be removed in a follow-up.
+4. **Pipeline CI / paper-claim verifier (`paper/verification/`) MUST
+   NOT depend on eval-agent.** Cross-tool reporting is fine via files
+   (the eval-agent emits markdown reports a human can read; the
+   verifier reads claims YAML). No call chain in either direction.
+
+**How to invoke from this repo's context**: see
+`.claude/commands/eval-agent.md`, `.codex/commands/eval-agent.md`, and
+`.codex/skills/eval-agent/SKILL.md`. Canonical command:
+
+```bash
+cd /Users/alexandergo/Documents/Doctorat/eval-agent
+bash init.sh                                                            # one-shot bootstrap
+export GEMINI_API_KEY="..."
+make run PIPELINE_OUTPUT=/Users/alexandergo/Documents/Doctorat/pipeline/eval/work
+```
+
+The agent emits a per-run folder under `eval-agent/state/runs/<ts>/`
+with `results.jsonl` (per-candidate verdicts), `summary.csv` (per-model
+precision metrics), and `report.md` (human-readable summary).
+
+**Scope (eval-agent MVP)**: the 5 Stage-2 trained models (Joint
+Person NER, Provenance NER, Contents NER, Genre classifier, MARC500
+Colophon classifier). Stage 3 (authority resolution), Stage 4 (RDF
+mapping), Stage 5 (SHACL violation triage), Stage 6 (Wikidata upload
+diff) are on the eval-agent roadmap but not in MVP.

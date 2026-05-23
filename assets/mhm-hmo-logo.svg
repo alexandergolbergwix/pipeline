@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 1100 420"
+  role="img"
+  aria-labelledby="title desc"
+>
+  <title id="title">MHM-HMO geometric letter logo</title>
+  <desc id="desc">
+    Vector MHM-HMO logo. The abstract linked-data manuscript shape is formed
+    directly from the MHM and HMO letterforms using the Bar-Ilan University
+    palette.
+  </desc>
+
+  <defs>
+    <linearGradient id="frontStroke" x1="160" y1="88" x2="825" y2="314" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#77CCE5"/>
+      <stop offset="0.48" stop-color="#004027"/>
+      <stop offset="1" stop-color="#00190D"/>
+    </linearGradient>
+    <linearGradient id="backStroke" x1="270" y1="56" x2="950" y2="292" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00190D"/>
+      <stop offset="0.45" stop-color="#004027"/>
+      <stop offset="1" stop-color="#77CCE5"/>
+    </linearGradient>
+    <linearGradient id="skyFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7FCFD"/>
+      <stop offset="1" stop-color="#77CCE5"/>
+    </linearGradient>
+    <filter id="softShadow" x="-12%" y="-30%" width="124%" height="170%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.22"/>
+    </filter>
+    <style>
+      .letterShape {
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .front {
+        stroke: url(#frontStroke);
+        stroke-width: 42;
+      }
+      .back {
+        stroke: url(#backStroke);
+        stroke-width: 42;
+        opacity: 0.52;
+      }
+      .bridge {
+        stroke: #77CCE5;
+        stroke-width: 16;
+        stroke-linecap: round;
+        opacity: 0.72;
+      }
+      .node {
+        fill: url(#skyFill);
+        stroke: #00190D;
+        stroke-width: 5;
+      }
+      .nodeDark {
+        fill: #004027;
+        stroke: #77CCE5;
+        stroke-width: 5;
+      }
+      .caption {
+        font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        font-size: 38px;
+        font-weight: 900;
+        letter-spacing: 1.5px;
+        fill: #00190D;
+      }
+    </style>
+  </defs>
+
+  <!--
+    The mark is intentionally not a standard text rendering.
+    Each path is a geometric stroke version of a letter:
+    top/back layer = HMO, bottom/front layer = MHM.
+    Their crossing connections make the word-pair read as a linked-data graph.
+  -->
+  <g filter="url(#softShadow)">
+    <!-- HMO layer, shifted upward/backward -->
+    <g transform="translate(125 48)">
+      <!-- H -->
+      <path class="letterShape back" d="M34 34 V190 M150 34 V190 M34 112 H150"/>
+      <!-- M -->
+      <path class="letterShape back" d="M224 190 V34 L304 142 L384 34 V190"/>
+      <!-- O -->
+      <path class="letterShape back" d="M510 34 C460 34 425 70 425 112 C425 154 460 190 510 190 C560 190 595 154 595 112 C595 70 560 34 510 34Z"/>
+    </g>
+
+    <!-- MHM layer, shifted down/front -->
+    <g transform="translate(228 158)">
+      <!-- M -->
+      <path class="letterShape front" d="M34 190 V34 L114 142 L194 34 V190"/>
+      <!-- H -->
+      <path class="letterShape front" d="M276 34 V190 M392 34 V190 M276 112 H392"/>
+      <!-- M -->
+      <path class="letterShape front" d="M474 190 V34 L554 142 L634 34 V190"/>
+    </g>
+
+    <!-- Graph bridges between the two letter layers -->
+    <g fill="none">
+      <path class="bridge" d="M275 160 C318 150 344 177 386 190"/>
+      <path class="bridge" d="M493 153 C540 174 558 207 618 226"/>
+      <path class="bridge" d="M712 160 C760 178 796 210 842 226"/>
+      <path class="bridge" d="M395 270 C474 238 565 238 670 270"/>
+      <path class="bridge" d="M240 348 C348 388 520 390 660 348"/>
+    </g>
+
+    <!-- Nodes sit at true letter vertices, reinforcing that the letters are the graph. -->
+    <circle class="node" cx="159" cy="82" r="17"/>
+    <circle class="nodeDark" cx="275" cy="160" r="18"/>
+    <circle class="node" cx="509" cy="82" r="17"/>
+    <circle class="nodeDark" cx="635" cy="160" r="18"/>
+    <circle class="node" cx="755" cy="160" r="17"/>
+    <circle class="nodeDark" cx="262" cy="348" r="18"/>
+    <circle class="node" cx="342" cy="300" r="16"/>
+    <circle class="nodeDark" cx="504" cy="270" r="18"/>
+    <circle class="node" cx="620" cy="270" r="16"/>
+    <circle class="nodeDark" cx="782" cy="348" r="18"/>
+    <circle class="node" cx="862" cy="300" r="16"/>
+  </g>
+
+  <!-- Small explicit reading aid; the abstract mark itself is made from the letters. -->
+  <text x="550" y="398" text-anchor="middle" class="caption">MHM-HMO</text>
+</svg>

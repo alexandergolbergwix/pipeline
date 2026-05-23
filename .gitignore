@@ -146,3 +146,23 @@ converter/authority/mazal_index.db
 # Profile / trace dumps
 *.prof
 *.trace
+
+# ─── Added 2026-05-23 ─────────────────────────────────────────────────
+
+# Personal / job-search content (CV drafts, interview prep) — never push
+docs/cv/
+
+# Large generated training artefacts (~8 GB)
+ner/results/
+
+# Pipeline run logs
+logs/
+
+# Per-run evaluation artefacts (cache + result JSONL/MD/CSV per run).
+# Regenerable via scripts/evaluate_models_with_gemini.py or the
+# standalone eval-agent project (see CLAUDE.md Rule 48).
+eval/.gemini_cache.jsonl
+eval/results_*.jsonl
+eval/report_*.md
+eval/summary_*.csv
+eval/results_*.csv
