@@ -237,14 +237,9 @@ else
     echo "  Genre classifier model not found — P136 fallback will be skipped."
 fi
 
-# Bundle MARC 500 sentence classifier model
-MARC500_MODEL="$REPO_ROOT/ner/marc500_classifier_model.pt"
-if [ -f "$MARC500_MODEL" ]; then
-    cp "$MARC500_MODEL" "$PIPELINE/ner/marc500_classifier_model.pt"
-    echo "  MARC 500 classifier: $(du -sh "$PIPELINE/ner/marc500_classifier_model.pt" | cut -f1)"
-else
-    echo "  MARC 500 classifier model not found — colophon/provenance routing will be skipped."
-fi
+# Rule 35 (2026-05-23): MARC500 colophon classifier RETIRED — the
+# ~700 MB ner/marc500_classifier_model.pt checkpoint is no longer
+# bundled. The runtime no longer loads it; see commit 3002236.
 
 # ── Step 5: Bundle Python venv (if available) ────────────────────────
 echo "Step 5/6: Bundling Python environment..."

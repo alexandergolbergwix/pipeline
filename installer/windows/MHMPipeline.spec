@@ -84,7 +84,9 @@ datas += _opt('ner/contents_ner_model.pt', 'ner')
 
 # Optional classifier checkpoints.
 datas += _opt('ner/genre_classifier_model.pt', 'ner')
-datas += _opt('ner/marc500_classifier_model.pt', 'ner')
+# Rule 35 (2026-05-23): MARC500 colophon classifier RETIRED. The
+# ner/marc500_classifier_model.pt checkpoint (~700 MB) is no longer
+# bundled — the runtime no longer loads it (see commit 3002236).
 
 # HuggingFace snapshots (staged into models/ by package_for_windows_build.sh).
 datas += _opt_dir('models/hebrew-manuscript-joint-ner-v2', 'models/hebrew-manuscript-joint-ner-v2')
@@ -194,7 +196,8 @@ hiddenimports = [
     'entity_normalize',
     'inference_pipeline',
     'ner_inference_pipeline',
-    'marc500_sentence_model',
+    # Rule 35: 'marc500_sentence_model' hiddenimport REMOVED — the module
+    # was deleted in commit 3002236 when the classifier was retired.
     'genre_classifier_model',
     'train_ner_model_kfold',
 ]
