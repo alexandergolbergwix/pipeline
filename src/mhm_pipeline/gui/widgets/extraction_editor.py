@@ -177,8 +177,9 @@ COL_ROLE = 3
 COL_CONF = 4
 MODEL_CONF = 5
 COL_SOURCE = 6
-COL_APPROVED = 7
-COL_ACTIONS = 8
+COL_EXISTS_IN = 7
+COL_APPROVED = 8
+COL_ACTIONS = 9
 
 
 class EditableEntityModel(QAbstractTableModel):
@@ -199,7 +200,7 @@ class EditableEntityModel(QAbstractTableModel):
 
     HEADERS = [
         "Record", "Entity", "Type", "Role", "Conf.", "Model Conf.",
-        "Source", "Approved", " ",
+        "Source", "Exists in", "Approved", " ",
     ]
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -207,6 +208,10 @@ class EditableEntityModel(QAbstractTableModel):
         self._entities: list[dict] = []
         self._original: list[dict] = []
         self._records_by_cn: dict[str, dict] = {}
+        # MARC records keyed by control number — fed by ExtractionEditor
+        # so the "Exists in" popup can render the full bibliographic
+        # record alongside the matched entities.
+        self._marc_by_cn: dict[str, dict] = {}
 
     # ── Loading ──────────────────────────────────────────────────────────
 
@@ -241,6 +246,12 @@ class EditableEntityModel(QAbstractTableModel):
                     "start": int(entity.get("start", 0) or 0),
                     "end": int(entity.get("end", 0) or 0),
                     "approved": bool(entity.get("approved", False)),
+                    # F8 MARC-grounding evidence (added by NerWorker via
+                    # filter_with_marc_grounding). Surfaced in the
+                    # "Exists in" column.
+                    "exists_in": list(entity.get("exists_in") or []),
+                    "grounded": entity.get("grounded"),
+                    "grounded_field": entity.get("grounded_field"),
                 }
                 self._entities.append(row)
             for sentence in record.get("ml_colophon_sentences") or []:
@@ -273,6 +284,28 @@ class EditableEntityModel(QAbstractTableModel):
                 })
         self._original = copy.deepcopy(self._entities)
         self.endResetModel()
+
+    def set_marc_records(self, marc_records: list[dict]) -> None:
+        """Index MARC records by control number for the evidence popup.
+
+        Feed before opening the editor; safe to call multiple times —
+        only stores the dict reference, no copy.
+        """
+        self._marc_by_cn = {
+            str(r.get("_control_number") or ""): r for r in marc_records
+        }
+
+    def marc_for_row(self, row: int) -> dict | None:
+        """Return the MARC record for the entity at ``row`` (or None)."""
+        if not 0 <= row < len(self._entities):
+            return None
+        cn = self._entities[row].get("_control_number") or ""
+        return self._marc_by_cn.get(str(cn))
+
+    def entity_at(self, row: int) -> dict | None:
+        if 0 <= row < len(self._entities):
+            return self._entities[row]
+        return None
 
     def source_text_for(self, row: int) -> tuple[str, str, int, int]:
         """Return (source_text, entity_text, start, end) for a given row.
@@ -341,6 +374,25 @@ class EditableEntityModel(QAbstractTableModel):
                 return f"{m:.2f}" if m else ""
             if col == COL_SOURCE:
                 return ent.get("source", "")
+            if col == COL_EXISTS_IN:
+                # Comma-separated pretty list of fields. Hover the cell
+                # to see the full list in a tooltip; click to open the
+                # evidence popup.
+                evidence = ent.get("exists_in") or []
+                if not evidence:
+                    return "—"
+                names: list[str] = []
+                seen: set[str] = set()
+                for row in evidence:
+                    field = str(row.get("field") or "")
+                    top = field.split(".", 1)[0].split("[", 1)[0]
+                    if top and top not in seen:
+                        seen.add(top)
+                        names.append(top)
+                preview = ", ".join(names[:3])
+                if len(names) > 3:
+                    preview += f"  +{len(names) - 3}"
+                return preview
 
         # Sort role: return the underlying numeric/string value so the column
         # sorts naturally rather than lexicographically.
@@ -367,6 +419,33 @@ class EditableEntityModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ForegroundRole and col == COL_TYPE:
             _bg, fg = _type_colors().get(ent["type"], ("#3f3f46", "#f3f4f6"))
             return QColor(fg)
+
+        # Exists-in cell colouring: green when any FULL match, yellow
+        # when only PARTIAL, no tint when empty. Helps the reviewer
+        # scan the table at a glance for cross-MARC corroboration.
+        if col == COL_EXISTS_IN:
+            evidence = ent.get("exists_in") or []
+            has_full = any(r.get("match_type") == "full" for r in evidence)
+            has_partial = any(r.get("match_type") == "partial" for r in evidence)
+            from mhm_pipeline.gui import theme  # noqa: PLC0415
+            if role == Qt.ItemDataRole.BackgroundRole:
+                if has_full:
+                    return QColor(22, 163, 74, 40 if theme.is_dark() else 28)
+                if has_partial:
+                    return QColor(245, 158, 11, 40 if theme.is_dark() else 28)
+            if role == Qt.ItemDataRole.ToolTipRole and evidence:
+                # Show the full field list + match types as a tooltip.
+                lines = []
+                for r in evidence[:12]:
+                    mt = r.get("match_type", "?")
+                    field = r.get("field", "?")
+                    marker = "●" if mt == "full" else "○"
+                    lines.append(f"{marker} {field}  ({mt})")
+                if len(evidence) > 12:
+                    lines.append(f"… +{len(evidence) - 12} more")
+                lines.append("")
+                lines.append("Click to see full MARC record")
+                return "\n".join(lines)
 
         # Approved row emphasis — subtle green wash
         if role == Qt.ItemDataRole.BackgroundRole and ent.get("approved", False):
@@ -1479,6 +1558,7 @@ class ExtractionEditor(QWidget):
         h.setSectionResizeMode(COL_ROLE, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_CONF, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_SOURCE, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(COL_EXISTS_IN, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_APPROVED, QHeaderView.ResizeMode.ResizeToContents)
         # Actions column holds two per-row buttons (✎ edit + ↗ view source).
         # Each rendered button is ~34px (24px min-width + 8px padding + 2px
@@ -1499,6 +1579,10 @@ class ExtractionEditor(QWidget):
         self._model.rowsInserted.connect(self._refresh_action_widgets)
         self._model.rowsRemoved.connect(self._refresh_action_widgets)
         self._model.modelReset.connect(self._refresh_action_widgets)
+        # Click on the "Exists in" column → open the MARC evidence popup.
+        # Connected to ``clicked`` (single-click) because that column is
+        # read-only and the popup is the only useful interaction.
+        self._table.clicked.connect(self._on_table_clicked)
 
         self._active_filters: dict[str, set[str]] = {
             "sources": set(), "types": set(), "roles": set(),
@@ -1512,6 +1596,24 @@ class ExtractionEditor(QWidget):
         self._active_filters = {"sources": set(), "types": set(), "roles": set()}
         self._refresh_action_widgets()
         self._update_stats()
+        # Try to load the matching marc_extracted.json side-car so the
+        # "Exists in" popup can render the FULL MARC record. Silent
+        # best-effort: absence just means the popup only shows the
+        # ``exists_in`` rows, no unmatched-field context.
+        if output_path is not None:
+            marc_path = output_path.parent / "marc_extracted.json"
+            if marc_path.is_file():
+                try:
+                    import json as _json  # noqa: PLC0415
+                    marc_records = _json.loads(
+                        marc_path.read_text(encoding="utf-8"),
+                    )
+                    if isinstance(marc_records, list):
+                        self._model.set_marc_records(marc_records)
+                except Exception:  # noqa: BLE001
+                    # marc_extracted.json malformed — skip silently;
+                    # the popup will still work off ``exists_in`` alone.
+                    pass
 
     def get_all_sources(self) -> list[str]:
         return sorted({str(e.get("source") or "") for e in self._model._entities if e.get("source")})
@@ -1601,6 +1703,36 @@ class ExtractionEditor(QWidget):
         ent = self._model._entities[source_row]
         cn = ent.get("_control_number", "")
         dlg = SourceViewDialog(cn, full, et, start, end, parent=self)
+        dlg.exec()
+
+    def _on_table_clicked(self, proxy_idx: "QModelIndex") -> None:
+        """Handle clicks anywhere in the table.
+
+        Currently routes only the "Exists in" column to its popup.
+        Other columns are handled by the standard table machinery
+        (delegate editors, action-cell widgets).
+        """
+        if not proxy_idx.isValid():
+            return
+        if proxy_idx.column() != COL_EXISTS_IN:
+            return
+        source_row = self._proxy.mapToSource(proxy_idx).row()
+        ent = self._model.entity_at(source_row)
+        if ent is None:
+            return
+        evidence = ent.get("exists_in") or []
+        if not evidence:
+            return  # nothing to show; cell is "—"
+        marc = self._model.marc_for_row(source_row) or {}
+        needle = str(ent.get("text") or "")
+        # Lazy import — keeps cold-start light and avoids a circular
+        # import at module load.
+        from mhm_pipeline.gui.widgets.marc_evidence_popup import (  # noqa: PLC0415
+            MarcEvidencePopup,
+        )
+        dlg = MarcEvidencePopup(
+            needle=needle, exists_in=evidence, marc_record=marc, parent=self,
+        )
         dlg.exec()
 
     def _on_edit_text(self, proxy_row: int) -> None:

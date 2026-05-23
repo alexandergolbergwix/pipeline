@@ -692,18 +692,219 @@ def _ground_in_fields(
     return None
 
 
+# ── Broad evidence search (every MARC field, full vs partial match) ──
+#
+# The strict ``_ground_in_fields`` only checks the field implied by the
+# entity's role/type — that's the right signal for the auto-approve
+# gate. For the GUI's "Exists in" column we want a richer picture:
+# WHICH MARC fields mention this name at all, and how strongly.
+#
+# Match types:
+#   ``full``    — needle is a substring of haystack (after norm), OR
+#                 token-set equality (handles "Yossi Stiwi" vs
+#                 "Stiwi Yossi"), OR exact word-swap from the "Last,
+#                 First" MARC inversion.
+#   ``partial`` — at least one needle token appears in haystack but
+#                 it is NOT a full match. Handles "Stiwi" finding
+#                 "Yossi Stiwi" — useful evidence even though the
+#                 prediction is incomplete.
+
+# Fields searched for the broad ``exists_in`` audit. The set is a
+# superset of the strict role-mapped fields — every text-bearing MARC
+# field worth surfacing in the UI.
+_BROAD_AUDIT_FIELDS: tuple[str, ...] = (
+    "title",
+    "variant_titles",
+    "authors",
+    "contributors",
+    "provenance",
+    "notes",
+    "contents",
+    "colophon_text",
+    "data_from_colophon.scribe",
+    "data_from_colophon.year",
+    "data_from_colophon.place",
+    "subjects",
+    "canonical_references",
+    "related_works",
+    "place",
+    "related_places",
+    "dates.original_string",
+    "shelfmark",
+    "genres",
+)
+
+
+# Punctuation we strip when tokenising for partial-match detection.
+_TOKEN_PUNCT_RE = re.compile(r"[\s,;:.\"׳״'\[\]()<>]+")
+
+
+def _tokens_for_match(text: str) -> list[str]:
+    """Split ``text`` into normalised tokens for set-equality comparison.
+
+    Hebrew + ASCII safe — splits on whitespace and common punctuation,
+    drops empty tokens, lowercases ASCII.
+    """
+    norm = _norm_for_match(text)
+    if not norm:
+        return []
+    return [t for t in _TOKEN_PUNCT_RE.split(norm) if t]
+
+
+def _classify_match(needle: str, haystack: str) -> str | None:
+    """Classify a single needle-vs-haystack comparison.
+
+    Returns ``"full"``, ``"partial"``, or ``None``. ``full`` means the
+    whole prediction is accounted for in the haystack (substring,
+    word-order swap, or token-set equality on shortish strings).
+    ``partial`` means ≥1 needle token appears but not all of them.
+    """
+    n = _norm_for_match(needle)
+    h = _norm_for_match(haystack)
+    if not n or not h:
+        return None
+
+    # Path 1: direct substring → full match
+    if n in h:
+        return "full"
+
+    n_tokens = _tokens_for_match(needle)
+    h_tokens = _tokens_for_match(haystack)
+    if not n_tokens:
+        return None
+    h_set = set(h_tokens)
+    n_set = set(n_tokens)
+
+    # Path 2: token-set equality (handles "Yossi Stiwi" vs "Stiwi Yossi"
+    # plus any other permutation; also catches "Last, First" inversion
+    # because the comma drops out via _TOKEN_PUNCT_RE).
+    if n_set == h_set and n_set:
+        return "full"
+
+    # Path 3: needle is a token-subset of haystack — meaning EVERY
+    # needle token appears in haystack but haystack has more. This is
+    # still a "full" match for short names where the haystack is the
+    # canonical form (e.g., MARC has "Surname, Given Middle" and we
+    # predicted "Given Surname").
+    if n_set.issubset(h_set):
+        return "full"
+
+    # Path 4: partial — at least one shared token but not all.
+    if n_set & h_set:
+        return "partial"
+
+    return None
+
+
+def _iter_audit_fields(
+    marc: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """Yield ``(field_path, value_str)`` for every audited MARC field.
+
+    Multi-valued fields (``authors[]``, ``contributors[]``,
+    ``notes[]``, ``subjects[]``) are exploded so each entry is checked
+    independently — this lets the GUI cite the specific list index in
+    the evidence popup (``contributors[2]`` rather than the whole list).
+    """
+    out: list[tuple[str, str]] = []
+    for path in _BROAD_AUDIT_FIELDS:
+        # Walk dotted path
+        cur: Any = marc
+        for key in path.split("."):
+            if isinstance(cur, dict):
+                cur = cur.get(key)
+            else:
+                cur = None
+                break
+            if cur is None:
+                break
+        if cur is None:
+            continue
+
+        if isinstance(cur, str):
+            if cur.strip():
+                out.append((path, cur))
+            continue
+        if isinstance(cur, (int, float)):
+            out.append((path, str(cur)))
+            continue
+        if isinstance(cur, list):
+            for idx, item in enumerate(cur):
+                if isinstance(item, str):
+                    if item.strip():
+                        out.append((f"{path}[{idx}]", item))
+                elif isinstance(item, dict):
+                    # Surface every name-bearing field separately so
+                    # the GUI snippet stays grounded to the source row.
+                    for k in ("name", "term", "title", "value",
+                              "original_string", "role", "hierarchy",
+                              "book", "relationship"):
+                        v = item.get(k)
+                        if isinstance(v, str) and v.strip():
+                            out.append((f"{path}[{idx}].{k}", v))
+                else:
+                    out.append((f"{path}[{idx}]", str(item)))
+            continue
+        if isinstance(cur, dict):
+            for k, v in cur.items():
+                if isinstance(v, str) and v.strip():
+                    out.append((f"{path}.{k}", v))
+    return out
+
+
+def find_marc_evidence(
+    needle: str, marc_record: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Search every audited MARC field for ``needle``.
+
+    Returns a list of evidence rows shaped:
+
+        {"field": str, "match_type": "full"|"partial", "value": str}
+
+    Ordered: every full match first (in MARC declaration order), then
+    every partial match. ``value`` is the original (un-normalised) MARC
+    string so the GUI can render it verbatim and highlight the matched
+    span.
+    """
+    if not needle.strip() or not marc_record:
+        return []
+    full: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    for field_path, value in _iter_audit_fields(marc_record):
+        mtype = _classify_match(needle, value)
+        if mtype == "full":
+            full.append({"field": field_path, "match_type": "full",
+                          "value": value})
+        elif mtype == "partial":
+            partial.append({"field": field_path, "match_type": "partial",
+                             "value": value})
+    return full + partial
+
+
+def _entity_needle(ent: dict[str, Any]) -> str:
+    """Return the searchable text for an entity (``person`` for
+    person_ner, ``text`` for the others)."""
+    if ent.get("source") == "person_ner":
+        return str(ent.get("person") or "")
+    return str(ent.get("text") or "")
+
+
 def filter_with_marc_grounding(
     entities: list[dict[str, Any]],
     *,
     marc_record: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Stamp every entity with ``grounded`` + ``grounded_field``.
+    """Stamp every entity with ``grounded`` + ``grounded_field`` (strict
+    role-mapped gate) and ``exists_in`` (broad evidence list for UI).
 
     Non-destructive: no entities are dropped. The GUI's auto-approve
     gate is expected to read ``grounded`` AND ``confidence`` together
-    rather than relying on confidence alone.
+    rather than relying on confidence alone, while ``exists_in`` powers
+    the "Exists in" column + evidence popup so a reviewer can see
+    every MARC field where the predicted text appears (full or partial
+    match).
 
-    Grounding rules:
+    Strict grounding rules (drive ``grounded`` / ``grounded_field``):
 
     - ``person_ner`` entities: look for the name in the MARC field
       mapped from the predicted role (e.g., role=TRANSCRIBER →
@@ -717,16 +918,26 @@ def filter_with_marc_grounding(
       content fields. Sets ``grounded_field`` to the matching field
       name on success, ``None`` on failure.
 
+    Broad evidence (drives ``exists_in``):
+
+    Every entity also gets ``exists_in`` populated by
+    :func:`find_marc_evidence` — a list of every MARC field where the
+    predicted text appears, with a match_type of ``"full"`` or
+    ``"partial"``. Independent of the strict role check; useful for
+    the human reviewer who wants to know "where else does this name
+    appear in MARC?".
+
     The MARC record dict is the Stage-1 ``marc_extracted.json`` entry
     for the same control number.
     """
     if not marc_record:
         # No MARC context to verify against — stamp everything as
         # ungrounded so the GUI must treat every prediction as
-        # needing review.
+        # needing review. exists_in stays empty for the same reason.
         for ent in entities:
             ent["grounded"] = False
             ent["grounded_field"] = None
+            ent["exists_in"] = []
         return entities
 
     for ent in entities:
@@ -740,6 +951,7 @@ def filter_with_marc_grounding(
             )
             ent["grounded"] = grounded_field is not None
             ent["grounded_field"] = grounded_field
+            ent["exists_in"] = find_marc_evidence(name, marc_record)
             continue
 
         if source == "provenance_ner":
@@ -751,6 +963,7 @@ def filter_with_marc_grounding(
             grounded_field = _ground_in_fields(text, marc_record, fields)
             ent["grounded"] = grounded_field is not None
             ent["grounded_field"] = grounded_field
+            ent["exists_in"] = find_marc_evidence(text, marc_record)
             continue
 
         if source == "contents_ner":
@@ -762,11 +975,13 @@ def filter_with_marc_grounding(
             grounded_field = _ground_in_fields(text, marc_record, fields)
             ent["grounded"] = grounded_field is not None
             ent["grounded_field"] = grounded_field
+            ent["exists_in"] = find_marc_evidence(text, marc_record)
             continue
 
         # Unknown source — leave the flags absent rather than guess.
         ent.setdefault("grounded", None)
         ent.setdefault("grounded_field", None)
+        ent.setdefault("exists_in", [])
 
     return entities
 
@@ -779,5 +994,6 @@ __all__ = [
     "filter_person_role_dedup",
     "filter_with_marc_grounding",
     "filter_work_author_folio",
+    "find_marc_evidence",
     "OWNER_MAX_LENGTH",
 ]

@@ -7693,5 +7693,172 @@ class TestMarcGroundingFilter:
         )
 
 
+class TestMarcEvidenceSearch:
+    """``find_marc_evidence`` produces the broad ``exists_in`` list the
+    GUI's "Exists in" column + evidence popup consume.
+
+    Match-type contract (from the user spec):
+      - "yossi stiwi" vs "yossi stiwi" (anywhere)       → full
+      - "yossi stiwi" vs "stiwi yossi" (word swap)      → full
+      - "stiwi"       vs "yossi stiwi" (token subset)   → full (every
+                                                                needle
+                                                                token in
+                                                                haystack)
+      - "stiwi alex"  vs "yossi stiwi" (partial overlap)→ partial
+      - "carlos"      vs "yossi stiwi" (no overlap)     → not present
+    """
+
+    def _marc(self) -> dict[str, object]:
+        return {
+            "_control_number": "990000000000001",
+            "title": "ספר תהלים",
+            "authors": [{"name": "Yossi Stiwi", "role": "author"}],
+            "contributors": [
+                {"name": "Stiwi Yossi", "role": "translator"},
+                {"name": "ריאיטי, חזקיה", "role": "commentator"},
+            ],
+            "provenance": "Sold to Yossi Stiwi in 1850.",
+            "notes": [
+                "BIBLIOGRAPHIC_TEST.txt",
+                "Yossi was the scribe; Alex Stiwi reviewed.",
+            ],
+            "contents": "תהלים פרקים א-ה",
+            "colophon_text": "ימי משה ירדן",
+        }
+
+    # ── Full-match patterns ────────────────────────────────────────────
+
+    def test_full_match_exact_substring_in_authors(self) -> None:
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("Yossi Stiwi", self._marc())
+        full_fields = [e["field"] for e in ev if e["match_type"] == "full"]
+        assert any("authors" in f for f in full_fields), (
+            f"Expected an authors[].name full-match, got: {full_fields}"
+        )
+
+    def test_full_match_word_swap_in_contributors(self) -> None:
+        # MARC has "Stiwi Yossi" (inverted); user's example: this is full.
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("Yossi Stiwi", self._marc())
+        full_fields = [e["field"] for e in ev if e["match_type"] == "full"]
+        # Either authors[0].name (exact) or contributors[0].name (swap)
+        # must show up as full.
+        assert any("contributors" in f for f in full_fields), (
+            f"Expected swapped-name to be full-match in contributors, got: {full_fields}"
+        )
+
+    def test_full_match_single_token_subset(self) -> None:
+        # User example: "stiwi" vs "yossi stiwi" — single token IS a
+        # subset of the haystack tokens → full match per spec.
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("Stiwi", self._marc())
+        full_fields = [e["field"] for e in ev if e["match_type"] == "full"]
+        assert any("authors" in f for f in full_fields), (
+            f"Expected single-token subset to be full-match, got: {full_fields}"
+        )
+
+    def test_full_match_word_swap_with_marc_inversion(self) -> None:
+        # MARC stores "ריאיטי, חזקיה" — the comma drops via the token
+        # punct regex, so the set equals {"ריאיטי", "חזקיה"}, same as
+        # the prediction "חזקיה ריאיטי".
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("חזקיה ריאיטי", self._marc())
+        full_fields = [e["field"] for e in ev if e["match_type"] == "full"]
+        assert any("contributors" in f for f in full_fields), (
+            f"Expected Hebrew inverted-name to match as full, got: {full_fields}"
+        )
+
+    # ── Partial-match patterns ─────────────────────────────────────────
+
+    def test_partial_match_token_overlap(self) -> None:
+        # Prediction "Stiwi Alex" — "Stiwi" overlaps with authors AND
+        # provenance AND notes. "Alex" overlaps with notes only. None
+        # of those is a full match because the FULL prediction tokens
+        # aren't all in any single field's tokens. So all three fields
+        # should appear with match_type=partial.
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("Stiwi Alex", self._marc())
+        # ``notes[1]`` contains BOTH tokens → full there
+        # ``authors[0].name`` contains only "Stiwi" → partial
+        match_by_field = {e["field"]: e["match_type"] for e in ev}
+        # Notes mention both tokens — full match.
+        notes_full = [f for f, m in match_by_field.items()
+                       if "notes" in f and m == "full"]
+        assert notes_full, f"Expected notes[1] full match: {match_by_field}"
+        # Authors mention only "Stiwi" — partial.
+        authors_partial = [f for f, m in match_by_field.items()
+                            if "authors" in f and m == "partial"]
+        assert authors_partial, f"Expected authors partial: {match_by_field}"
+
+    # ── No match ───────────────────────────────────────────────────────
+
+    def test_no_match_returns_empty_list(self) -> None:
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("Carlos Vega", self._marc())
+        # No overlap with any field — empty list (filter is silent).
+        assert ev == []
+
+    def test_empty_needle_returns_empty(self) -> None:
+        from converter.authority.ner_post_filters import find_marc_evidence
+        assert find_marc_evidence("", self._marc()) == []
+        assert find_marc_evidence("   ", self._marc()) == []
+
+    def test_empty_marc_returns_empty(self) -> None:
+        from converter.authority.ner_post_filters import find_marc_evidence
+        assert find_marc_evidence("Yossi", {}) == []
+
+    # ── Result ordering: full matches before partials ──────────────────
+
+    def test_full_matches_listed_before_partial(self) -> None:
+        from converter.authority.ner_post_filters import find_marc_evidence
+        # "Stiwi" appears in authors (full — subset), and the search
+        # crawls notes too. authorise full and partial both. The
+        # ordering invariant: full entries come first.
+        ev = find_marc_evidence("Stiwi", self._marc())
+        seen_partial = False
+        for e in ev:
+            if e["match_type"] == "partial":
+                seen_partial = True
+            else:
+                assert not seen_partial, (
+                    "full match emitted after a partial — order is wrong"
+                )
+
+    # ── Snippet preservation ───────────────────────────────────────────
+
+    def test_value_field_carries_original_marc_string(self) -> None:
+        """The ``value`` slot must hold the un-normalised original
+        MARC text so the GUI can highlight the substring verbatim."""
+        from converter.authority.ner_post_filters import find_marc_evidence
+        ev = find_marc_evidence("Yossi Stiwi", self._marc())
+        prov = [e for e in ev if "provenance" in e["field"]]
+        # The provenance field exists; check the value is the full
+        # original sentence (not just the matched substring).
+        if prov:
+            assert "Sold to Yossi Stiwi" in prov[0]["value"], prov[0]
+
+    # ── filter_with_marc_grounding now populates exists_in ─────────────
+
+    def test_grounding_filter_populates_exists_in(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "Yossi Stiwi", "role": "AUTHOR",
+                 "source": "person_ner", "confidence": 0.85}]
+        out = filter_with_marc_grounding(ents, marc_record=self._marc())
+        assert isinstance(out[0]["exists_in"], list)
+        assert len(out[0]["exists_in"]) >= 1, (
+            f"Expected exists_in populated; got: {out[0]['exists_in']}"
+        )
+        # Each row has the contract shape
+        for row in out[0]["exists_in"]:
+            assert {"field", "match_type", "value"} <= set(row.keys())
+            assert row["match_type"] in {"full", "partial"}
+
+    def test_empty_marc_yields_empty_exists_in(self) -> None:
+        from converter.authority.ner_post_filters import filter_with_marc_grounding
+        ents = [{"person": "Yossi Stiwi", "role": "AUTHOR", "source": "person_ner"}]
+        out = filter_with_marc_grounding(ents, marc_record={})
+        assert out[0]["exists_in"] == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
