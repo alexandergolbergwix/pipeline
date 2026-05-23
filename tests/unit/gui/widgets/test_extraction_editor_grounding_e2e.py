@@ -237,34 +237,57 @@ class TestCellRendering:
                 f"Expected '{expected}' in '{text}' (top-3 preview)"
             )
 
-    def test_no_evidence_cell_shows_em_dash(
+    def test_no_evidence_cell_shows_discovery_marker(
         self, editor: ExtractionEditor,
     ) -> None:
+        """Row 2 has empty exists_in → "🆕 new" discovery label,
+        not an em-dash. Discoveries are the most interesting reviewer
+        case (NER found something not in structured MARC)."""
         text = self._data(editor, 2, Qt.ItemDataRole.DisplayRole)
-        assert text == "—"
+        assert "🆕" in text
+        assert "new" in text.lower()
 
-    def test_full_match_cell_background_is_green(
+    def test_full_match_cell_text_has_grounded_check(
         self, editor: ExtractionEditor,
     ) -> None:
+        text = self._data(editor, 0, Qt.ItemDataRole.DisplayRole)
+        assert text.startswith("✓"), f"grounded cell should lead with ✓: {text!r}"
+
+    def test_wrong_field_cell_text_has_warning(
+        self, editor: ExtractionEditor,
+    ) -> None:
+        # Row 1 (Stiwi Carlos, partial-only in authors, grounded=False)
+        text = self._data(editor, 1, Qt.ItemDataRole.DisplayRole)
+        assert "⚠" in text or "wrong" in text.lower(), (
+            f"ungrounded-but-found-somewhere cell must flag wrong field: {text!r}"
+        )
+
+    def test_grounded_cell_background_is_green(
+        self, editor: ExtractionEditor,
+    ) -> None:
+        # Row 0: grounded=True
         bg = self._data(editor, 0, Qt.ItemDataRole.BackgroundRole)
         assert isinstance(bg, QColor), f"expected QColor, got {type(bg)}"
         # Green channel dominant — chip is (22, 163, 74, alpha).
         assert bg.green() > bg.red() and bg.green() > bg.blue()
 
-    def test_partial_only_cell_background_is_yellow(
+    def test_wrong_field_cell_background_is_yellow(
         self, editor: ExtractionEditor,
     ) -> None:
+        # Row 1: grounded=False, exists_in non-empty → yellow
         bg = self._data(editor, 1, Qt.ItemDataRole.BackgroundRole)
         assert isinstance(bg, QColor)
-        # Yellow/amber chip — (245, 158, 11, alpha). Red+green high, blue low.
+        # Yellow/amber — (245, 158, 11, alpha). Red+green high, blue low.
         assert bg.red() > 150 and bg.green() > 100 and bg.blue() < 80
 
-    def test_empty_cell_no_background_tint(
+    def test_discovery_cell_background_is_blue(
         self, editor: ExtractionEditor,
     ) -> None:
+        # Row 2: exists_in empty → blue (discovery — name not in MARC)
         bg = self._data(editor, 2, Qt.ItemDataRole.BackgroundRole)
-        # Either None or transparent — Qt returns None for "no override"
-        assert bg is None or (isinstance(bg, QColor) and bg.alpha() == 0)
+        assert isinstance(bg, QColor)
+        # Blue — (59, 130, 246, alpha). Blue channel highest.
+        assert bg.blue() > bg.red() and bg.blue() > bg.green()
 
 
 # ── 4. Tooltip lists every matched field ─────────────────────────────────
@@ -293,12 +316,17 @@ class TestTooltip:
         tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
         assert "full" in tip and "partial" in tip
 
-    def test_tooltip_absent_for_empty_evidence(
+    def test_tooltip_explains_discovery_for_empty_evidence(
         self, editor: ExtractionEditor,
     ) -> None:
+        """The discovery case now has its OWN tooltip explaining the
+        state instead of returning None — reviewers shouldn't be left
+        wondering why the cell is blue and clickable."""
         idx = editor._model.index(2, COL_EXISTS_IN)
         tip = editor._model.data(idx, Qt.ItemDataRole.ToolTipRole)
-        assert tip is None
+        assert isinstance(tip, str)
+        assert "NEW" in tip or "new" in tip.lower()
+        assert "not found" in tip.lower() or "not in" in tip.lower()
 
 
 # ── 5. Click handler opens the popup ─────────────────────────────────────
@@ -311,14 +339,10 @@ class TestClickToOpenPopup:
         self, editor: ExtractionEditor, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         opened: list[MarcEvidencePopup] = []
-
-        # Patch the popup so we record construction and don't enter
-        # the modal event loop.
         real_init = MarcEvidencePopup.__init__
 
-        def capture(self, *, needle, exists_in, marc_record, parent=None):
-            real_init(self, needle=needle, exists_in=exists_in,
-                      marc_record=marc_record, parent=parent)
+        def capture(self, **kwargs):
+            real_init(self, **kwargs)
             opened.append(self)
 
         monkeypatch.setattr(MarcEvidencePopup, "__init__", capture)
@@ -334,26 +358,40 @@ class TestClickToOpenPopup:
         assert dlg._needle == "Yossi Stiwi"
         assert len(dlg._exists_in) == 4
         assert dlg._marc_record["_control_number"] == "990000000000001"
+        # New: role_fields + grounded forwarded so the popup can
+        # distinguish role-mapped matches from wrong-field hits.
+        assert "authors" in dlg._role_fields, (
+            f"AUTHOR role should map to authors; got {dlg._role_fields}"
+        )
+        assert dlg._grounded is True
 
-    def test_click_does_nothing_for_empty_evidence(
+    def test_click_opens_discovery_popup_for_empty_evidence(
         self, editor: ExtractionEditor, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Discovery cells (empty exists_in) are now clickable too —
+        the popup explains "NER found this in the source text but
+        it's not in any structured MARC field" so the reviewer can
+        decide whether the extraction is a real find or a
+        hallucination."""
         opened: list[MarcEvidencePopup] = []
         real_init = MarcEvidencePopup.__init__
 
-        def capture(self, *, needle, exists_in, marc_record, parent=None):
-            real_init(self, needle=needle, exists_in=exists_in,
-                      marc_record=marc_record, parent=parent)
+        def capture(self, **kwargs):
+            real_init(self, **kwargs)
             opened.append(self)
 
         monkeypatch.setattr(MarcEvidencePopup, "__init__", capture)
+        monkeypatch.setattr(MarcEvidencePopup, "exec", lambda self: 0)
 
-        # Row 2 has empty exists_in
+        # Row 2 has empty exists_in (discovery case)
         proxy_idx = editor._proxy.index(2, COL_EXISTS_IN)
         editor._on_table_clicked(proxy_idx)
-        assert opened == [], (
-            "popup must NOT open for entities without evidence"
+        assert len(opened) == 1, (
+            "popup MUST open for discovery cells so reviewer can inspect"
         )
+        dlg = opened[0]
+        assert dlg._exists_in == []
+        assert dlg._grounded is False
 
     def test_click_on_other_column_does_nothing(
         self, editor: ExtractionEditor, monkeypatch: pytest.MonkeyPatch,
@@ -379,10 +417,15 @@ class TestPopupRendering:
     def _popup(self, qtbot: object) -> MarcEvidencePopup:
         if QApplication.instance() is None:
             QApplication([])
+        # Pass ``role_fields=["authors"]`` (mapping for AUTHOR role) so
+        # the popup recognises authors[0].name as role-mapped and gives
+        # it the strong green highlight.
         dlg = MarcEvidencePopup(
             needle="Yossi Stiwi",
             exists_in=_ner_record_with_evidence()["entities"][0]["exists_in"],
             marc_record=_marc_record(),
+            role_fields=["authors"],
+            grounded=True,
         )
         qtbot.addWidget(dlg)  # type: ignore[attr-defined]
         dlg.show()

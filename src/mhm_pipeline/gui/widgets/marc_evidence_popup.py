@@ -150,6 +150,14 @@ class MarcEvidencePopup(GlassDialog):
     * ``marc_record`` — the matching ``marc_extracted.json`` entry.
       Used to surface the FULL set of MARC fields, including those
       that did not match (gray / no highlight).
+    * ``role_fields`` — (optional) the MARC fields the entity's role
+      implies, computed from the GUI's
+      :func:`_expected_role_fields`. When provided, the popup
+      distinguishes role-mapped matches (green, "✓ role-mapped")
+      from wrong-field matches (yellow, "⚠ different field").
+      Without this list every match looks equally important.
+    * ``grounded`` — the strict role-grounded flag, used to colour
+      the header summary "Role-grounded" / "Wrong field".
     """
 
     def __init__(
@@ -158,6 +166,8 @@ class MarcEvidencePopup(GlassDialog):
         needle: str,
         exists_in: list[dict[str, Any]],
         marc_record: dict[str, Any],
+        role_fields: list[str] | None = None,
+        grounded: bool | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -167,6 +177,8 @@ class MarcEvidencePopup(GlassDialog):
         self._needle = (needle or "").strip()
         self._exists_in = exists_in or []
         self._marc_record = marc_record or {}
+        self._role_fields: tuple[str, ...] = tuple(role_fields or ())
+        self._grounded: bool | None = grounded
 
         outer = QVBoxLayout(self.glass_content)
         outer.setContentsMargins(
@@ -195,14 +207,50 @@ class MarcEvidencePopup(GlassDialog):
         title.setWordWrap(True)
         layout.addWidget(title)
 
-        # Summary line — how many full + partial hits
+        # Summary line — how many full + partial hits + role grounding
         n_full = sum(1 for r in self._exists_in
                      if r.get("match_type") == "full")
         n_partial = sum(1 for r in self._exists_in
                         if r.get("match_type") == "partial")
         cn = self._marc_record.get("_control_number") or "(no control number)"
+        # Role-grounded chip ahead of the counts — answers the FIRST
+        # question a reviewer has: "what kind of MARC support does this
+        # extraction have?". Three states, matching the cell colours
+        # in the table.
+        has_evidence = bool(self._exists_in)
+        if self._grounded is True:
+            chip = (
+                '<span style="color:#16a34a; font-weight:600;">'
+                '✓ Role-grounded</span>'
+            )
+            if self._role_fields:
+                chip += (
+                    f'  <span style="color:{theme.ui("subtext")};">'
+                    f'(matches {", ".join(self._role_fields)})</span>'
+                )
+        elif self._grounded is False and has_evidence:
+            chip = (
+                '<span style="color:#f59e0b; font-weight:600;">'
+                '⚠ Wrong field for role</span>'
+            )
+            if self._role_fields:
+                chip += (
+                    f'  <span style="color:{theme.ui("subtext")};">'
+                    f'(role expects {", ".join(self._role_fields)})</span>'
+                )
+        elif not has_evidence:
+            chip = (
+                '<span style="color:#3b82f6; font-weight:600;">'
+                '🆕 Discovery — not in structured MARC fields</span>'
+                f'  <span style="color:{theme.ui("subtext")};">'
+                'Inspect the record below to decide whether this is a real'
+                ' find or a hallucination.</span>'
+            )
+        else:
+            chip = ""
+        prefix = (chip + "  ·  ") if chip else ""
         summary = QLabel(
-            f"Record  {cn}  ·  "
+            f"{prefix}Record  {cn}  ·  "
             f"<span style=\"color:#16a34a;\">●</span> {n_full} full  ·  "
             f"<span style=\"color:#f59e0b;\">●</span> {n_partial} partial"
         )
@@ -272,37 +320,66 @@ class MarcEvidencePopup(GlassDialog):
         scroll.setWidget(host)
         return scroll
 
+    def _is_role_field(self, path: str) -> bool:
+        """True iff ``path`` is in the entity's role-mapped field set.
+
+        Compares against the dotted-path prefix so ``contributors`` in
+        ``role_fields`` matches every ``contributors[N].name`` row.
+        """
+        if not self._role_fields:
+            return False
+        path_top = path.split(".", 1)[0].split("[", 1)[0]
+        for rf in self._role_fields:
+            rf_top = rf.split(".", 1)[0].split("[", 1)[0]
+            if rf_top == path_top:
+                return True
+        return False
+
     def _iter_field_rows(
         self, match_map: dict[str, str],
     ) -> list[QWidget]:
         """Build one row per MARC field/sub-row in display order.
 
-        Ordering: matched rows (full > partial) first, then the rest of
-        the audited MARC fields. Within each group, fields appear in
-        the canonical MARC order.
+        Ordering: role-mapped matches first, then wrong-field matches,
+        then the rest. Within each group full beats partial.
         """
         # Re-use the same field list the backend audits — keeps the
         # popup in sync with the matcher.
         from converter.authority.ner_post_filters import _iter_audit_fields  # noqa: PLC0415
         audit_rows = _iter_audit_fields(self._marc_record)
 
-        # Stable sort: rows whose dotted-path is in match_map come first,
-        # full before partial, then everything else.
+        # Stable sort:
+        #   0 = role-mapped full match
+        #   1 = role-mapped partial match
+        #   2 = wrong-field full match
+        #   3 = wrong-field partial match
+        #   4 = unmatched (everything else)
         def sort_key(row: tuple[str, str]) -> tuple[int, int]:
             path = row[0]
-            if path in match_map:
-                return (0, 0 if match_map[path] == "full" else 1)
-            return (1, 0)
+            is_role = self._is_role_field(path)
+            mt = match_map.get(path)
+            if is_role and mt == "full":
+                return (0, 0)
+            if is_role and mt == "partial":
+                return (1, 0)
+            if mt == "full":
+                return (2, 0)
+            if mt == "partial":
+                return (3, 0)
+            return (4, 0)
 
         sorted_rows = sorted(audit_rows, key=sort_key)
         out: list[QWidget] = []
         for path, value in sorted_rows:
             match_type = match_map.get(path, "")
-            out.append(self._build_field_row(path, value, match_type))
+            is_role = self._is_role_field(path)
+            out.append(self._build_field_row(path, value, match_type,
+                                              is_role=is_role))
         return out
 
     def _build_field_row(
         self, path: str, value: str, match_type: str,
+        *, is_role: bool = False,
     ) -> QWidget:
         """One row: pretty label + value text edit with highlighted
         matches (if any)."""
@@ -311,15 +388,35 @@ class MarcEvidencePopup(GlassDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        # Left chip indicating match strength
-        label = QLabel(_label_for(path))
+        # Left chip indicating match strength + role-mapped status.
+        # Append a suffix to the label so the reviewer can tell at a
+        # glance whether this is the role-expected field (good evidence
+        # for the predicted role) or a wrong-field hit (the name is
+        # here but the role is probably wrong).
+        label_text = _label_for(path)
+        if match_type:
+            if is_role:
+                label_text += "   ✓ role-mapped"
+            else:
+                label_text += "   ⚠ different field"
+        label = QLabel(label_text)
         label_style = (
             f"color: {theme.ui('text')}; font-size: {theme.FONT_SM}px; "
             f"font-weight: 600;"
         )
         if match_type:
+            # Role-mapped matches get the full green/yellow chip; non-
+            # role matches get the same colour at a lower intensity so
+            # they stand out less.
+            if is_role:
+                bg = _highlight_color(match_type)
+            else:
+                # Re-use the partial palette regardless of match_type
+                # so wrong-field hits read as "yellow / warning" even
+                # if the textual match itself was full.
+                bg = _highlight_color("partial")
             label_style += (
-                f" background-color: {_highlight_color(match_type)}; "
+                f" background-color: {bg}; "
                 f"padding: 1px 6px; border-radius: {theme.RADIUS_SM}px;"
             )
         label.setStyleSheet(label_style)
@@ -345,7 +442,12 @@ class MarcEvidencePopup(GlassDialog):
         value_widget.setFixedHeight(rough_lines * 22)
 
         if match_type and self._needle:
-            self._apply_highlight(value_widget, self._needle, match_type)
+            # In-text highlight tone tracks the same "role-mapped vs
+            # different field" hierarchy as the label chip — full
+            # match in a role-mapped field gets the strong green,
+            # everything else gets yellow so it visually de-emphasises.
+            tone = match_type if is_role else "partial"
+            self._apply_highlight(value_widget, self._needle, tone)
 
         layout.addWidget(value_widget)
         return host

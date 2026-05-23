@@ -182,6 +182,56 @@ COL_APPROVED = 8
 COL_ACTIONS = 9
 
 
+def _expected_role_fields(ent: dict) -> list[str]:
+    """Return the MARC fields the entity's role/type implies.
+
+    Mirrors the role/type → MARC-field map in
+    ``converter.authority.ner_post_filters`` so the GUI can render
+    "Expected: <field>" hints in tooltips and the evidence popup
+    without importing the converter module directly.
+
+    Returns ``[]`` when the entity's source/role/type isn't in the
+    map (unknown or unmapped).
+    """
+    source = ent.get("source")
+    if source == "person_ner":
+        role = str(ent.get("role") or "").upper()
+        return list(_PERSON_ROLE_FIELDS.get(role, ()))
+    if source == "provenance_ner":
+        etype = str(ent.get("type") or "").upper()
+        return list(_PROVENANCE_TYPE_FIELDS.get(etype, ("provenance", "notes")))
+    if source == "contents_ner":
+        etype = str(ent.get("type") or "").upper()
+        return list(_CONTENTS_TYPE_FIELDS.get(etype, ("contents", "notes")))
+    return []
+
+
+# Kept in sync with ``converter.authority.ner_post_filters._PERSON_ROLE_TO_MARC_FIELDS``
+# and friends. Duplicated here to avoid pulling the converter module
+# into GUI-only code paths.
+_PERSON_ROLE_FIELDS: dict[str, tuple[str, ...]] = {
+    "AUTHOR":       ("authors",),
+    "TRANSCRIBER":  ("colophon_text", "data_from_colophon.scribe",
+                     "contributors"),
+    "TRANSLATOR":   ("contributors", "notes"),
+    "COMMENTATOR":  ("contributors", "notes"),
+    "EDITOR":       ("contributors",),
+    "CENSOR":       ("notes", "contributors"),
+    "OWNER":        ("provenance", "notes"),
+}
+_PROVENANCE_TYPE_FIELDS: dict[str, tuple[str, ...]] = {
+    "OWNER":      ("provenance", "notes"),
+    "DATE":       ("colophon_text", "provenance", "notes", "dates"),
+    "COLLECTION": ("provenance", "notes"),
+}
+_CONTENTS_TYPE_FIELDS: dict[str, tuple[str, ...]] = {
+    "WORK":        ("contents", "notes", "canonical_references",
+                    "colophon_text"),
+    "FOLIO":       ("contents", "notes"),
+    "WORK_AUTHOR": ("contents", "notes", "canonical_references"),
+}
+
+
 class EditableEntityModel(QAbstractTableModel):
     """Table model for editable NER entity data.
 
@@ -375,12 +425,25 @@ class EditableEntityModel(QAbstractTableModel):
             if col == COL_SOURCE:
                 return ent.get("source", "")
             if col == COL_EXISTS_IN:
-                # Comma-separated pretty list of fields. Hover the cell
-                # to see the full list in a tooltip; click to open the
-                # evidence popup.
+                # The cell carries one of THREE indicators reflecting
+                # what kind of MARC evidence backs the entity:
+                #   ✓ field, field…  — name lives in the role-mapped
+                #                      field. Strong evidence for the
+                #                      predicted role (grounded=True).
+                #   ⚠ wrong field    — name is in MARC, just not in
+                #     field, field…   the field the role implies. The
+                #                     role is probably wrong.
+                #   🆕 new (not in   — name does NOT appear in any
+                #     structured       structured MARC field. Often
+                #     fields)          the most INTERESTING reviewer
+                #                      case: the NER model is enriching
+                #                      the catalog with information
+                #                      that was never indexed by hand.
+                #                      Could also be a hallucination —
+                #                      the popup helps decide which.
                 evidence = ent.get("exists_in") or []
                 if not evidence:
-                    return "—"
+                    return "🆕 new (not in structured fields)"
                 names: list[str] = []
                 seen: set[str] = set()
                 for row in evidence:
@@ -392,7 +455,9 @@ class EditableEntityModel(QAbstractTableModel):
                 preview = ", ".join(names[:3])
                 if len(names) > 3:
                     preview += f"  +{len(names) - 3}"
-                return preview
+                if ent.get("grounded") is True:
+                    return f"✓ {preview}"
+                return f"⚠ wrong field: {preview}"
 
         # Sort role: return the underlying numeric/string value so the column
         # sorts naturally rather than lexicographically.
@@ -420,29 +485,65 @@ class EditableEntityModel(QAbstractTableModel):
             _bg, fg = _type_colors().get(ent["type"], ("#3f3f46", "#f3f4f6"))
             return QColor(fg)
 
-        # Exists-in cell colouring: green when any FULL match, yellow
-        # when only PARTIAL, no tint when empty. Helps the reviewer
-        # scan the table at a glance for cross-MARC corroboration.
+        # Exists-in cell colouring — three states:
+        #   green  — entity is role-grounded (``grounded=True``).
+        #   yellow — name is in MARC but in the wrong field for the role
+        #            (``grounded=False`` AND ``exists_in`` non-empty).
+        #   blue   — name not in any structured MARC field. Often the
+        #            most interesting case: the NER is enriching the
+        #            catalog with content not in the indexed fields
+        #            (could also be a hallucination — the popup helps
+        #            decide).
         if col == COL_EXISTS_IN:
             evidence = ent.get("exists_in") or []
-            has_full = any(r.get("match_type") == "full" for r in evidence)
-            has_partial = any(r.get("match_type") == "partial" for r in evidence)
+            is_grounded = ent.get("grounded") is True
+            has_match = bool(evidence)
             from mhm_pipeline.gui import theme  # noqa: PLC0415
             if role == Qt.ItemDataRole.BackgroundRole:
-                if has_full:
+                if is_grounded:
                     return QColor(22, 163, 74, 40 if theme.is_dark() else 28)
-                if has_partial:
+                if has_match:
                     return QColor(245, 158, 11, 40 if theme.is_dark() else 28)
-            if role == Qt.ItemDataRole.ToolTipRole and evidence:
-                # Show the full field list + match types as a tooltip.
+                # No structured evidence — blue "discovery" tint.
+                return QColor(59, 130, 246, 40 if theme.is_dark() else 28)
+            if role == Qt.ItemDataRole.ForegroundRole and not has_match:
+                # Make the "🆕 new" text visible on the blue tint
+                return QColor(59, 130, 246)
+            if role == Qt.ItemDataRole.ToolTipRole:
+                # Cell ALWAYS has a tooltip now — even the discovery
+                # case explains itself.
                 lines = []
-                for r in evidence[:12]:
-                    mt = r.get("match_type", "?")
-                    field = r.get("field", "?")
-                    marker = "●" if mt == "full" else "○"
-                    lines.append(f"{marker} {field}  ({mt})")
-                if len(evidence) > 12:
-                    lines.append(f"… +{len(evidence) - 12} more")
+                if is_grounded:
+                    lines.append("✓ Role-grounded — name is in the MARC "
+                                 "field the role implies")
+                elif has_match:
+                    grounded_role_fields = _expected_role_fields(ent)
+                    lines.append("⚠ Wrong field — name is in MARC but NOT "
+                                 "in the field the role implies")
+                    if grounded_role_fields:
+                        lines.append(
+                            f"  Expected role-mapped field(s): "
+                            f"{', '.join(grounded_role_fields)}"
+                        )
+                else:
+                    # Discovery / novel — most interesting case.
+                    lines.append("🆕 NEW — name not found in any structured "
+                                 "MARC field")
+                    lines.append("  The NER model found this in the source")
+                    lines.append("  text but it was never indexed by hand.")
+                    lines.append("  Could be a real discovery worth")
+                    lines.append("  capturing, OR a hallucination — open")
+                    lines.append("  the popup to inspect the source text.")
+                if evidence:
+                    lines.append("")
+                    lines.append("Found in:")
+                    for r in evidence[:12]:
+                        mt = r.get("match_type", "?")
+                        field = r.get("field", "?")
+                        marker = "●" if mt == "full" else "○"
+                        lines.append(f"  {marker} {field}  ({mt})")
+                    if len(evidence) > 12:
+                        lines.append(f"  … +{len(evidence) - 12} more")
                 lines.append("")
                 lines.append("Click to see full MARC record")
                 return "\n".join(lines)
@@ -1805,9 +1906,12 @@ class ExtractionEditor(QWidget):
         ent = self._model.entity_at(source_row)
         if ent is None:
             return
+        # Note: we no longer short-circuit on empty exists_in. The
+        # "discovery" case (no structured evidence) is one the reviewer
+        # explicitly needs the popup for — to see the source text the
+        # NER ran on and decide whether the extraction is a real find
+        # or a hallucination.
         evidence = ent.get("exists_in") or []
-        if not evidence:
-            return  # nothing to show; cell is "—"
         marc = self._model.marc_for_row(source_row) or {}
         needle = str(ent.get("text") or "")
         # Lazy import — keeps cold-start light and avoids a circular
@@ -1816,7 +1920,12 @@ class ExtractionEditor(QWidget):
             MarcEvidencePopup,
         )
         dlg = MarcEvidencePopup(
-            needle=needle, exists_in=evidence, marc_record=marc, parent=self,
+            needle=needle,
+            exists_in=evidence,
+            marc_record=marc,
+            role_fields=_expected_role_fields(ent),
+            grounded=ent.get("grounded") if isinstance(ent.get("grounded"), bool) else None,
+            parent=self,
         )
         dlg.exec()
 
