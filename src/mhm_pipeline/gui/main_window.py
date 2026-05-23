@@ -109,9 +109,60 @@ class MainWindow(QMainWindow):
         # Settings
         self._build_settings_menu(menu_bar)
 
-        # Help
+        # Help — full documentation browser + direct topic shortcuts
         help_menu = menu_bar.addMenu("&Help")
         assert help_menu is not None
+
+        docs_action = QAction("&Help && Documentation…", self)
+        docs_action.setShortcut("F1")
+        docs_action.triggered.connect(lambda: self._on_open_help(None))
+        help_menu.addAction(docs_action)
+
+        help_menu.addSeparator()
+
+        # Direct jumps to specific topics — most-asked first
+        grounding_action = QAction("MARC &Grounding (the \"Exists in\" column)…", self)
+        grounding_action.triggered.connect(
+            lambda: self._on_open_help("marc-grounding")
+        )
+        help_menu.addAction(grounding_action)
+
+        review_action = QAction("&Review && Edit dialog…", self)
+        review_action.triggered.connect(
+            lambda: self._on_open_help("review-and-edit")
+        )
+        help_menu.addAction(review_action)
+
+        autoapprove_action = QAction("&Auto-approve rules…", self)
+        autoapprove_action.triggered.connect(
+            lambda: self._on_open_help("auto-approve")
+        )
+        help_menu.addAction(autoapprove_action)
+
+        stages_action = QAction("&Stage-by-stage walkthrough…", self)
+        stages_action.triggered.connect(
+            lambda: self._on_open_help("stages")
+        )
+        help_menu.addAction(stages_action)
+
+        shortcuts_action = QAction("&Keyboard Shortcuts…", self)
+        shortcuts_action.triggered.connect(
+            lambda: self._on_open_help("shortcuts")
+        )
+        help_menu.addAction(shortcuts_action)
+
+        errors_action = QAction("Common &Errors…", self)
+        errors_action.triggered.connect(
+            lambda: self._on_open_help("errors")
+        )
+        help_menu.addAction(errors_action)
+
+        help_menu.addSeparator()
+
+        report_action = QAction("Report an &Issue…", self)
+        report_action.triggered.connect(self._on_report_issue)
+        help_menu.addAction(report_action)
+
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
@@ -783,3 +834,19 @@ class MainWindow(QMainWindow):
             "SHACL validation, Wikidata upload, and optional HMO Wikibase export.\n\n"
             "Bar-Ilan University",
         )
+
+    def _on_open_help(self, topic: str | None) -> None:
+        """Open the in-app help browser, optionally pre-navigating to a topic."""
+        # Lazy import — keeps cold-start lean and avoids pulling Qt
+        # browser deps into the menu-build path.
+        from mhm_pipeline.gui.widgets.help_browser import HelpBrowser  # noqa: PLC0415
+        dlg = HelpBrowser(initial_topic=topic, parent=self)
+        dlg.exec()
+
+    def _on_report_issue(self) -> None:
+        """Open the project issue tracker in the default browser."""
+        from PyQt6.QtCore import QUrl  # noqa: PLC0415
+        from PyQt6.QtGui import QDesktopServices  # noqa: PLC0415
+        QDesktopServices.openUrl(QUrl(
+            "https://github.com/alexgoldberg/mhm-pipeline/issues/new"
+        ))
