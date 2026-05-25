@@ -66,6 +66,35 @@ if [ -n "$ADDED_OR_MODIFIED" ]; then
     done <<< "$ADDED_OR_MODIFIED"
 fi
 
+# ── Stage the bundled eval-agent (Rule 50, 2026-05-25) ─────────────
+# The eval-agent ships INSIDE the bundle (Rule 50); the Windows
+# installer's MHMPipeline.spec picks it up via _opt_dir('eval-agent/...').
+# The sibling project at ../eval-agent isn't in this repo, so the
+# git-diff path above can't see it — we always stage a fresh snapshot
+# into the delta zip's _windelta-eval/ folder. Operator copies
+# _windelta-eval\eval-agent INTO mhm-pipeline-source\ during apply.
+EVAL_AGENT_SRC="${EVAL_AGENT_ROOT:-${ROOT}/../eval-agent}"
+EVAL_AGENT_STAGED=""
+if [ -d "$EVAL_AGENT_SRC/eval_agent" ]; then
+    EVAL_STAGE="${ROOT}/dist/_windelta-eval"
+    rm -rf "$EVAL_STAGE"
+    mkdir -p "$EVAL_STAGE/eval-agent"
+    rsync -a \
+        --exclude '.git' --exclude '.venv' --exclude 'state' \
+        --exclude 'tests' --exclude '__pycache__' --exclude '*.pyc' \
+        --exclude '*.swp' \
+        "$EVAL_AGENT_SRC/eval_agent" "$EVAL_STAGE/eval-agent/"
+    if [ -d "$EVAL_AGENT_SRC/config" ]; then
+        rsync -a --exclude '__pycache__' --exclude '*.pyc' \
+            "$EVAL_AGENT_SRC/config" "$EVAL_STAGE/eval-agent/"
+    fi
+    if [ -f "$EVAL_AGENT_SRC/pyproject.toml" ]; then
+        cp "$EVAL_AGENT_SRC/pyproject.toml" "$EVAL_STAGE/eval-agent/"
+    fi
+    EVAL_AGENT_STAGED="yes"
+    echo "  staged eval-agent → _windelta-eval/eval-agent ($(du -sh "$EVAL_STAGE" | cut -f1))"
+fi
+
 # ── Write a manifest + deletion list ───────────────────────────────
 echo
 echo "[3/3] Writing manifest..."
@@ -80,8 +109,19 @@ echo "[3/3] Writing manifest..."
     echo "--------------------------------------"
     echo "1. Make sure the previous full unzip (mhm-pipeline-source/) is"
     echo "   still in place from the previous transfer."
-    echo "2. Unzip this delta INTO the same folder, overwriting files."
-    echo "3. Delete the files listed below (they were retired):"
+    echo "2. Unzip this delta. It contains two top-level folders:"
+    echo "     _windelta/       → pipeline source overlay"
+    if [ -n "$EVAL_AGENT_STAGED" ]; then
+        echo "     _windelta-eval/  → eval-agent source (Rule 50)"
+    fi
+    echo "3. Copy _windelta\\* INTO mhm-pipeline-source\\ (overwrite files)."
+    if [ -n "$EVAL_AGENT_STAGED" ]; then
+        echo "4. Copy _windelta-eval\\eval-agent INTO mhm-pipeline-source\\"
+        echo "   so MHMPipeline.spec picks it up as eval-agent\\eval_agent"
+        echo "   and eval-agent\\config (Rule 50 bundles eval-agent inside"
+        echo "   the Windows installer)."
+    fi
+    echo "5. Delete the files listed below (they were retired):"
     echo ""
     if [ -n "$DELETED" ]; then
         echo "$DELETED" | sed 's/^/    DEL /'
@@ -89,7 +129,7 @@ echo "[3/3] Writing manifest..."
         echo "    (no deletions)"
     fi
     echo ""
-    echo "4. Re-run installer\\windows\\Build Installer.bat as usual."
+    echo "6. Re-run installer\\windows\\Build Installer.bat as usual."
     echo ""
     echo "Files included in this delta:"
     echo "-----------------------------"
@@ -104,8 +144,13 @@ echo "[3/3] Writing manifest..."
 } > "$OUT_TXT"
 
 cd "${ROOT}/dist"
-zip -r -q "$OUT_ZIP" "_windelta/"
-rm -rf "$STAGING"
+if [ -n "$EVAL_AGENT_STAGED" ]; then
+    zip -r -q "$OUT_ZIP" "_windelta/" "_windelta-eval/"
+    rm -rf "$STAGING" "$EVAL_STAGE"
+else
+    zip -r -q "$OUT_ZIP" "_windelta/"
+    rm -rf "$STAGING"
+fi
 
 SIZE="$(du -h "$OUT_ZIP" | cut -f1)"
 echo
