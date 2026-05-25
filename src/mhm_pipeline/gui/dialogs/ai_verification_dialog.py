@@ -625,14 +625,18 @@ class AiVerificationDialog(GlassDialog):
         self._summary_table.setMaximumHeight(220)
         layout.addWidget(self._summary_table)
 
-        # Detailed write-up
+        # Detailed write-up — theme-aware text + glass tint that adapts
+        # for the active OS theme. Rule 52 contrast fix (2026-05-25).
         self._report_browser = QTextBrowser()
         self._report_browser.setOpenExternalLinks(True)
+        _is_dark = theme.is_dark()
+        _bg_rgba = "rgba(0,0,0, 70)" if _is_dark else "rgba(255,255,255, 140)"
+        _border_rgba = "rgba(255,255,255, 22)" if _is_dark else "rgba(0,0,0, 28)"
         self._report_browser.setStyleSheet(
             f"QTextBrowser {{"
-            f" background: rgba(0,0,0, 70);"
-            f" color: #e5e7eb;"
-            f" border: 1px solid rgba(255,255,255, 22);"
+            f" background: {_bg_rgba};"
+            f" color: {theme.ui('text')};"
+            f" border: 1px solid {_border_rgba};"
             f" border-radius: {theme.RADIUS_MD}px;"
             f" padding: {theme.SPACE_SM}px;"
             f" }}"

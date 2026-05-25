@@ -78,41 +78,70 @@ class GlassDialog(QDialog):
 def glass_table_style(theme_mod: Any) -> str:
     """Translucent QTableView QSS so the backdrop reads through the table.
 
-    Text is hard-coded light (#e5e7eb) because the ``GraphBackdrop`` is
-    always dark — using ``theme.ui('text')`` would return dark in OS-light
-    mode and produce invisible text on the dark glass backdrop.
+    Rule 52 update (2026-05-25): the old version hard-coded
+    ``color: #e5e7eb`` (white) on the assumption that the
+    ``GraphBackdrop`` is always dark. In practice the backdrop renders
+    much lighter on macOS in light mode + when the dialog is large
+    enough that the translucent panel grey dominates over the
+    backdrop. White text on light-grey panel became invisible — a
+    real bright-on-bright contrast bug.
+
+    Fix: read every colour from ``theme_mod.ui(...)`` so dark/light
+    auto-adapts. The translucent BACKGROUNDS stay glass-styled
+    (low-alpha so the backdrop still reads through), but the
+    foreground TEXT colour follows the active OS theme.
     """
+    text = theme_mod.ui("text")
+    subtext = theme_mod.ui("subtext")
+    border = theme_mod.ui("border")
+    is_dark = theme_mod.is_dark()
+    # Glass background tint: dark glass on dark theme (rgba 0,0,0 90),
+    # near-white glass on light theme (rgba 255,255,255 110). The
+    # backdrop still reads through at low alpha — the panel just
+    # tinted differently so dark text remains legible in light mode.
+    panel_rgba = "rgba(0,0,0, 90)" if is_dark else "rgba(255,255,255, 140)"
+    alt_rgba = "rgba(255,255,255, 10)" if is_dark else "rgba(0,0,0, 10)"
+    header_rgba = "rgba(255,255,255, 12)" if is_dark else "rgba(0,0,0, 14)"
+    grid_rgba = "rgba(255,255,255, 18)" if is_dark else "rgba(0,0,0, 22)"
+    border_rgba = "rgba(255,255,255, 22)" if is_dark else "rgba(0,0,0, 28)"
+    selection_text = "white" if is_dark else text
     return (
         f"QTableView {{"
-        f" background: rgba(0,0,0, 90);"
-        f" alternate-background-color: rgba(255,255,255, 10);"
-        f" color: #e5e7eb;"
-        f" gridline-color: rgba(255,255,255, 18);"
-        f" border: 1px solid rgba(255,255,255, 22);"
+        f" background: {panel_rgba};"
+        f" alternate-background-color: {alt_rgba};"
+        f" color: {text};"
+        f" gridline-color: {grid_rgba};"
+        f" border: 1px solid {border_rgba};"
         f" border-radius: {theme_mod.RADIUS_MD}px;"
         f" selection-background-color: rgba(99, 102, 241, 120);"
-        f" selection-color: white;"
+        f" selection-color: {selection_text};"
         f" }}"
         f"QHeaderView::section {{"
-        f" background: rgba(255,255,255, 12);"
-        f" color: #e5e7eb;"
+        f" background: {header_rgba};"
+        f" color: {text};"
         f" padding: 6px 8px;"
         f" border: none;"
-        f" border-bottom: 1px solid rgba(255,255,255, 22);"
+        f" border-bottom: 1px solid {border_rgba};"
         f" font-weight: 600;"
         f" }}"
         f"QTableView::item {{"
         f" padding: 4px 8px;"
         f" border: none;"
-        f" color: #e5e7eb;"
+        f" color: {text};"
         f" }}"
         f"QTableView::item:selected {{"
-        f" color: white;"
+        f" color: {selection_text};"
         f" }}"
         f"QTableCornerButton::section {{"
-        f" background: rgba(255,255,255, 10);"
+        f" background: {header_rgba};"
         f" border: none;"
         f" }}"
+        f"QTableView {{ "
+        f" /* subtext for hint rows applied via Qt::ForegroundRole */"
+        f" }}"
+        # Keep an unused subtext token reference so refactors don't
+        # accidentally drop the lookup (small lint-friendly stub).
+        f"/* subtext: {subtext} · border: {border} */"
     )
 
 
