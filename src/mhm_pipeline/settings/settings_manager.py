@@ -35,6 +35,8 @@ class SettingsManager:
     WIKIBASE_CLOUD_BOT_USERNAME = "wikibase/cloud_bot_username"
     WIKIBASE_CLOUD_BOT_NAME = "wikibase/cloud_bot_name"
     WIKIBASE_CLOUD_BOT_PASSWORD = "wikibase/cloud_bot_password"
+    # ── Rule 50: Gemini API key for the bundled eval-agent verification ────
+    GEMINI_API_KEY = "tokens/gemini_api_key"
 
     # Repo-relative defaults (resolved at class definition time so they survive
     # being imported from any working directory). When frozen by PyInstaller
@@ -55,6 +57,13 @@ class SettingsManager:
             "Bar-Ilan University",
             "MHMPipeline",
         )
+        # Rule 50: secret-shaped values (Gemini, Wikidata, Wikibase
+        # Cloud bot password) are routed through the OS keychain via
+        # :mod:`credential_store`. Constructed lazily on first access
+        # so that test fixtures running without a real keychain don't
+        # pay the import cost.
+        self._credentials: object | None = None
+        self._credentials_migrated = False
 
     # ── Generic accessors ──────────────────────────────────────────────
 
@@ -133,15 +142,75 @@ class SettingsManager:
     def output_dir(self, value: Path) -> None:
         self.set(self.OUTPUT_DIR, value)
 
-    # wikidata_token
+    # ── Rule 50 — encrypted credential storage via the OS keychain ────
+    # Three secret-shaped values are routed through ``credential_store``
+    # (which wraps :mod:`keyring`) instead of the QSettings INI file.
+    # The pre-Rule-50 INI values are migrated on first access.
+
+    def _ensure_credentials(self) -> object:
+        """Return the lazy-imported :class:`CredentialStore`, running
+        the one-shot legacy migration on the first call."""
+        if self._credentials is None:
+            from mhm_pipeline.settings.credential_store import (  # noqa: PLC0415
+                CredentialStore,
+                migrate_from_qsettings,
+            )
+
+            self._credentials = CredentialStore()
+            if not self._credentials_migrated:
+                migrate_from_qsettings(
+                    self._qs,
+                    {
+                        "wikidata_token": self.WIKIDATA_TOKEN,
+                        "gemini_api_key": self.GEMINI_API_KEY,
+                        "wikibase_cloud_bot_password": self.WIKIBASE_CLOUD_BOT_PASSWORD,
+                    },
+                )
+                self._credentials_migrated = True
+        return self._credentials
+
+    @property
+    def credentials_backend(self) -> object:
+        """Public handle on the :class:`CredentialStore` for the
+        Credentials dialog (so the dialog can call ``has(key)`` /
+        ``delete(key)`` directly without re-implementing the API)."""
+        return self._ensure_credentials()
+
+    # wikidata_token (Rule 50: OS keychain)
     @property
     def wikidata_token(self) -> str:
-        """Wikidata API bearer token."""
-        return str(self.get(self.WIKIDATA_TOKEN, ""))
+        """Wikidata API bearer token. Stored in OS keychain (Rule 50)."""
+        store = self._ensure_credentials()
+        return store.get("wikidata_token")
 
     @wikidata_token.setter
     def wikidata_token(self, value: str) -> None:
-        self.set(self.WIKIDATA_TOKEN, value)
+        store = self._ensure_credentials()
+        if value:
+            store.set("wikidata_token", value)
+        else:
+            store.delete("wikidata_token")
+
+    # gemini_api_key (Rule 50: OS keychain)
+    @property
+    def gemini_api_key(self) -> str:
+        """Google Gemini API key used by the bundled eval-agent.
+
+        Stored in the OS keychain (Keychain on macOS, Credential
+        Manager on Windows, libsecret on Linux) via
+        :mod:`credential_store`. Returns the empty string when no key
+        is configured.
+        """
+        store = self._ensure_credentials()
+        return store.get("gemini_api_key")
+
+    @gemini_api_key.setter
+    def gemini_api_key(self, value: str) -> None:
+        store = self._ensure_credentials()
+        if value:
+            store.set("gemini_api_key", value)
+        else:
+            store.delete("gemini_api_key")
 
     # log_level
     @property
@@ -246,12 +315,24 @@ class SettingsManager:
 
     @property
     def wikibase_cloud_bot_password(self) -> str:
-        """The actual bot password. Stored in OS keychain via QSettings."""
-        return str(self.get(self.WIKIBASE_CLOUD_BOT_PASSWORD, ""))
+        """The actual bot password. Stored in the OS keychain (Rule 50).
+
+        Pre-Rule-50 builds stored this in the QSettings INI file
+        ("OS keychain via QSettings" was a misleading comment — INI
+        format never used the keychain on Linux/Windows). The
+        :meth:`_ensure_credentials` first-launch migration moves any
+        such legacy value over to the real keychain.
+        """
+        store = self._ensure_credentials()
+        return store.get("wikibase_cloud_bot_password")
 
     @wikibase_cloud_bot_password.setter
     def wikibase_cloud_bot_password(self, value: str) -> None:
-        self.set(self.WIKIBASE_CLOUD_BOT_PASSWORD, value)
+        store = self._ensure_credentials()
+        if value:
+            store.set("wikibase_cloud_bot_password", value)
+        else:
+            store.delete("wikibase_cloud_bot_password")
 
     @property
     def wikibase_cloud_credentials(self) -> object | None:

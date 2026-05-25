@@ -1696,3 +1696,173 @@ Rule 36 (theme tokens — popup chrome reads `theme.ui(...)`, no
 hardcoded hex). Existing chip-row dimension filter behaviour is
 unchanged; the per-column filter is purely additive in
 `filterAcceptsRow` and ANDs after the existing checks.
+
+### 50. eval-agent ships inside the bundle + Stage 2 rename + Credentials dialog (added 2026-05-25)
+
+The 2026-05-25 eval-agent run revealed that the three NER models add
+almost no information the authority + rule layers don't already
+provide; they're best understood as a long-tail safety net rather
+than the headline engine. Two structural changes follow:
+
+**A. Stage 2 renamed to "AI-based Enrichment".** The sidebar,
+`_STAGE_PROGRESS_LABELS`, panel title, and Stage 2 help doc all
+read **"AI-based Enrichment"** now. Internal class names
+(`NerPanel`, `NerWorker`) stay to avoid a churn-rename. The renamed
+stage covers three NER models + the Genre classifier + the new
+optional Gemini verification step.
+
+**B. eval-agent ships inside the bundle.** The sibling project at
+`/Users/alexandergo/Documents/Doctorat/eval-agent` is now staged into
+both bundles at build time:
+
+- macOS: `MHM Pipeline.app/Contents/Resources/eval-agent/`
+- Windows: `<install>/eval-agent/`
+
+Rule 48's trust boundary is **unchanged** — no Python imports across
+the boundary, communication is subprocess + filesystem only. The
+only thing that changes is the on-disk location of the eval-agent
+tree: it's now next to the pipeline app instead of in the user's
+home. CLAUDE.md Rule 48 §4 invariants 1–4 all still hold.
+
+A new on-demand button **"Verify with AI agent"** sits next to
+"Extract Named Entities" on the Stage 2 panel. It's enabled only
+when `ner_results.json` exists in the selected output dir.
+Clicking fires `EvalAgentWorker` which:
+
+1. Locates the bundled eval-agent via
+   `mhm_pipeline.eval_agent_runner.locate_bundled_eval_agent()`.
+2. Copies `config/` (and rubrics) into a writable per-user dir at
+   `platformdirs.user_data_dir("MHMPipeline")/eval-agent/` (or
+   refreshes it if the bundled config's mtime is newer).
+3. Spawns `python -m eval_agent.cli run --pipeline-output …` with
+   `GEMINI_API_KEY` injected via the env (never on argv) and
+   `PYTHONPATH` pointing at the bundled eval-agent tree.
+4. Streams stdout; lines starting `[STEP]` become `substep` signal
+   emissions for the progress bar; `[PROGRESS] N` becomes `progress`.
+5. On exit 0 → emits `finished(<run-dir>)`; MainWindow's
+   `_on_stage_finished` for `EVAL_AGENT_STAGE_INDEX (=-1)` opens an
+   `EvalAgentReportDialog` showing the summary table + rendered
+   `report.md` + an "Open results folder" button.
+
+**C. Encrypted credentials with no read-back UX.** Three secret-
+shaped values previously scattered across panels — Wikidata token,
+Wikibase Cloud bot password, Gemini API key — are now stored
+encrypted via the OS keychain (`keyring` library):
+
+- macOS — Keychain
+- Windows — Credential Manager
+- Linux — Secret Service (libsecret)
+
+The wrapper lives in
+[src/mhm_pipeline/settings/credential_store.py](src/mhm_pipeline/settings/credential_store.py).
+SettingsManager's three secret properties (`gemini_api_key`,
+`wikidata_token`, `wikibase_cloud_bot_password`) route through it.
+On first launch after upgrading,
+`credential_store.migrate_from_qsettings` sweeps any pre-Rule-50
+plaintext values from the QSettings INI file into the keychain
+and clears the legacy slot.
+
+**No read-back UX** (user directive, 2026-05-25): the new
+**Settings → Credentials…** dialog
+([src/mhm_pipeline/gui/dialogs/credentials_dialog.py](src/mhm_pipeline/gui/dialogs/credentials_dialog.py))
+shows EMPTY inputs with a `"stored — type to replace"` placeholder
+when a value is stored. The user can:
+
+- **Type a new value** → on Save, replaces the stored value.
+- **Tick "Show"** → reveals what they're entering (never what's
+  stored, because the input is empty until they type).
+- **Click "Clear"** → deletes the stored value entirely.
+- **Leave empty + Save** → existing stored value preserved
+  unchanged (so editing one key doesn't disturb the other two).
+
+A `Help` button in the dialog opens the help browser at the new
+**API Credentials** topic which walks through how to obtain each
+key.
+
+**D. Bundling**:
+
+- `installer/macos/build_app.sh` adds Step 4.5 that rsyncs
+  `$EVAL_AGENT_ROOT` (default `${REPO_ROOT}/../eval-agent`) into
+  the .app, excluding `.git`, `.venv`, `state`, `tests`,
+  `__pycache__`.
+- `scripts/package_for_windows_build.sh` stages the same tree
+  next to `mhm-pipeline-source/` so the Windows zip ships it.
+- `installer/windows/MHMPipeline.spec` adds three
+  `_opt_dir` / `_opt` entries under `eval-agent/`.
+- `pyproject.toml` adds `keyring>=24.0` to runtime dependencies
+  (cross-platform OS-keychain access).
+
+**Files touched / added:**
+
+NEW
+- `src/mhm_pipeline/eval_agent_runner.py` — bundle locator +
+  per-user state dir helper
+- `src/mhm_pipeline/settings/credential_store.py` — keyring wrapper
+  + closed-set validation + legacy migration
+- `src/mhm_pipeline/gui/dialogs/__init__.py`
+- `src/mhm_pipeline/gui/dialogs/credentials_dialog.py`
+- `src/mhm_pipeline/gui/dialogs/eval_agent_report_dialog.py`
+
+MOD
+- `src/mhm_pipeline/settings/settings_manager.py` — three secret
+  properties route through `CredentialStore`; added
+  `gemini_api_key` property + `credentials_backend` accessor
+- `src/mhm_pipeline/controller/workers.py` — new `EvalAgentWorker`
+- `src/mhm_pipeline/controller/pipeline_controller.py` — new
+  `start_eval_agent()` + `EVAL_AGENT_STAGE_INDEX = -1` sentinel
+- `src/mhm_pipeline/gui/main_window.py` — Stage 2 label rename,
+  Settings → Credentials menu, verify_requested slot, eval-agent
+  finished handler
+- `src/mhm_pipeline/gui/panels/ner_panel.py` — "Verify with AI
+  agent" button + `verify_requested` signal + enable-state hook
+- `src/mhm_pipeline/gui/widgets/help_browser.py` — Stage 2 rename
+  + new "credentials" topic + module-level `open_help()` helper
+- `installer/macos/build_app.sh` — Step 4.5 (bundle eval-agent)
+- `installer/windows/MHMPipeline.spec` — three eval-agent data
+  entries
+- `scripts/package_for_windows_build.sh` — stage eval-agent for the
+  Windows zip
+- `pyproject.toml` — `keyring>=24.0` dep
+
+**Tests added (61):**
+
+- `tests/unit/test_credential_store.py` (16): round-trip,
+  closed-set validation, no-backend graceful degrade, legacy
+  QSettings migration (4 outcomes), keyring-exception swallowing
+- `tests/unit/test_eval_agent_runner.py` (5): bundle locator +
+  ensure-state-dir + idempotency + mtime refresh + read-only
+  bundle invariant
+- `tests/unit/test_eval_agent_worker.py` (7): input validation,
+  subprocess argv/env shape, stdout parsing, exit-code routing
+- `tests/integration/test_credentials_and_eval_agent.py` (5):
+  SettingsManager↔CredentialStore round-trip, QSettings migration
+  on first access, real subprocess against a fake eval-agent CLI
+  fixture
+- `tests/unit/gui/dialogs/test_credentials_dialog_e2e.py` (13):
+  three sections render, no read-back of stored values,
+  show/hide echo toggle, Save persistence, empty-input preserves
+  stored value, Clear button deletes, signal emission, reopened
+  dialog still hides values
+- `tests/unit/gui/dialogs/test_eval_agent_report_dialog_e2e.py` (5):
+  summary-CSV table, markdown report rendering, missing-file
+  handling, auto-reject placeholder
+- `tests/integration/test_main_window_rule_50_e2e.py` (7): Stage 2
+  label rename, Credentials menu item, Verify button presence +
+  initial-disabled state, verify_requested signal exists, slot
+  opens Credentials when no key is stored
+
+Total: 915 → 964 unit + 12 new integration. Zero regressions.
+
+**Safety invariants preserved:** Rule 37 (`GlassDialog` for both
+new dialogs). Rule 36 (theme tokens — popup chrome reads
+`theme.ui(...)`). Rule 38 (Wikidata four-stage modification guard
+unchanged). Rule 45 (Wikibase Cloud trust boundary remains
+distinct from Wikidata's). Rule 48 (eval-agent trust boundary
+unchanged — no Python imports across, communication is subprocess
++ filesystem only; only the on-disk location of the eval-agent
+moves into the bundle).
+
+**Cross-ref to Rule 48:** the "lives outside this repo" stance of
+Rule 48 is refined by Rule 50 to "lives in a sibling project; a
+snapshot is bundled at build time". The four hard invariants in
+Rule 48 §4 are explicitly preserved.

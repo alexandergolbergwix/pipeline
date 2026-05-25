@@ -24,13 +24,16 @@ def help_browser(qtbot: object) -> HelpBrowser:
 
 
 class TestHelpBrowser:
-    def test_has_nine_topics(self) -> None:
+    def test_required_topics_present(self) -> None:
+        """The exact topic count varies as the help browser grows
+        (Rule 50 added "credentials"). Lock the set of topics we
+        promise to keep instead — counts are brittle as the doc
+        evolves."""
         keys = HelpBrowser.topic_keys()
-        assert len(keys) == 9, f"expected 9 topics, got {keys}"
-        # The interesting topics that motivated this widget
         for required in ("marc-grounding", "review-and-edit",
-                          "auto-approve", "shortcuts", "errors"):
-            assert required in keys
+                          "auto-approve", "shortcuts", "errors",
+                          "credentials"):
+            assert required in keys, f"expected '{required}' in {keys}"
 
     def test_default_opens_on_first_topic(
         self, help_browser: HelpBrowser,

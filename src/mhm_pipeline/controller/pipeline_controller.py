@@ -11,6 +11,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.controller.workers import (
     AuthorityWorker,
+    EvalAgentWorker,
     MarcParseWorker,
     NerWorker,
     RdfBuildWorker,
@@ -30,6 +31,13 @@ _STAGE_NAMES: dict[int, str] = {
     4: "SHACL Validate",
     5: "Wikidata Studio (merged preview + upload)",
 }
+
+# Rule 50 — the eval-agent verification step piggybacks on the
+# StageWorker lifecycle but does NOT consume a numbered stage slot;
+# it's an optional post-Stage-2 audit. ``-1`` is the sentinel routed
+# through the existing stage_* signals so the GUI's progress + log
+# wiring transparently picks it up.
+EVAL_AGENT_STAGE_INDEX = -1
 
 
 class PipelineController(QObject):
@@ -88,6 +96,49 @@ class PipelineController(QObject):
         """Mark an interactive (no-worker) stage as complete and emit finished."""
         self._stage_outputs[stage_index] = output_path
         self.stage_finished.emit(stage_index, output_path)
+
+    def start_eval_agent(
+        self,
+        pipeline_output_dir: Path,
+        gemini_api_key: str,
+        models: set[str] | None = None,
+    ) -> None:
+        """Launch the bundled eval-agent over the Stage 2 output dir (Rule 50).
+
+        Reuses the existing :class:`StageWorker` lifecycle wiring so
+        progress + substep + log lines + finished/error route through
+        ``stage_progress`` / ``stage_substep`` / ``stage_finished`` /
+        ``stage_error`` with ``stage_index = EVAL_AGENT_STAGE_INDEX``.
+        The main window's panel listens on that sentinel value and
+        opens the eval-agent report dialog on ``stage_finished``.
+
+        Parameters
+        ----------
+        pipeline_output_dir:
+            Directory containing ``marc_extracted.json`` +
+            ``ner_results.json`` (the Stage 2 output dir).
+        gemini_api_key:
+            Pulled from :attr:`SettingsManager.gemini_api_key` by the
+            caller. Empty string lets the worker emit a clear error
+            that routes the user to Settings → Credentials.
+        models:
+            Optional include-set of evaluator ids to run. ``None``
+            runs every registered evaluator.
+        """
+        worker = EvalAgentWorker(
+            pipeline_output_dir=pipeline_output_dir,
+            gemini_api_key=gemini_api_key,
+            models=models,
+        )
+        self._current_worker = worker
+        stage_index = EVAL_AGENT_STAGE_INDEX
+        worker.finished.connect(partial(self._on_worker_finished, stage_index))
+        worker.error.connect(partial(self._on_worker_error, stage_index))
+        worker.progress.connect(partial(self._on_worker_progress, stage_index))
+        worker.substep.connect(partial(self._on_worker_substep, stage_index))
+        logger.info("Starting eval-agent verification on %s", pipeline_output_dir)
+        self.stage_started.emit(stage_index)
+        worker.start()
 
     def cancel(self) -> None:
         """Request the current worker to stop and wait for it to finish."""

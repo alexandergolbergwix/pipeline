@@ -150,6 +150,34 @@ else
   echo "  Skipping TaatikNet flatten — snapshot not in HF cache (see warning above)."
 fi
 
+# Rule 50 (2026-05-25) — stage the eval-agent snapshot next to
+# mhm-pipeline-source/ in the zip so MHMPipeline.spec can pick it up
+# via _opt_dir('eval-agent/...'). Source is the sibling project at
+# $ROOT/../eval-agent unless EVAL_AGENT_ROOT overrides.
+EVAL_AGENT_SRC="${EVAL_AGENT_ROOT:-$ROOT/../eval-agent}"
+if [ -d "$EVAL_AGENT_SRC/eval_agent" ]; then
+  echo "  Staging eval-agent from $EVAL_AGENT_SRC..."
+  mkdir -p "$STAGING/eval-agent"
+  rsync -a \
+    --exclude '.git' \
+    --exclude '.venv' \
+    --exclude 'state' \
+    --exclude 'tests' \
+    --exclude '__pycache__' \
+    --exclude '*.pyc' \
+    --exclude '*.swp' \
+    "$EVAL_AGENT_SRC/eval_agent" "$STAGING/eval-agent/"
+  if [ -d "$EVAL_AGENT_SRC/config" ]; then
+    rsync -a --exclude '__pycache__' --exclude '*.pyc' \
+      "$EVAL_AGENT_SRC/config" "$STAGING/eval-agent/"
+  fi
+  if [ -f "$EVAL_AGENT_SRC/pyproject.toml" ]; then
+    cp "$EVAL_AGENT_SRC/pyproject.toml" "$STAGING/eval-agent/pyproject.toml"
+  fi
+else
+  echo "  WARNING: eval-agent source not found at $EVAL_AGENT_SRC — Verify with AI agent will be disabled on Windows."
+fi
+
 echo
 echo "[4/4] Zipping (fastest compression — final compression happens in Inno Setup)..."
 cd "${ROOT}/dist"

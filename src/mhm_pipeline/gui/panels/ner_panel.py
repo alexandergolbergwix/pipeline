@@ -1,9 +1,14 @@
-"""NER Extraction panel.
+"""AI-based Enrichment panel (Rule 50, 2026-05-25).
 
-Runs up to 4 NER models: Person (notes/colophon), Provenance (MARC 561),
-Contents (MARC 505), Colophon ML (MARC 500). The Genre classifier runs later
-in Stage 3 (RDF building) and is shown here as a status indicator only.
-Results open in full-screen popups via View / Edit buttons.
+Runs the four ML models that enrich Stage 1's MARC extract: three NER
+models (Person on notes/colophon, Provenance on MARC 561, Contents on
+MARC 505) plus the Genre classifier. After NER results land the panel
+exposes an optional "Verify with AI agent" step that runs the bundled
+eval-agent (Google Gemini) and shows a precision report.
+
+The internal class is still :class:`NerPanel` for backwards-
+compatibility with imports; the user-facing label is
+"AI-based Enrichment" everywhere (sidebar, panel title, progress bar).
 """
 
 from __future__ import annotations
@@ -48,10 +53,20 @@ _PREVIEW_MAX_ENTITIES = 8
 
 
 class NerPanel(QWidget):
-    """NER extraction panel — runs entity extraction over parsed MARC JSON."""
+    """AI-based Enrichment panel — runs NER + classifier + optional Gemini verification.
+
+    Renamed in Rule 50 (2026-05-25); the class identifier stays as
+    :class:`NerPanel` to avoid a cross-codebase rename, but every
+    user-facing string says "AI-based Enrichment".
+    """
 
     # (input_path, output_dir, model_path, batch_size, prov_model_path, cont_model_path)
     run_requested = pyqtSignal(Path, Path, str, int, str, str)
+    # Rule 50 — "Verify with AI agent" button → MainWindow → controller.
+    # Carries the pipeline output dir (the same dir Stage 2 wrote
+    # ner_results.json into). MainWindow pulls the Gemini API key from
+    # SettingsManager.gemini_api_key before calling the controller.
+    verify_requested = pyqtSignal(Path)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -70,6 +85,11 @@ class NerPanel(QWidget):
         self._output_selector = FileSelector("Output Dir:", mode="directory")
         layout.addWidget(self._input_selector)
         layout.addWidget(self._output_selector)
+        # Rule 50 — keep the Verify-with-AI-agent button gated on the
+        # presence of ner_results.json in the selected output dir.
+        self._output_selector.path_changed.connect(
+            lambda _p: self._refresh_verify_btn_state()
+        )
 
         # ── NER Models — stored as instance fields, shown in popup ────
         # All four .pt classifiers are resolved through find_model_weights()
@@ -153,9 +173,23 @@ class NerPanel(QWidget):
         self._load_btn.setToolTip("Load previously generated NER results JSON")
         self._load_btn.clicked.connect(self._on_load_results)
 
+        # Rule 50 — "Verify with AI agent" button. Enabled only when
+        # the current output dir holds ner_results.json (set by
+        # set_output_dir() / display_entities()).
+        self._verify_btn = QPushButton("Verify with AI agent")
+        self._verify_btn.setStyleSheet(theme.button_style("load"))
+        self._verify_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._verify_btn.setToolTip(
+            "Run the bundled eval-agent (Google Gemini) over the current NER "
+            "results. Requires a Gemini API key in Settings → Credentials."
+        )
+        self._verify_btn.setEnabled(False)
+        self._verify_btn.clicked.connect(self._on_verify_with_ai)
+
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self._run_btn)
         btn_layout.addWidget(self._load_btn)
+        btn_layout.addWidget(self._verify_btn)
         layout.addLayout(btn_layout)
 
         # Progress bar — DynamicProgressBar (substep label + ETA + colored
@@ -834,6 +868,40 @@ class NerPanel(QWidget):
             cont_model,
         )
 
+    def _on_verify_with_ai(self) -> None:
+        """Rule 50 — fire the bundled eval-agent against the current
+        output directory's ``ner_results.json``."""
+        output_path = self._output_selector.path
+        if output_path is None or not output_path.exists():
+            self._log_viewer.append_line(
+                "Error: select an output directory first."
+            )
+            return
+        ner_path = output_path / "ner_results.json"
+        if not ner_path.exists():
+            self._log_viewer.append_line(
+                "Error: no ner_results.json in the output directory. "
+                "Run Extract Named Entities first."
+            )
+            return
+        self._log_viewer.append_line(
+            f"Launching AI agent verification on {output_path}…"
+        )
+        self.verify_requested.emit(output_path)
+
+    def _refresh_verify_btn_state(self) -> None:
+        """Enable the Verify button iff ``output_dir/ner_results.json`` exists."""
+        verify_btn = getattr(self, "_verify_btn", None)
+        if verify_btn is None:
+            return
+        output_path = self._output_selector.path
+        can_verify = bool(
+            output_path
+            and output_path.exists()
+            and (output_path / "ner_results.json").exists()
+        )
+        verify_btn.setEnabled(can_verify)
+
     def _on_load_results(self) -> None:
         """Load and display previously generated NER results."""
         from PyQt6.QtWidgets import QFileDialog
@@ -923,6 +991,9 @@ class NerPanel(QWidget):
             entities: List of extracted Entity objects.
             records: Optional list of full record dicts for display_records mode.
         """
+        # Rule 50 — once results land, the Verify-with-AI-agent button
+        # becomes available.
+        self._refresh_verify_btn_state()
         if records:
             self._entity_highlighter.display_records(records)
             self._current_entities = self._entity_highlighter.get_entities()

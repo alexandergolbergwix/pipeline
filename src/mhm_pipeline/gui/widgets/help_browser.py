@@ -58,9 +58,12 @@ conversion tool for Hebrew manuscript records.
 
 1. **Stage 1 — MARC Parse**: reads an NLI TSV / MARC-XML export
    and converts it to structured `marc_extracted.json`.
-2. **Stage 2 — NER**: runs five trained models (Person, Provenance,
-   Contents NER + Genre + Colophon classifiers) to extract entities
-   from the source text.
+2. **Stage 2 — AI-based Enrichment**: runs three trained NER models
+   (Person, Provenance, Contents) plus the Genre classifier over the
+   source text. After NER finishes, an optional **Verify with AI agent**
+   step calls the bundled eval-agent (Google Gemini) to flag low-
+   precision predictions before they reach Stage 3. Requires a free
+   Gemini API key in **Settings → Credentials**.
 3. **Stage 3 — Authority Resolution**: matches extracted persons /
    places / works against Mazal (NLI J9U), VIAF, KIMA, and Wikidata.
 4. **Stage 4 — RDF Mapping**: serialises the enriched data as
@@ -244,7 +247,7 @@ contributor columns).
 **Output**: `eval/work/marc_extracted.json` — structured per-record
 dict with all bibliographic fields.
 
-## Stage 2 — NER
+## Stage 2 — AI-based Enrichment
 
 **Input**: `marc_extracted.json`.
 **Output**: `eval/work/ner_results.json` — every extracted entity
@@ -259,6 +262,14 @@ Four models run:
 | Provenance NER (OWNER/DATE/COLLECTION) | `entities[source=provenance_ner]` | Ownership inscriptions |
 | Contents NER (WORK/FOLIO/WORK_AUTHOR)  | `entities[source=contents_ner]` | Cited works + folios |
 | Genre classifier                       | `ml_genres[]` | MARC 655 fallback |
+
+### Optional: Verify with AI agent
+
+After NER finishes, the **Verify with AI agent** button (next to
+**Extract Named Entities**) runs the bundled eval-agent — a Gemini-
+based judge — over every prediction and produces a per-model
+precision report. Requires a Gemini API key in **Settings →
+Credentials**. See the **API Credentials** topic for setup details.
 
 ## Stage 3 — Authority Resolution
 
@@ -443,6 +454,111 @@ If you use the MHM Pipeline in your research, please cite:
 - The HMO Ontology working group
 """,
     ),
+    (
+        "credentials",
+        "API Credentials",
+        """# API Credentials
+
+The pipeline talks to three different services. Each one wants its
+own key. Open **Settings → Credentials…** to enter or replace them.
+Stored values are encrypted at rest in the OS keychain — never
+displayed back in the input field. To replace a stored value, type
+a new one. To remove it, click **Clear**.
+
+---
+
+## Gemini API key
+
+**Used by:** the AI agent verification step on Stage 2.
+
+**Where to get it:** open
+[https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey),
+sign in with a Google account, click **Create API key**. Pick the
+free-tier project unless you need higher rate limits.
+
+**Format:** starts with `AIza` followed by ~35 alphanumeric / `_` /
+`-` characters. Example: `AIzaSyA…` (truncated).
+
+**Cost:** a full eval-agent run on the 68-record corpus uses
+~419 k input + 13 k output tokens (about 2 minutes wall-clock). On
+the free tier this fits comfortably under the daily quota.
+
+---
+
+## Wikidata token
+
+**Used by:** Stage 6 Wikidata upload.
+
+Three formats are accepted; pick the one that matches the upload
+mode you want.
+
+### Option A — Bot password (simplest)
+
+Visit
+[https://www.wikidata.org/wiki/Special:BotPasswords](https://www.wikidata.org/wiki/Special:BotPasswords).
+Create a bot password with the `edit` and `createeditmovepage`
+grants (Rule 38 safety guards refuse to delete or merge regardless
+of the granted scope).
+
+**Format:** `Username@BotName:hex_password`
+
+### Option B — OAuth 2.0 owner-only consumer
+
+Visit
+[Special:OAuthConsumerRegistration](https://meta.wikimedia.org/wiki/Special:OAuthConsumerRegistration),
+request an owner-only consumer, set scopes to "edit existing pages"
++ "create new pages".
+
+**Format:** `consumer_key|consumer_secret`
+
+### Option C — JWT bearer
+
+Short-lived token from `Special:OAuth/authorize`. Useful for one-off
+testing.
+
+**Format:** `eyJ…`
+
+---
+
+## MHM Wikibase Cloud bot password
+
+**Used by:** Stage 6.5 IIIF manifest upload.
+
+This is a **separate trust boundary** from Wikidata (see CLAUDE.md
+Rule 45). The pipeline writes only to the project's own Wikibase
+Cloud instance at
+[mhm-hmo.wikibase.cloud](https://mhm-hmo.wikibase.cloud).
+
+**Where to set it up:**
+[https://mhm-hmo.wikibase.cloud/wiki/Special:BotPasswords](https://mhm-hmo.wikibase.cloud/wiki/Special:BotPasswords)
+→ log in as the project owner → **Create a new bot password**.
+Grants: `edit` only — the pipeline never creates pages.
+
+**Three fields** in the Credentials dialog:
+
+* **Username** — your Wikibase Cloud account username
+  (e.g. `Alexander Goldberg IL`).
+* **Bot password name** — the part *after* `@` in the bot-password
+  id MediaWiki generates (e.g. `MHMPipelineBot`).
+* **Bot password** — the long hex string MediaWiki shows once after
+  creation. Copy it immediately; it's not retrievable later.
+
+---
+
+## How credentials are stored
+
+* **macOS** — Keychain.
+* **Windows** — Credential Manager.
+* **Linux** — Secret Service (libsecret).
+
+The dialog never reads a stored value back into the input field —
+it only shows whether a value is stored. To replace, type a new
+value. To remove entirely, click **Clear**. Pre-Rule-50 builds
+stored some values in the QSettings INI file; on first launch
+after upgrading they are migrated to the keychain and the legacy
+INI slot is cleared.
+""",
+    ),
 ]
 
 
@@ -540,4 +656,16 @@ class HelpBrowser(GlassDialog):
         return [k for k, _l, _b in _TOPICS]
 
 
-__all__ = ["HelpBrowser"]
+def open_help(topic: str | None = None, parent: object | None = None) -> None:
+    """Open the help browser at *topic* (or the first topic by default).
+
+    Module-level entry point so dialogs across the GUI can deep-link
+    into the help browser without each one duplicating
+    :class:`HelpBrowser` construction.
+    """
+    qt_parent: QWidget | None = parent if isinstance(parent, QWidget) else None
+    dialog = HelpBrowser(initial_topic=topic, parent=qt_parent)
+    dialog.exec()
+
+
+__all__ = ["HelpBrowser", "open_help"]

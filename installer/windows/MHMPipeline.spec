@@ -105,6 +105,15 @@ datas += _opt('ontology/shacl-shapes.ttl', 'ontology')
 # Some code reads version metadata from pyproject.toml at runtime.
 datas += _opt('pyproject.toml', '.')
 
+# Rule 50 (2026-05-25): bundle the eval-agent snapshot so the Verify
+# with AI agent button works offline. Staged into eval-agent/ next to
+# mhm-pipeline-source/ by scripts/package_for_windows_build.sh.
+# Trust boundary (Rule 48): no Python imports across the boundary —
+# the runtime calls it via subprocess.
+datas += _opt_dir('eval-agent/eval_agent', 'eval-agent/eval_agent')
+datas += _opt_dir('eval-agent/config', 'eval-agent/config')
+datas += _opt('eval-agent/pyproject.toml', 'eval-agent')
+
 
 # ---------------------------------------------------------------------------
 # Hidden imports — modules PyInstaller's static analyser tends to miss.

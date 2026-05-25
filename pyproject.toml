@@ -25,6 +25,9 @@ dependencies = [
     # whatever PyQt6 series this venv installs.
     "PyQt6-WebEngine>=6.7,<6.11",
     "platformdirs>=4.2",
+    # Rule 50: encrypted at-rest credential storage via the OS keychain
+    # (Keychain on macOS, Credential Manager on Windows, libsecret on Linux).
+    "keyring>=24.0",
     "requests>=2.31",
     "protobuf>=7.34.1",
     "scikit-learn>=1.3",

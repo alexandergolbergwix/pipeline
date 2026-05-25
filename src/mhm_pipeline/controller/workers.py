@@ -2568,3 +2568,196 @@ class WikidataUploadWorker(StageWorker):
                 exc,
                 exc_info=True,
             )
+
+
+# ── Rule 50 — eval-agent verification (Stage 2 post-step) ────────────
+
+
+class EvalAgentWorker(StageWorker):
+    """Verify Stage 2 outputs with the bundled eval-agent (Rule 50).
+
+    Spawns the eval-agent CLI as a subprocess against the pipeline
+    output directory (which must contain ``marc_extracted.json`` +
+    ``ner_results.json``). Streams subprocess stdout into ``log_line``
+    so the GUI's log viewer sees every line; parses substep-shaped
+    lines (``"[STEP] …"``) into ``substep`` emissions for the progress
+    bar.
+
+    Trust boundary (CLAUDE.md Rule 48 / 50): no Python imports across
+    the boundary. Communication is subprocess args + ``GEMINI_API_KEY``
+    env var + filesystem outputs only.
+
+    Args:
+        pipeline_output_dir: dir containing ``marc_extracted.json``
+            and ``ner_results.json``. Same dir Stage 2's NerWorker
+            wrote to.
+        gemini_api_key: Google Gemini API key. Passed via the
+            ``GEMINI_API_KEY`` env var (never on the command line).
+            Empty string is rejected at run() time with a clear error
+            so the GUI can route the user to Settings → Credentials.
+        models: optional include-set of evaluator ids
+            (``{"person_ner", "provenance_ner", "contents_ner",
+            "genre_classifier"}``). ``None`` runs every registered
+            evaluator.
+    """
+
+    def __init__(
+        self,
+        pipeline_output_dir: Path,
+        gemini_api_key: str,
+        models: set[str] | None = None,
+    ) -> None:
+        super().__init__()
+        self._pipeline_output_dir = Path(pipeline_output_dir)
+        self._gemini_api_key = gemini_api_key
+        self._models = set(models) if models else None
+        # Stamped by run() before subprocess.Popen for testability.
+        self._last_cmd: list[str] | None = None
+        self._last_cwd: Path | None = None
+
+    def run(self) -> None:
+        try:
+            from mhm_pipeline.eval_agent_runner import (  # noqa: PLC0415
+                ensure_user_state_dir,
+                locate_bundled_eval_agent,
+                resolve_python_executable,
+            )
+        except Exception as exc:  # defensive
+            self.error.emit(f"Eval-agent runner unavailable: {exc}")
+            return
+
+        if not self._gemini_api_key:
+            self.error.emit(
+                "Gemini API key is required. Open Settings → Credentials… "
+                "and paste a key from https://aistudio.google.com/app/apikey."
+            )
+            return
+
+        marc_path = self._pipeline_output_dir / "marc_extracted.json"
+        ner_path = self._pipeline_output_dir / "ner_results.json"
+        if not marc_path.exists() or not ner_path.exists():
+            self.error.emit(
+                "Pipeline output dir is missing the inputs the AI agent "
+                "needs. Required: marc_extracted.json + ner_results.json. "
+                f"Looked in {self._pipeline_output_dir}."
+            )
+            return
+
+        try:
+            bundled_root = locate_bundled_eval_agent()
+            user_state_dir = ensure_user_state_dir(bundled_root)
+        except FileNotFoundError as exc:
+            self.error.emit(
+                f"Bundled eval-agent not found in this install: {exc}"
+            )
+            return
+        except Exception as exc:
+            self.error.emit(f"Could not prepare eval-agent state dir: {exc}")
+            return
+
+        python_exe = resolve_python_executable()
+        cmd: list[str] = [
+            python_exe,
+            "-m", "eval_agent.cli",
+            "run",
+            "--pipeline-output", str(self._pipeline_output_dir),
+        ]
+        if self._models:
+            cmd.extend(["--models", ",".join(sorted(self._models))])
+
+        env = dict(os.environ)
+        env["GEMINI_API_KEY"] = self._gemini_api_key
+        # Make the read-only bundled eval-agent importable without polluting
+        # the rest of the pipeline's PYTHONPATH.
+        existing_path = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{bundled_root}{os.pathsep}{existing_path}"
+            if existing_path
+            else str(bundled_root)
+        )
+        # Eval-agent writes state under cwd/state/runs/<ts>/ — direct it at
+        # the writable per-user dir.
+        env["EVAL_AGENT_STATE_DIR"] = str(user_state_dir / "state")
+
+        self._last_cmd = cmd
+        self._last_cwd = user_state_dir
+        self.substep.emit("Starting AI agent verification")
+        self.log_line.emit(
+            f"Launching eval-agent: {python_exe} -m eval_agent.cli run "
+            f"--pipeline-output {self._pipeline_output_dir.name}"
+        )
+
+        # Subprocess: capture both streams, line-buffered so progress is
+        # visible. We never reveal the API key in any log line — it's only
+        # in the child's env block.
+        import subprocess  # noqa: PLC0415
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(user_state_dir),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            self.error.emit(f"Could not launch eval-agent subprocess: {exc}")
+            return
+
+        progress_pct = 0
+        stdout = proc.stdout
+        if stdout is not None:
+            for raw in stdout:
+                line = raw.rstrip("\r\n")
+                if not line:
+                    continue
+                # Parse substep-shaped lines for the progress bar.
+                if line.startswith("[STEP]"):
+                    self.substep.emit(line[len("[STEP]"):].strip())
+                elif line.startswith("[PROGRESS]"):
+                    try:
+                        # Format: "[PROGRESS] 47" → 47%
+                        pct = int(line[len("[PROGRESS]"):].strip())
+                        if 0 <= pct <= 100:
+                            progress_pct = pct
+                            self.progress.emit(pct)
+                    except ValueError:
+                        self.log_line.emit(line)
+                else:
+                    self.log_line.emit(line)
+
+        rc = proc.wait()
+        if rc != 0:
+            self.error.emit(
+                f"AI agent verification failed (exit code {rc}). "
+                "See the log for details."
+            )
+            return
+
+        # Resolve the latest run dir — eval-agent stamps it as state/runs/<ts>/.
+        runs_dir = user_state_dir / "state" / "runs"
+        latest = _latest_run_dir(runs_dir)
+        if latest is None:
+            self.error.emit(
+                "AI agent finished but no run directory was produced under "
+                f"{runs_dir}."
+            )
+            return
+
+        if progress_pct < 100:
+            self.progress.emit(100)
+        self.substep.emit("Verification complete")
+        self.log_line.emit(f"Eval-agent run dir: {latest}")
+        self.finished.emit(latest)
+
+
+def _latest_run_dir(runs_dir: Path) -> Path | None:
+    """Return the most-recent ``runs/<ts>`` subfolder, or ``None``."""
+    if not runs_dir.exists():
+        return None
+    candidates = [p for p in runs_dir.iterdir() if p.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)

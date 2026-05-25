@@ -241,6 +241,43 @@ fi
 # ~700 MB ner/marc500_classifier_model.pt checkpoint is no longer
 # bundled. The runtime no longer loads it; see commit 3002236.
 
+# ── Step 4.5: Bundle the eval-agent (Rule 50, 2026-05-25) ────────────
+# The sibling project at $REPO_ROOT/../eval-agent ships inside the
+# .app at Contents/Resources/eval-agent/. The pipeline never imports
+# from it — communication is via subprocess + filesystem (Rule 48
+# trust boundary preserved).
+EVAL_AGENT_SRC="${EVAL_AGENT_ROOT:-$REPO_ROOT/../eval-agent}"
+EVAL_AGENT_DST="$RESOURCES/eval-agent"
+if [ -d "$EVAL_AGENT_SRC/eval_agent" ]; then
+    echo "Step 4.5/6: Bundling eval-agent..."
+    rm -rf "$EVAL_AGENT_DST"
+    mkdir -p "$EVAL_AGENT_DST"
+    # Copy only what the bundled runtime needs:
+    #   * eval_agent/  — the Python package itself
+    #   * config/      — YAML + rubrics
+    #   * pyproject.toml — version + minimal deps (advisory)
+    # Skip .git, .venv, state/, tests/, __pycache__, *.pyc.
+    rsync -a --delete \
+        --exclude '.git' \
+        --exclude '.venv' \
+        --exclude 'state' \
+        --exclude 'tests' \
+        --exclude '__pycache__' \
+        --exclude '*.pyc' \
+        --exclude '*.swp' \
+        "$EVAL_AGENT_SRC/eval_agent" "$EVAL_AGENT_DST/"
+    if [ -d "$EVAL_AGENT_SRC/config" ]; then
+        rsync -a --exclude '__pycache__' --exclude '*.pyc' \
+            "$EVAL_AGENT_SRC/config" "$EVAL_AGENT_DST/"
+    fi
+    if [ -f "$EVAL_AGENT_SRC/pyproject.toml" ]; then
+        cp "$EVAL_AGENT_SRC/pyproject.toml" "$EVAL_AGENT_DST/pyproject.toml"
+    fi
+    echo "  eval-agent: $(du -sh "$EVAL_AGENT_DST" | cut -f1)"
+else
+    echo "  eval-agent source not found at $EVAL_AGENT_SRC — Verify step will be disabled in this build."
+fi
+
 # ── Step 5: Bundle Python venv (if available) ────────────────────────
 echo "Step 5/6: Bundling Python environment..."
 

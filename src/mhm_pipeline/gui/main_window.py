@@ -37,10 +37,13 @@ from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.settings.settings_manager import SettingsManager
 
-# Wikidata Preview + Wikidata Upload have been merged into "Wikidata Studio"
+# Wikidata Preview + Wikidata Upload have been merged into "Wikidata Studio".
+# Stage 2 was renamed "AI-based Enrichment" (Rule 50, 2026-05-25) because it
+# runs three NER models + a genre classifier + the optional Gemini
+# verification step — "NER Extraction" was misleading.
 _STAGE_LABELS: list[str] = [
     "MARC Parsing",
-    "NER Extraction",
+    "AI-based Enrichment",
     "Authority Matching",
     "RDF Graph",
     "SHACL Validation",
@@ -250,6 +253,13 @@ class MainWindow(QMainWindow):
         reset_wizard_action.triggered.connect(self._on_reset_first_run)
         settings_menu.addAction(reset_wizard_action)
 
+        # Rule 50 — unified API-key entry surface.
+        settings_menu.addSeparator()
+        credentials_action = QAction("&Credentials…", self)
+        credentials_action.setShortcut("Ctrl+,")
+        credentials_action.triggered.connect(self._on_open_credentials)
+        settings_menu.addAction(credentials_action)
+
     # ── Settings handlers ─────────────────────────────────────────────
 
     def _on_theme_change(self, value: str) -> None:
@@ -338,6 +348,37 @@ class MainWindow(QMainWindow):
                 "Reset",
                 "First-run wizard reset. Restart the app to see it.",
             )
+
+    def _on_open_credentials(self) -> None:
+        """Rule 50 — open the unified Credentials… dialog. Keys are stored
+        in the OS keychain (Keychain / Credential Manager / libsecret);
+        the dialog never reads stored values back into the input."""
+        from mhm_pipeline.gui.dialogs.credentials_dialog import (  # noqa: PLC0415
+            CredentialsDialog,
+        )
+
+        dialog = CredentialsDialog(self._settings, parent=self)
+        dialog.exec()
+
+    def _on_verify_with_ai(self, pipeline_output_dir: Path) -> None:
+        """Rule 50 — fire the bundled eval-agent against the Stage 2
+        output dir. If no Gemini key is stored, open the Credentials
+        dialog first so the user has somewhere to paste one."""
+        if not self._settings.gemini_api_key:
+            QMessageBox.information(
+                self,
+                "Gemini API key required",
+                "The AI agent verification step needs a Gemini API key. "
+                "Get a free one at https://aistudio.google.com/app/apikey "
+                "and paste it into Settings → Credentials.",
+            )
+            self._on_open_credentials()
+            if not self._settings.gemini_api_key:
+                return
+        self._controller.start_eval_agent(
+            pipeline_output_dir=pipeline_output_dir,
+            gemini_api_key=self._settings.gemini_api_key,
+        )
 
     # ── Central widget ────────────────────────────────────────────────
 
@@ -458,6 +499,8 @@ class MainWindow(QMainWindow):
         # Stage panels → controller
         self._convert_panel.run_requested.connect(self._on_run_convert)
         self._ner_panel.run_requested.connect(self._on_run_ner)
+        # Rule 50 — optional Gemini verification on Stage 2 output.
+        self._ner_panel.verify_requested.connect(self._on_verify_with_ai)
         self._authority_panel.run_requested.connect(self._on_run_authority)
         self._rdf_panel.run_requested.connect(self._on_run_rdf)
         self._validate_panel.run_requested.connect(self._on_run_validate)
@@ -472,7 +515,7 @@ class MainWindow(QMainWindow):
     # text when stage_finished / stage_error fires.
     _STAGE_PROGRESS_LABELS: tuple[tuple[str, str], ...] = (
         ("MARC parsing complete",           "MARC parsing failed"),
-        ("NER extraction complete",         "NER extraction failed"),
+        ("AI-based enrichment complete",    "AI-based enrichment failed"),
         ("Authority resolution complete",   "Authority resolution failed"),
         ("RDF construction complete",       "RDF construction failed"),
         ("SHACL validation passed",         "SHACL validation failed"),
@@ -515,6 +558,25 @@ class MainWindow(QMainWindow):
         return getattr(panel, "stage_progress", None)
 
     def _on_stage_finished(self, index: int, output: Path) -> None:
+        # Rule 50 — eval-agent runs on the sentinel index -1. Route its
+        # ``finished`` to the report dialog instead of the normal
+        # stage-progress wiring.
+        from mhm_pipeline.controller.pipeline_controller import (  # noqa: PLC0415
+            EVAL_AGENT_STAGE_INDEX,
+        )
+
+        if index == EVAL_AGENT_STAGE_INDEX:
+            self._shared_log.append_line(
+                f"AI agent verification finished. Run dir: {output}"
+            )
+            from mhm_pipeline.gui.dialogs.eval_agent_report_dialog import (  # noqa: PLC0415
+                EvalAgentReportDialog,
+            )
+
+            dialog = EvalAgentReportDialog(output, parent=self)
+            dialog.exec()
+            return
+
         self._update_stage_state(index, "done")
         self._shared_log.append_line(f"Stage {index + 1} finished. Output: {output}")
         bar = self._panel_progress_bar(index)
