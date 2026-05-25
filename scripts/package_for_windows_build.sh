@@ -14,6 +14,16 @@ STAGING="${ROOT}/dist/_winstage"
 echo "=== MHM Pipeline — Windows source bundler ==="
 echo "Repo root: ${ROOT}"
 
+# Rule 51 (2026-05-25): every package bumps the patch version of
+# pyproject.toml so the Windows installer also stamps a fresh version.
+# ``SKIP_VERSION_BUMP=1 bash scripts/package_for_windows_build.sh`` opts
+# out (used when packaging the same revision after a macOS build that
+# already bumped, to avoid double-bumping).
+if [ -z "${SKIP_VERSION_BUMP:-}" ] && [ -f "$ROOT/scripts/bump_patch_version.py" ]; then
+    NEW_VERSION="$(python3 "$ROOT/scripts/bump_patch_version.py")"
+    echo "Bumped pyproject.toml version → $NEW_VERSION"
+fi
+
 rm -rf "$STAGING" "$OUT"
 mkdir -p "$STAGING" "${ROOT}/dist"
 

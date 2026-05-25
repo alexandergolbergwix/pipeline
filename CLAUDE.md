@@ -1866,3 +1866,35 @@ moves into the bundle).
 Rule 48 is refined by Rule 50 to "lives in a sibling project; a
 snapshot is bundled at build time". The four hard invariants in
 Rule 48 §4 are explicitly preserved.
+
+### 51. Every build bumps `pyproject.toml`'s patch version (added 2026-05-25)
+
+Both installer entry points — `installer/macos/build_app.sh` and
+`scripts/package_for_windows_build.sh` — call
+[scripts/bump_patch_version.py](scripts/bump_patch_version.py) at
+the top of the run, BEFORE reading the version into the bundle
+metadata. So every macOS DMG and every Windows source-zip
+automatically stamps a fresh `0.1.N → 0.1.N+1` version. The bump
+writes `pyproject.toml` in place; the resulting working-tree change
+is the operator's signal to commit (we deliberately do NOT
+auto-commit, so the version-bump and the actual code changes ship
+in the same commit).
+
+**Opt-out**: `SKIP_VERSION_BUMP=1 bash installer/macos/build_app.sh`
+keeps the existing version. Useful for re-building the same
+revision (e.g. cosmetic DMG regeneration, CI smoke builds, or after
+the macOS build has already bumped and the Windows package wants to
+ship the same version).
+
+**Helper API** (also reachable from the CLI):
+
+- `python3 scripts/bump_patch_version.py` — bump in place, print new.
+- `python3 scripts/bump_patch_version.py --check` — print the *would-
+  be* next version without writing (dry-run).
+- `python3 scripts/bump_patch_version.py --target X.Y.Z` — set the
+  exact version. Useful for bumping major/minor manually.
+
+**Test:** `tests/unit/test_bump_patch_version.py` (6 tests) — increment,
+dry-run, target, target-validation, version-line-only mutation,
+parse-failure on unparseable pyproject.toml. Total unit-test count
+964 → 970 (+6).

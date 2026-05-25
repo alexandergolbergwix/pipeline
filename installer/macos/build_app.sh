@@ -23,6 +23,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Rule 51 (2026-05-25): every build bumps the patch version of
+# pyproject.toml so each .app / DMG stamps a fresh version.
+# ``SKIP_VERSION_BUMP=1 bash installer/macos/build_app.sh`` opts out
+# (used by CI / smoke builds that re-build the same revision).
+if [ -z "${SKIP_VERSION_BUMP:-}" ] && [ -f "$REPO_ROOT/scripts/bump_patch_version.py" ]; then
+    NEW_VERSION="$(python3 "$REPO_ROOT/scripts/bump_patch_version.py")"
+    echo "Bumped pyproject.toml version → $NEW_VERSION"
+fi
+
 VERSION=$(grep -oP '(?<=version = ")[^"]+' pyproject.toml 2>/dev/null || \
           grep 'version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 VERSION="${VERSION:-0.1.0}"
