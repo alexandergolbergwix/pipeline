@@ -360,7 +360,9 @@ class MainWindow(QMainWindow):
         dialog = CredentialsDialog(self._settings, parent=self)
         dialog.exec()
 
-    def _on_verify_with_ai(self, pipeline_output_dir: Path) -> None:
+    def _on_verify_with_ai(
+        self, pipeline_output_dir: Path, use_cache: bool = True
+    ) -> None:
         """Rule 50 / 52 — fire the bundled eval-agent against the Stage 2
         output dir and open the rich :class:`AiVerificationDialog` to
         stream live progress + log + stats.
@@ -397,6 +399,7 @@ class MainWindow(QMainWindow):
         worker = self._controller.build_eval_agent_worker(
             pipeline_output_dir=pipeline_output_dir,
             gemini_api_key=self._settings.gemini_api_key,
+            use_cache=use_cache,
         )
         dialog = AiVerificationDialog(
             pipeline_output_dir=pipeline_output_dir,

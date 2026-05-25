@@ -63,10 +63,12 @@ class NerPanel(QWidget):
     # (input_path, output_dir, model_path, batch_size, prov_model_path, cont_model_path)
     run_requested = pyqtSignal(Path, Path, str, int, str, str)
     # Rule 50 — "Verify with AI agent" button → MainWindow → controller.
-    # Carries the pipeline output dir (the same dir Stage 2 wrote
-    # ner_results.json into). MainWindow pulls the Gemini API key from
-    # SettingsManager.gemini_api_key before calling the controller.
-    verify_requested = pyqtSignal(Path)
+    # Carries (pipeline output dir, use_cache). MainWindow pulls the
+    # Gemini API key from SettingsManager.gemini_api_key before calling
+    # the controller. ``use_cache=False`` (Rule 52) passes --no-cache
+    # so every prediction hits Gemini fresh, ignoring any verdict
+    # cached from a prior run.
+    verify_requested = pyqtSignal(Path, bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -186,10 +188,28 @@ class NerPanel(QWidget):
         self._verify_btn.setEnabled(False)
         self._verify_btn.clicked.connect(self._on_verify_with_ai)
 
+        # Rule 52 — "Re-check (ignore cache)" toggle. When ticked, the
+        # next Verify run passes --no-cache so the eval-agent skips its
+        # verdict cache and calls Gemini fresh on every prediction.
+        # Useful for re-running the same prediction set when the user
+        # suspects the cached answers are stale.
+        self._verify_fresh_checkbox = QCheckBox("Re-check (ignore cache)")
+        self._verify_fresh_checkbox.setToolTip(
+            "Tick this BEFORE clicking Verify with AI agent to force the AI "
+            "to re-judge every prediction even if a cached answer exists. "
+            "Useful for running the same predictions a second time to get "
+            "a fresh judgement."
+        )
+        self._verify_fresh_checkbox.setStyleSheet(
+            f"QCheckBox {{ color:{theme.ui('text')}; "
+            f" font-size:{theme.FONT_SM}px; padding:2px; }}"
+        )
+
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self._run_btn)
         btn_layout.addWidget(self._load_btn)
         btn_layout.addWidget(self._verify_btn)
+        btn_layout.addWidget(self._verify_fresh_checkbox)
         layout.addLayout(btn_layout)
 
         # Progress bar — DynamicProgressBar (substep label + ETA + colored
@@ -884,10 +904,12 @@ class NerPanel(QWidget):
                 "Run Extract Named Entities first."
             )
             return
+        use_cache = not self._verify_fresh_checkbox.isChecked()
+        cache_note = "" if use_cache else " (cache disabled — every check hits Gemini fresh)"
         self._log_viewer.append_line(
-            f"Launching AI agent verification on {output_path}…"
+            f"Launching AI agent verification on {output_path}…{cache_note}"
         )
-        self.verify_requested.emit(output_path)
+        self.verify_requested.emit(output_path, use_cache)
 
     def _refresh_verify_btn_state(self) -> None:
         """Enable the Verify button iff ``output_dir/ner_results.json`` exists."""

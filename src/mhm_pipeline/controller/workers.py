@@ -2614,11 +2614,16 @@ class EvalAgentWorker(StageWorker):
         pipeline_output_dir: Path,
         gemini_api_key: str,
         models: set[str] | None = None,
+        use_cache: bool = True,
     ) -> None:
         super().__init__()
         self._pipeline_output_dir = Path(pipeline_output_dir)
         self._gemini_api_key = gemini_api_key
         self._models = set(models) if models else None
+        # When False, pass --no-cache so every candidate hits Gemini
+        # again even if a cached verdict exists. Useful for re-running
+        # the same prediction set with a fresh judgement.
+        self._use_cache = bool(use_cache)
         # Stamped by run() before subprocess.Popen for testability.
         self._last_cmd: list[str] | None = None
         self._last_cwd: Path | None = None
@@ -2681,6 +2686,8 @@ class EvalAgentWorker(StageWorker):
         ]
         if self._models:
             cmd.extend(["--models", ",".join(sorted(self._models))])
+        if not self._use_cache:
+            cmd.append("--no-cache")
 
         env = dict(os.environ)
         env["GEMINI_API_KEY"] = self._gemini_api_key

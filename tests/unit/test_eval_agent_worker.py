@@ -120,6 +120,44 @@ class TestEvalAgentWorkerSubprocessShape:
         assert call_kwargs["env"]["GEMINI_API_KEY"] == "AIzaTEST"
         assert call_kwargs["cwd"] == str(fake_user_state)
 
+    def test_default_use_cache_omits_no_cache_flag(
+        self, fake_pipeline_out: Path, fake_user_state: Path
+    ) -> None:
+        """Default: cache is enabled. ``--no-cache`` must NOT appear."""
+        worker = EvalAgentWorker(fake_pipeline_out, gemini_api_key="AIzaTEST")
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            fake_run = fake_user_state / "state" / "runs" / "fake-run"
+            fake_run.mkdir()
+            with patch.object(workers_mod, "_latest_run_dir", return_value=fake_run):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "--no-cache" not in argv
+
+    def test_use_cache_false_appends_no_cache_flag(
+        self, fake_pipeline_out: Path, fake_user_state: Path
+    ) -> None:
+        """``use_cache=False`` → ``--no-cache`` lands on argv."""
+        worker = EvalAgentWorker(
+            fake_pipeline_out, gemini_api_key="AIzaTEST", use_cache=False
+        )
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            fake_run = fake_user_state / "state" / "runs" / "fake-run"
+            fake_run.mkdir()
+            with patch.object(workers_mod, "_latest_run_dir", return_value=fake_run):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "--no-cache" in argv
+
 
 class TestEvalAgentWorkerStdoutParsing:
     def test_step_lines_become_substep_emissions(

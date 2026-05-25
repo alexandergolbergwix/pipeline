@@ -188,3 +188,166 @@ class TestVerdictTableModelRowCap:
 
         # Invalid index — also no crash.
         assert model.data(QModelIndex(), int(Qt.ItemDataRole.DisplayRole)) is None
+
+
+class TestNoveltyColumn:
+    """The "New info" column lights up only for full-pass verdicts on
+    candidate text that's NOT already in the manuscript's structured
+    MARC fields."""
+
+    @pytest.fixture
+    def marc_extracted(self, tmp_path: Path) -> Path:
+        path = tmp_path / "marc_extracted.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "_control_number": "990001",
+                        "contributors": [{"name": "Maimonides, Moses", "role": "author"}],
+                        "title": "Mishneh Torah",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def _new_info_col(self, model: VerdictTableModel) -> int:
+        for col in range(model.columnCount()):
+            header = model.headerData(
+                col, Qt.Orientation.Horizontal, int(Qt.ItemDataRole.DisplayRole)
+            )
+            if header == "New info":
+                return col
+        raise AssertionError("New info column not present")
+
+    def test_full_pass_with_novel_text_renders_pill(
+        self, tmp_path: Path, marc_extracted: Path,
+    ) -> None:
+        from mhm_pipeline.gui.dialogs.widgets.marc_structured_index import (
+            MarcStructuredIndex,
+        )
+
+        results = _write_jsonl(
+            tmp_path / "r.jsonl",
+            [
+                {
+                    "record_id": "990001",
+                    "evaluator_id": "person_ner",
+                    "candidate": "Some Other Scribe",
+                    "verdict": {"overall": "full"},
+                }
+            ],
+        )
+        model = VerdictTableModel()
+        model.load(results, marc_index=MarcStructuredIndex.load(marc_extracted))
+        col = self._new_info_col(model)
+        assert _row_text(model, 0, col) == "✨ New"
+
+    def test_full_pass_with_known_text_renders_blank(
+        self, tmp_path: Path, marc_extracted: Path,
+    ) -> None:
+        from mhm_pipeline.gui.dialogs.widgets.marc_structured_index import (
+            MarcStructuredIndex,
+        )
+
+        results = _write_jsonl(
+            tmp_path / "r.jsonl",
+            [
+                {
+                    "record_id": "990001",
+                    "evaluator_id": "person_ner",
+                    "candidate": "Maimonides",  # substring of MARC value
+                    "verdict": {"overall": "full"},
+                }
+            ],
+        )
+        model = VerdictTableModel()
+        model.load(results, marc_index=MarcStructuredIndex.load(marc_extracted))
+        col = self._new_info_col(model)
+        assert _row_text(model, 0, col) == ""
+
+    def test_failed_verdict_with_novel_text_renders_blank(
+        self, tmp_path: Path, marc_extracted: Path,
+    ) -> None:
+        """Even if the text is genuinely new, a wrong verdict should not
+        get a "New info" badge — it would mislead the curator."""
+        from mhm_pipeline.gui.dialogs.widgets.marc_structured_index import (
+            MarcStructuredIndex,
+        )
+
+        results = _write_jsonl(
+            tmp_path / "r.jsonl",
+            [
+                {
+                    "record_id": "990001",
+                    "evaluator_id": "person_ner",
+                    "candidate": "Some Other Scribe",
+                    "verdict": {"overall": "fail"},
+                }
+            ],
+        )
+        model = VerdictTableModel()
+        model.load(results, marc_index=MarcStructuredIndex.load(marc_extracted))
+        col = self._new_info_col(model)
+        assert _row_text(model, 0, col) == ""
+
+    def test_load_without_index_keeps_column_blank(
+        self, tmp_path: Path,
+    ) -> None:
+        """No marc_index → column simply renders blank for every row,
+        no crash, no false flags."""
+        results = _write_jsonl(
+            tmp_path / "r.jsonl",
+            [
+                {
+                    "record_id": "990001",
+                    "evaluator_id": "person_ner",
+                    "candidate": "Anyone",
+                    "verdict": {"overall": "full"},
+                }
+            ],
+        )
+        model = VerdictTableModel()
+        model.load(results)  # No marc_index.
+        col = self._new_info_col(model)
+        assert _row_text(model, 0, col) == ""
+
+    def test_filter_novel_only(
+        self, tmp_path: Path, marc_extracted: Path,
+    ) -> None:
+        from mhm_pipeline.gui.dialogs.widgets.marc_structured_index import (
+            MarcStructuredIndex,
+        )
+
+        results = _write_jsonl(
+            tmp_path / "r.jsonl",
+            [
+                {
+                    "record_id": "990001",
+                    "evaluator_id": "person_ner",
+                    "candidate": "Maimonides",
+                    "verdict": {"overall": "full"},
+                },
+                {
+                    "record_id": "990001",
+                    "evaluator_id": "person_ner",
+                    "candidate": "Brand New Scribe",
+                    "verdict": {"overall": "full"},
+                },
+            ],
+        )
+        model = VerdictTableModel()
+        model.load(results, marc_index=MarcStructuredIndex.load(marc_extracted))
+        assert model.rowCount() == 2
+        model.filter_novel_only(True)
+        assert model.rowCount() == 1
+        # Confirm it's the novel one.
+        cand_col = next(
+            c for c in range(model.columnCount())
+            if model.headerData(
+                c, Qt.Orientation.Horizontal, int(Qt.ItemDataRole.DisplayRole)
+            ) == "What it looked at"
+        )
+        assert _row_text(model, 0, cand_col) == "Brand New Scribe"

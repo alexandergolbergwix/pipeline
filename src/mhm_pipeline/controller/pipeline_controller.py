@@ -118,6 +118,7 @@ class PipelineController(QObject):
         pipeline_output_dir: Path,
         gemini_api_key: str,
         models: set[str] | None = None,
+        use_cache: bool = True,
     ) -> EvalAgentWorker:
         """Construct (but do NOT start) the eval-agent worker.
 
@@ -127,11 +128,16 @@ class PipelineController(QObject):
         :meth:`_start_worker` to actually fire the QThread. This avoids
         the race where the worker starts emitting signals before the
         dialog has subscribed to them.
+
+        ``use_cache=False`` passes ``--no-cache`` to the eval-agent so
+        every prediction hits Gemini fresh, ignoring any verdict
+        cached from a prior run.
         """
         return EvalAgentWorker(
             pipeline_output_dir=pipeline_output_dir,
             gemini_api_key=gemini_api_key,
             models=models,
+            use_cache=use_cache,
         )
 
     def _start_worker(self, worker: EvalAgentWorker, stage_index: int) -> None:
@@ -154,6 +160,7 @@ class PipelineController(QObject):
         pipeline_output_dir: Path,
         gemini_api_key: str,
         models: set[str] | None = None,
+        use_cache: bool = True,
     ) -> EvalAgentWorker:
         """Launch the bundled eval-agent over the Stage 2 output dir (Rule 50).
 
@@ -187,8 +194,13 @@ class PipelineController(QObject):
             pipeline_output_dir=pipeline_output_dir,
             gemini_api_key=gemini_api_key,
             models=models,
+            use_cache=use_cache,
         )
-        logger.info("Starting eval-agent verification on %s", pipeline_output_dir)
+        logger.info(
+            "Starting eval-agent verification on %s (use_cache=%s)",
+            pipeline_output_dir,
+            use_cache,
+        )
         self._start_worker(worker, EVAL_AGENT_STAGE_INDEX)
         return worker
 

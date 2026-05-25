@@ -348,58 +348,150 @@ class AiVerificationDialog(GlassDialog):
         return container
 
     def _build_stats_card(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("glassPanel")
-        card.setStyleSheet(glass_panel_style(theme))
+        """Run-progress card.
 
-        grid = QGridLayout(card)
-        grid.setContentsMargins(
+        Rule 52 update (2026-05-25): the previous version laid out
+        labels in a left column with ``subtext`` (light-grey) colour
+        and values in a right column with regular text colour. In
+        light mode the grey labels faded into the backdrop, leaving
+        a column of bare numbers floating to the right of the
+        diagram — visually disconnected from any context. Users read
+        "112 / 0 / 112" without explanation.
+
+        New layout: a horizontal row of four pill-cards. Each pill
+        is a self-contained `[Label / Value]` stack, so the value is
+        always visually paired with its label even if part of the
+        card is occluded. The whole row sits in a clearly-bordered
+        outer frame with a "Run progress" heading.
+        """
+        outer = QFrame()
+        outer.setObjectName("glassPanel")
+        outer.setStyleSheet(glass_panel_style(theme))
+
+        v = QVBoxLayout(outer)
+        v.setContentsMargins(
             theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD, theme.SPACE_MD,
         )
-        grid.setHorizontalSpacing(theme.SPACE_LG)
-        grid.setVerticalSpacing(theme.SPACE_SM)
+        v.setSpacing(theme.SPACE_SM)
 
-        self._stat_total_label = self._stat_label("Predictions to check")
-        self._stat_total_value = self._stat_value("—")
-        self._stat_done_label = self._stat_label("Already done")
-        self._stat_done_value = self._stat_value("—")
-        self._stat_remaining_label = self._stat_label("Still to go")
-        self._stat_remaining_value = self._stat_value("—")
-        self._stat_reused_label = self._stat_label("Reused from a prior run")
-        self._stat_reused_value = self._stat_value("—")
+        heading = QLabel("Run progress")
+        heading.setStyleSheet(
+            f"color:{theme.ui('text')}; font-size:{theme.FONT_SM}px;"
+            f" font-weight:{theme.WEIGHT_SEMIBOLD};"
+            f" letter-spacing: 1px; text-transform: uppercase;"
+        )
+        v.addWidget(heading)
 
-        # Advanced-only token counters
-        self._stat_tokens_label = self._stat_label("Words analysed (advanced)")
-        self._stat_tokens_value = self._stat_value("—")
-        self._stat_tokens_label.setVisible(False)
-        self._stat_tokens_value.setVisible(False)
+        pills = QHBoxLayout()
+        pills.setSpacing(theme.SPACE_MD)
 
-        grid.addWidget(self._stat_total_label,     0, 0)
-        grid.addWidget(self._stat_total_value,     0, 1)
-        grid.addWidget(self._stat_done_label,      1, 0)
-        grid.addWidget(self._stat_done_value,      1, 1)
-        grid.addWidget(self._stat_remaining_label, 2, 0)
-        grid.addWidget(self._stat_remaining_value, 2, 1)
-        grid.addWidget(self._stat_reused_label,    3, 0)
-        grid.addWidget(self._stat_reused_value,    3, 1)
-        grid.addWidget(self._stat_tokens_label,    4, 0)
-        grid.addWidget(self._stat_tokens_value,    4, 1)
+        # Four pills, one per metric. Each pill packs its label
+        # directly above its value so the pairing can't be lost.
+        self._stat_total_label, self._stat_total_value, total_pill = self._build_stat_pill(
+            "Predictions to check",
+            "How many of Stage 2's predictions the AI is reviewing.",
+        )
+        self._stat_done_label, self._stat_done_value, done_pill = self._build_stat_pill(
+            "Already done",
+            "How many predictions the AI has already reviewed. The split shows fresh judgements vs. answers reused from a prior run's cache.",
+        )
+        self._stat_remaining_label, self._stat_remaining_value, remaining_pill = self._build_stat_pill(
+            "Still to go",
+            "How many predictions the AI still has to review.",
+        )
+        self._stat_reused_label, self._stat_reused_value, reused_pill = self._build_stat_pill(
+            "Reused from prior run",
+            "How many of today's predictions matched a cached answer from a previous verification — no Gemini call needed.",
+        )
 
-        return card
+        pills.addWidget(total_pill)
+        pills.addWidget(done_pill)
+        pills.addWidget(remaining_pill)
+        pills.addWidget(reused_pill)
+        v.addLayout(pills)
+
+        # Advanced-only token counters, hidden until "Show advanced
+        # details" is toggled on.
+        self._stat_tokens_label, self._stat_tokens_value, tokens_pill = self._build_stat_pill(
+            "Words analysed (advanced)",
+            "Total Gemini input + output tokens used during this run.",
+        )
+        tokens_pill.setVisible(False)
+        # Stash the pill widget so the advanced toggle can flip it.
+        self._stat_tokens_pill = tokens_pill
+        v.addWidget(tokens_pill)
+
+        return outer
+
+    def _build_stat_pill(
+        self, label_text: str, tooltip: str,
+    ) -> tuple[QLabel, QLabel, QFrame]:
+        """One [Label / Value] pill in the Run-progress row.
+
+        Returns (label_widget, value_widget, container_frame) so the
+        caller can keep references to update the value and toggle
+        visibility.
+        """
+        pill = QFrame()
+        is_dark = theme.is_dark()
+        pill_bg = "rgba(255,255,255, 18)" if is_dark else "rgba(0,0,0, 8)"
+        pill_border = "rgba(255,255,255, 30)" if is_dark else "rgba(0,0,0, 22)"
+        pill.setStyleSheet(
+            f"QFrame {{"
+            f" background: {pill_bg};"
+            f" border: 1px solid {pill_border};"
+            f" border-radius: {theme.RADIUS_MD}px;"
+            f" }}"
+        )
+        pill.setToolTip(tooltip)
+        layout = QVBoxLayout(pill)
+        layout.setContentsMargins(
+            theme.SPACE_SM, theme.SPACE_SM, theme.SPACE_SM, theme.SPACE_SM,
+        )
+        layout.setSpacing(2)
+
+        label = QLabel(label_text)
+        # Theme-aware text (not subtext) so the label stays readable on
+        # both dark + light backdrops. Smaller font keeps the value
+        # the visual anchor.
+        label.setStyleSheet(
+            f"color:{theme.ui('text')}; font-size:{theme.FONT_XS}px;"
+            f" font-weight:{theme.WEIGHT_MEDIUM};"
+            f" background: transparent; border: none;"
+        )
+        label.setWordWrap(True)
+
+        value = QLabel("—")
+        value.setStyleSheet(
+            f"color:{theme.ui('text')}; font-size:{theme.FONT_2XL}px;"
+            f" font-weight:{theme.WEIGHT_SEMIBOLD};"
+            f" background: transparent; border: none;"
+        )
+
+        layout.addWidget(label)
+        layout.addWidget(value)
+        return label, value, pill
 
     def _stat_label(self, text: str) -> QLabel:
+        """Small label for label/value grids (e.g. the manifest grid)."""
         lbl = QLabel(text)
         lbl.setStyleSheet(
-            f"color:{theme.ui('subtext')}; font-size:{theme.FONT_SM}px;"
+            f"color:{theme.ui('text')}; font-size:{theme.FONT_SM}px;"
+            f" font-weight:{theme.WEIGHT_MEDIUM};"
+            f" background: transparent; border: none;"
         )
+        lbl.setWordWrap(True)
         return lbl
 
     def _stat_value(self, text: str) -> QLabel:
+        """Value label for label/value grids."""
         lbl = QLabel(text)
         lbl.setStyleSheet(
-            f"color:{theme.ui('text')}; font-size:{theme.FONT_LG}px;"
-            f" font-weight: {theme.WEIGHT_SEMIBOLD};"
+            f"color:{theme.ui('text')}; font-size:{theme.FONT_SM}px;"
+            f" font-weight:{theme.WEIGHT_SEMIBOLD};"
+            f" background: transparent; border: none;"
         )
+        lbl.setWordWrap(True)
         return lbl
 
     # ── Tab 2: What the AI thought ──────────────────────────────────
@@ -418,7 +510,19 @@ class AiVerificationDialog(GlassDialog):
         self._chip_unsure = QCheckBox("Show only the ones the AI was unsure about")
         self._chip_reused = QCheckBox("Show only ones reused from a prior run")
         self._chip_errors = QCheckBox("Show only errors")
-        for chip in (self._chip_failures, self._chip_unsure, self._chip_reused, self._chip_errors):
+        self._chip_novel = QCheckBox("Show only new info (not already in MARC)")
+        self._chip_novel.setToolTip(
+            "Filter to predictions the AI agreed with that are NOT already "
+            "captured in the manuscript's structured catalog fields. These "
+            "are the predictions Stage 2 actually enriched the record with."
+        )
+        for chip in (
+            self._chip_failures,
+            self._chip_unsure,
+            self._chip_reused,
+            self._chip_errors,
+            self._chip_novel,
+        ):
             chip.setStyleSheet(
                 f"QCheckBox {{ color:{theme.ui('text')}; "
                 f" font-size:{theme.FONT_SM}px; padding:2px; }}"
@@ -438,6 +542,9 @@ class AiVerificationDialog(GlassDialog):
         )
         self._chip_errors.toggled.connect(
             lambda on: self._verdict_model.filter_errors_only(bool(on))
+        )
+        self._chip_novel.toggled.connect(
+            lambda on: self._verdict_model.filter_novel_only(bool(on))
         )
 
         # Search box
@@ -932,9 +1039,8 @@ class AiVerificationDialog(GlassDialog):
     def _on_advanced_toggled(self, on: bool) -> None:
         self._advanced = bool(on)
         self._verdict_model.set_advanced(self._advanced)
-        # Stats card advanced rows
-        self._stat_tokens_label.setVisible(self._advanced)
-        self._stat_tokens_value.setVisible(self._advanced)
+        # Stats card advanced rows (pill toggled as a whole)
+        self._stat_tokens_pill.setVisible(self._advanced)
         self.advanced_toggled.emit(self._advanced)
 
     def _on_detail_advanced_toggled(self, on: bool) -> None:
@@ -1059,7 +1165,17 @@ class AiVerificationDialog(GlassDialog):
     def _refresh_verdicts(self) -> None:
         assert self._run_dir is not None  # noqa: S101 — guarded by caller
         results_path = self._run_dir / "results.jsonl"
-        self._verdict_model.load(results_path)
+        # Build the MARC structured-field index so verdicts can be
+        # annotated with "✨ New" when the value is not already in the
+        # catalog. Missing file → empty index → every row is non-novel
+        # (the column simply renders blank rather than misleading).
+        from mhm_pipeline.gui.dialogs.widgets.marc_structured_index import (  # noqa: PLC0415
+            MarcStructuredIndex,
+        )
+        marc_index = MarcStructuredIndex.load(
+            self._pipeline_output_dir / "marc_extracted.json",
+        )
+        self._verdict_model.load(results_path, marc_index=marc_index)
         has_rows = self._verdict_model.total_row_count() > 0
         self._verdicts_placeholder.setVisible(not has_rows)
         if self._verdict_model.is_capped():

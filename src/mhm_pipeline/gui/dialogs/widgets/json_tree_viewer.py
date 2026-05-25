@@ -60,21 +60,37 @@ class JsonTreeViewer(QTreeWidget):
         self.setAlternatingRowColors(True)
         self.setUniformRowHeights(True)
         self.setRootIsDecorated(True)
+        # Rule 36 — colours from theme tokens; dark/light auto-adapts.
+        # Previous version hardcoded ``color: #e5e7eb`` (near-white) on
+        # the assumption that the backdrop is always dark. In light
+        # mode that produced bright-on-bright rows for the alternate-
+        # row band — invisible text.
+        is_dark = theme.is_dark()
+        text = theme.ui("text")
+        panel_rgba = "rgba(0,0,0, 70)" if is_dark else "rgba(255,255,255, 140)"
+        alt_rgba = "rgba(255,255,255, 10)" if is_dark else "rgba(0,0,0, 10)"
+        header_rgba = "rgba(255,255,255, 12)" if is_dark else "rgba(0,0,0, 14)"
+        border_rgba = "rgba(255,255,255, 22)" if is_dark else "rgba(0,0,0, 28)"
+        selection_text = "white" if is_dark else text
         self.setStyleSheet(
             f"QTreeWidget {{"
-            f" background: rgba(0,0,0, 70);"
-            f" color: #e5e7eb;"
-            f" border: 1px solid rgba(255,255,255, 22);"
+            f" background: {panel_rgba};"
+            f" alternate-background-color: {alt_rgba};"
+            f" color: {text};"
+            f" border: 1px solid {border_rgba};"
             f" border-radius: {theme.RADIUS_MD}px;"
             f" font-size: {theme.FONT_SM}px;"
+            f" selection-background-color: rgba(99, 102, 241, 120);"
+            f" selection-color: {selection_text};"
             f" }}"
-            f"QTreeWidget::item {{ padding: 2px 6px; }}"
+            f"QTreeWidget::item {{ padding: 2px 6px; color: {text}; }}"
+            f"QTreeWidget::item:selected {{ color: {selection_text}; }}"
             f"QHeaderView::section {{"
-            f" background: rgba(255,255,255, 12);"
-            f" color: #e5e7eb;"
+            f" background: {header_rgba};"
+            f" color: {text};"
             f" padding: 4px 6px;"
             f" border: none;"
-            f" border-bottom: 1px solid rgba(255,255,255, 22);"
+            f" border-bottom: 1px solid {border_rgba};"
             f" font-weight: 600;"
             f" }}"
         )

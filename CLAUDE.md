@@ -2104,6 +2104,120 @@ boundary), 48 (eval-agent trust boundary — subprocess + filesystem
 only). The new `AgentSystemDiagram` reads only `theme.ui()` colours
 so dark + light auto-adapt; no hardcoded hex.
 
+#### Novelty column + cache toggle (added 2026-05-25, same day)
+
+Two augmentations to `AiVerificationDialog` based on live feedback:
+
+**E. "New info" column on "What the AI thought".** When the AI
+agrees with a prediction (verdict overall is ``full`` —
+"Looks right"), a deterministic post-filter checks whether the
+candidate text appears in the source manuscript's structured MARC
+fields. If not, the row gets a ``✨ New`` pill in a new **New info**
+column. The check fires ONLY for full-pass verdicts — surfacing a
+"new info" badge on a wrong or unsure prediction would be
+misleading.
+
+Implementation lives in
+[src/mhm_pipeline/gui/dialogs/widgets/marc_structured_index.py](src/mhm_pipeline/gui/dialogs/widgets/marc_structured_index.py).
+`MarcStructuredIndex.load(marc_extracted_json)` builds a per-record
+bag of normalised strings from a closed allowlist of MARC-derived
+keys:
+
+```
+contributors, authors, subjects, title, title_variants,
+uniform_title, alternate_titles, genre_form, genres,
+acquisition_source, former_owners, ownership_history, series,
+contents, works, places, related_places
+```
+
+`is_novel(record_id, candidate_text)` does tolerant **bidirectional**
+substring matching: a candidate counts as "already known" if either
+the candidate is a substring of any structured value OR any
+structured value is a substring of the candidate. This catches
+both "ben Maimon" → "Moses ben Maimon" (NER subset) and
+"Moses Maimonides ben Maimon" → "Maimonides, Moses" (NER superset).
+MARC inverted "Surname, Given" tokens are split on the comma and
+each part added to the bag, so the natural-order form NER emits
+matches too.
+
+The dialog refreshes the index from
+``<pipeline_output_dir>/marc_extracted.json`` on every
+`_refresh_verdicts()` call and passes it through to
+`VerdictTableModel.load(..., marc_index=...)`. Rows are annotated
+with `_novel: bool`. A "Show only new info (not already in MARC)"
+filter chip joins the existing chip row and binds to
+`filter_novel_only(True)`.
+
+**Safety**: when ``marc_extracted.json`` is missing, the index is
+empty and `is_novel` returns False for every row — the column
+renders blank, never false-positive. Same default for unknown
+``record_id`` values.
+
+**F. "Re-check (ignore cache)" toggle on the NER panel.** A
+checkbox sits next to the **Verify with AI agent** button on the
+AI-based Enrichment panel. When ticked, the panel emits
+`verify_requested.emit(output_path, use_cache=False)`; the signal
+shape was extended from `pyqtSignal(Path)` to `pyqtSignal(Path,
+bool)` for this. `MainWindow._on_verify_with_ai` plumbs
+``use_cache`` through to
+`PipelineController.build_eval_agent_worker(use_cache=...)` and
+`EvalAgentWorker.__init__(use_cache=...)`. The worker appends
+``--no-cache`` to the eval-agent subprocess argv when
+``use_cache=False``; the eval-agent CLI then skips its verdict
+cache and calls Gemini fresh on every candidate.
+
+Cache stays ENABLED by default (the common case — repeat runs
+should reuse prior verdicts when nothing changed). The toggle is
+the explicit escape hatch for "this prediction set hasn't changed
+but I want a fresh judgement".
+
+**Files touched (novelty + cache)**:
+
+NEW
+- `src/mhm_pipeline/gui/dialogs/widgets/marc_structured_index.py`
+  (~165 LOC)
+- `tests/unit/gui/dialogs/widgets/test_marc_structured_index.py`
+  (14 tests covering normalisation, record-key resolution, index
+  loading from various JSON shapes, `is_novel` substring matching
+  both directions, unknown-record default, URI-form record IDs)
+
+MOD
+- `src/mhm_pipeline/gui/dialogs/widgets/verdict_table_model.py` —
+  new "novel" column descriptor, `load(jsonl, marc_index=...)`
+  signature, `_compute_novel` annotator, `filter_novel_only`
+  method, renderer + tooltip for the new column.
+- `src/mhm_pipeline/gui/dialogs/ai_verification_dialog.py` — new
+  filter chip, MARC index loaded in `_refresh_verdicts`.
+- `src/mhm_pipeline/gui/panels/ner_panel.py` — new
+  `_verify_fresh_checkbox` widget, signal signature
+  `verify_requested = pyqtSignal(Path, bool)`,
+  `_on_verify_with_ai` reads checkbox and emits `use_cache`.
+- `src/mhm_pipeline/gui/main_window.py` — `_on_verify_with_ai`
+  signature `(self, pipeline_output_dir, use_cache=True)`,
+  pass-through to `build_eval_agent_worker(use_cache=...)`.
+- `src/mhm_pipeline/controller/pipeline_controller.py` —
+  `build_eval_agent_worker` + `start_eval_agent` accept
+  ``use_cache: bool = True``.
+- `src/mhm_pipeline/controller/workers.py` —
+  `EvalAgentWorker.__init__(..., use_cache=True)`; appends
+  ``--no-cache`` to argv when False.
+- `src/mhm_pipeline/gui/dialogs/widgets/json_tree_viewer.py` —
+  every colour reads from `theme.ui()` / `theme.is_dark()` so the
+  "What the AI looked at" tree renders cleanly in both themes
+  (was hard-coded `#e5e7eb` near-white before — invisible on
+  light-mode glass backdrop).
+- `tests/unit/gui/dialogs/widgets/test_verdict_table_model.py` —
+  +5 tests: full-pass with novel text → ✨ pill; full-pass with
+  known text → blank; failed verdict with novel text → blank
+  (no misleading badge); load without index → no crash; filter
+  by `filter_novel_only` works.
+- `tests/unit/test_eval_agent_worker.py` — +2 tests: default
+  `use_cache=True` omits `--no-cache`; `use_cache=False` appends
+  it.
+
+**Tests added (21):** 14 novelty-index + 5 column + 2 worker. Zero
+regressions in the 1,037-test pre-augmentation baseline.
+
 ### 53. Real stage / sub-task names — never "Stage N" in user-visible strings (added 2026-05-25)
 
 User directive: *"we should stop use in the code 'Stage n' — we

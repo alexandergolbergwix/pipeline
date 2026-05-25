@@ -28,6 +28,9 @@ from mhm_pipeline.gui.dialogs.widgets.friendly_copy import (
     humanise_evaluator,
     humanise_verdict,
 )
+from mhm_pipeline.gui.dialogs.widgets.marc_structured_index import (
+    MarcStructuredIndex,
+)
 
 _ROW_CAP: int = 5000
 
@@ -68,6 +71,12 @@ _COLUMNS: list[_Column] = [
     _Column("why",         "Why",      tooltip="The AI's short explanation."),
     _Column("reused",      "Reused",
             tooltip="Shows when the AI's answer was reused from a previous run."),
+    _Column("novel",       "New info",
+            tooltip="When the AI agrees with the prediction AND the value is "
+                    "NOT already present in the manuscript's structured "
+                    "catalog fields (names / titles / subjects / genres), "
+                    "this column flags it as new information the NER stage "
+                    "added to the record."),
     # ── Advanced columns ────────────────────────────────────────
     _Column("record_id",    "Record ID",    advanced=True),
     _Column("evaluator_id", "Evaluator ID", advanced=True),
@@ -117,11 +126,22 @@ class VerdictTableModel(QAbstractTableModel):
         self._filter_unsure: bool = False
         self._filter_reused: bool = False
         self._filter_errors: bool = False
+        self._filter_novel: bool = False
 
     # ── Loading ─────────────────────────────────────────────────────
 
-    def load(self, jsonl_path: Path) -> None:
-        """Load every record from *jsonl_path*. Tolerates a missing file."""
+    def load(
+        self,
+        jsonl_path: Path,
+        marc_index: MarcStructuredIndex | None = None,
+    ) -> None:
+        """Load every record from *jsonl_path*. Tolerates a missing file.
+
+        When *marc_index* is supplied, each row is annotated with
+        ``_novel: bool`` — True only when the verdict is a full pass
+        AND the candidate text is not already present in the source
+        manuscript's structured catalog fields.
+        """
         self.beginResetModel()
         self._all_rows = []
         try:
@@ -138,10 +158,34 @@ class VerdictTableModel(QAbstractTableModel):
                             # Skip malformed lines rather than abort.
                             continue
                         if isinstance(payload, dict):
+                            payload["_novel"] = self._compute_novel(payload, marc_index)
                             self._all_rows.append(payload)
         finally:
             self._recompute_visible()
             self.endResetModel()
+
+    @staticmethod
+    def _compute_novel(
+        record: dict[str, Any],
+        marc_index: MarcStructuredIndex | None,
+    ) -> bool:
+        """Annotate this row with the novelty flag.
+
+        Only verdicts whose overall is ``full`` (i.e. "Looks right")
+        are candidates. Anything else stays False — surfacing a "new
+        info" badge on a wrong or unsure prediction would be misleading.
+        """
+        if marc_index is None:
+            return False
+        verdict = record.get("verdict") or {}
+        overall = str(verdict.get("overall", "")).strip().lower()
+        if overall != "full":
+            return False
+        record_id = str(record.get("record_id") or "")
+        text = _candidate_text(record.get("candidate"))
+        if not record_id or not text:
+            return False
+        return marc_index.is_novel(record_id, text)
 
     def total_row_count(self) -> int:
         """Total parsed rows (vs ``rowCount`` which reflects filters)."""
@@ -183,6 +227,13 @@ class VerdictTableModel(QAbstractTableModel):
     def filter_errors_only(self, on: bool) -> None:
         self.beginResetModel()
         self._filter_errors = bool(on)
+        self._recompute_visible()
+        self.endResetModel()
+
+    def filter_novel_only(self, on: bool) -> None:
+        """Show only rows the model flagged as new structured info."""
+        self.beginResetModel()
+        self._filter_novel = bool(on)
         self._recompute_visible()
         self.endResetModel()
 
@@ -282,6 +333,8 @@ class VerdictTableModel(QAbstractTableModel):
             return False
         if self._filter_errors and not record.get("error"):
             return False
+        if self._filter_novel and not record.get("_novel"):
+            return False
         return True
 
     # ── Cell renderers ──────────────────────────────────────────────
@@ -308,6 +361,8 @@ class VerdictTableModel(QAbstractTableModel):
             return compact[:120] + ("…" if len(compact) > 120 else "")
         if key == "reused":
             return "♻ reused" if record.get("cache_key") else ""
+        if key == "novel":
+            return "✨ New" if record.get("_novel") else ""
         if key == "record_id":
             return str(record.get("record_id") or "")
         if key == "evaluator_id":
@@ -339,6 +394,13 @@ class VerdictTableModel(QAbstractTableModel):
             return (
                 "This answer was reused from a previous run with the same "
                 "prediction — no Gemini call was made."
+            )
+        if key == "novel" and record.get("_novel"):
+            return (
+                "The AI agreed with this prediction AND this value is not "
+                "already in the manuscript's structured catalog fields. "
+                "Stage 2 surfaced new information the cataloguer hadn't "
+                "captured in a structured field."
             )
         if key == "manuscript":
             return str(record.get("record_id") or "")
