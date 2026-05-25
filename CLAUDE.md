@@ -1898,3 +1898,245 @@ ship the same version).
 dry-run, target, target-validation, version-line-only mutation,
 parse-failure on unparseable pyproject.toml. Total unit-test count
 964 → 970 (+6).
+
+### 52. AI agent verification — rich glass dialog + animated system diagram + state-dir bug fix (added 2026-05-25)
+
+Triggered by a live failure: a user ran the new "Verify with AI agent"
+button, the subprocess exited 0, but the GUI reported
+*"AI agent finished but no run directory was produced under
+…/MHMPipeline/eval-agent/state/runs"* and labelled it
+*"Stage 0 ERROR"*. Three problems:
+
+**A. Root-cause — eval-agent ignored `EVAL_AGENT_STATE_DIR`.**
+
+The eval-agent CLI hard-coded `STATE_DIR = REPO_ROOT / "state"`
+relative to its own `__file__`. When bundled inside the read-only
+macOS .app, the env var the MHM Pipeline's `EvalAgentWorker` set
+(`EVAL_AGENT_STATE_DIR=<user_data_dir>/state`) was silently ignored
+and the subprocess wrote either nowhere or to the read-only bundle.
+Subprocess exit was 0 because the cli wrapper returned 0 regardless.
+The worker then looked at the env-pointed path, found nothing, and
+emitted the canonical *"no run directory was produced"* error.
+
+Fix landed in eval-agent commit `81de1a3`:
+
+- `eval_agent/cli.py` + `eval_agent/orchestration/session.py` now
+  resolve `STATE_DIR` via `os.environ.get("EVAL_AGENT_STATE_DIR")`
+  first, falling back to the in-tree default.
+- A new `--state-dir <path>` CLI flag on the `run` subcommand
+  overrides both env var and the in-tree default. The flag handler
+  monkey-patches `cli.STATE_DIR`, `session.STATE_DIR`,
+  `session.RUNS_DIR`, `session.CACHE_PATH`, and `session.PROGRESS_PATH`
+  so every late-bind site picks up the override.
+- `eval_agent/ui.py` grew `emit_stats(...)` — a structured
+  `[STATS] total=N hits=M judged=K in_tok=I out_tok=O` line that
+  integrators parse for live progress cards.
+
+MHM Pipeline side (Rule 52 defense in depth):
+
+- `EvalAgentWorker.run()` passes BOTH `--state-dir <user>/state`
+  argv AND `EVAL_AGENT_STATE_DIR` env. So if either knob regresses
+  the other still routes the run dir correctly.
+- `EvalAgentWorker` grew a new `stats_update = pyqtSignal(dict)`
+  that parses the `[STATS]` lines and emits them as a dict with
+  keys `{total, cache_hits, judged, input_tokens, output_tokens}`.
+- Worker stores its `subprocess.Popen` handle on `self._proc` so a
+  new `terminate_subprocess()` method can kill the run from the
+  GUI's Stop button.
+- `PipelineController.build_eval_agent_worker(...)` constructs (but
+  does NOT start) the worker so the GUI dialog can subscribe to the
+  worker's signals BEFORE the QThread starts emitting them.
+  `start_eval_agent(...)` now returns the live worker.
+
+**B. The new `AiVerificationDialog`** — replaces the old post-mortem
+`EvalAgentReportDialog`. Glass-themed (Rule 37), 4 tabs with
+**plain-language labels** (Rule 50 audience is manuscript researchers
++ ontology specialists, not engineers):
+
+1. **"Working…"** — live during the run. The centerpiece is a new
+   `AgentSystemDiagram` (see §C below) — an animated system-design
+   diagram in motion. A linear `DynamicProgressBar` sits below as a
+   secondary "Overall progress" indicator. Friendly Stats card
+   ("Predictions to check: 143, Already done: 59, Still to go: 84"),
+   collapsible "Recent activity" with the raw log, Stop + "Close —
+   keeps running" buttons. The Stop button confirms before killing
+   the subprocess; the Close button just hides the dialog (worker
+   keeps running in the background).
+2. **"What the AI thought"** — filterable `QTableView` over
+   `results.jsonl` via a new `VerdictTableModel`. Default columns use
+   friendly labels: Manuscript / Which AI checker / What it looked
+   at / Verdict ("Looks right" / "Got it wrong" / "Partly right" /
+   "Couldn't tell") / Name / Type / Role / Why / Reused. Advanced-
+   details toggle un-hides raw `record_id` / `evaluator_id` /
+   `cache_key` / `confidence` / `judged_at` / `error`. Reuses
+   `install_column_filters(...)` from Rule 49 §E for per-column
+   right-click filtering. Quick-filter chips: "Show only the ones
+   the AI flagged as wrong", "Show only the ones the AI was unsure
+   about", "Show only ones reused from a prior run", "Show only
+   errors".
+3. **"Overall results"** — headline card composed by
+   `compose_headline()` ("The AI agreed with 87% of the Person AI's
+   calls and 92% of the Place AI's. It flagged 18 predictions as
+   wrong."), per-checker table from `summary.csv` mapped through
+   `humanise_evaluator()`, rendered `report.md` post-processed by
+   `humanise_report_md()` to strip engineer-y section titles.
+4. **"About this check"** — friendly key-value cards from
+   `manifest.json` ("When it ran", "The AI we asked",
+   "Predictions reviewed", "Self-check result"), two collapsed
+   `JsonTreeViewer` cards for the inputs the run consumed (with
+   `_control_number` → "Manuscript ID" friendly renaming on the
+   tree nodes).
+
+The dialog opens **before** the worker starts, subscribes to the
+worker's `substep` / `stats_update` / `log_line` / `error` /
+`finished` signals, and refreshes all four tabs on `finished`.
+Post-mortem mode (`worker=None`) loads from disk only.
+
+Friendly-copy helpers live in
+`src/mhm_pipeline/gui/dialogs/widgets/friendly_copy.py`:
+`humanise_evaluator`, `humanise_model`, `humanise_log_line`,
+`humanise_report_md`, `humanise_verdict`, `compose_headline`,
+plus dicts `_FRIENDLY_EVALUATORS`, `_FRIENDLY_MODELS`,
+`_FRIENDLY_VERDICT_STATUSES`.
+
+**C. The `AgentSystemDiagram`** — *"agent work is not linear"*
+(user directive, 2026-05-25). A linear progress bar misrepresents
+the actual data flow: cache short-circuits, parallel evaluators,
+feedback loops. The diagram is a live `QGraphicsScene` of 10 nodes
+in a fixed grid:
+
+```
+Inputs → Rubrics → 4 Evaluators (Person/Owner/Contents/Genre AI)
+                  → Gemini → Results → Summary
+                              ↑     ↓
+                            Cache ←─┘
+```
+
+Each node is a `_AgentNode(QGraphicsObject)` with three visual
+states: idle (60% opacity, thin border), active (full opacity,
+glow pulsing 4 ↔ 12 px via `QPropertyAnimation` on a custom
+`pyqtProperty`, ⚡ icon), done (green border + ✓ icon), error
+(red flash, 3-pulse opacity 1.0 → 0.4 → 1.0). Edges are bezier
+`QGraphicsPathItem`s; the cache→evaluator loop-back is dotted.
+
+Animated particles (`_Particle(QGraphicsObject)` with a
+`pyqtProperty(float) pos_t`) travel along an edge's bezier when
+data flows. Color-coded: highlight blue for fresh judging,
+green for cache hits, red for errors. 800 ms ease-in-out per
+particle, auto-delete on completion. Cap at 20 in-flight.
+
+Slots driven by the worker's signals:
+
+- `on_substep(text)` parses `"Loading rubrics"`,
+  `"Judging <evaluator_id> N/M"`, `"Writing results"` and lights up
+  the right node + launches a particle.
+- `on_stats(dict)` compares against the last seen counts: if
+  `cache_hits` incremented, launches a green Cache→evaluator
+  particle; if `judged` incremented faster than `cache_hits`, the
+  delta represents fresh judging.
+- `on_error(msg)` flashes every currently-active node red.
+- `on_finished()` transitions every touched node to "done".
+- `reset()` drains in-flight animations and returns to idle.
+
+All colours read from `theme.ui()` (Rule 36) — no hardcoded hex,
+dark/light auto-adapts. No new theme tokens added; falls back
+gracefully when a key is absent.
+
+**D. `_on_stage_error` sentinel fix** (Rule 52) + **`Stage N` rename**
+(Rule 53, see below). When the eval-agent emits an error
+(`stage_index = EVAL_AGENT_STAGE_INDEX = -1`), the shared log
+formerly read `"Stage 0 ERROR: …"`. Now it reads
+`"AI agent verification ERROR: …"` via `stage_display_name(-1)`.
+
+**Files added/changed (Rule 52):**
+
+NEW (MHM Pipeline)
+- `src/mhm_pipeline/gui/dialogs/ai_verification_dialog.py` (818 LOC) — the dialog
+- `src/mhm_pipeline/gui/dialogs/widgets/__init__.py`
+- `src/mhm_pipeline/gui/dialogs/widgets/agent_system_diagram.py` (939 LOC) — animated diagram
+- `src/mhm_pipeline/gui/dialogs/widgets/verdict_table_model.py` (333 LOC)
+- `src/mhm_pipeline/gui/dialogs/widgets/json_tree_viewer.py` (211 LOC)
+- `src/mhm_pipeline/gui/dialogs/widgets/status_pill.py` (106 LOC)
+- `src/mhm_pipeline/gui/dialogs/widgets/friendly_copy.py` (240 LOC)
+- `tests/fixtures/eval_agent_test_runner.py` — wrapper that stubs the
+  Gemini judge for the real-CLI integration tests
+- `tests/integration/test_eval_agent_cli_state_dir.py` — drives the
+  REAL eval-agent CLI to verify the state-dir contract end-to-end.
+  Includes a **symptom-mirroring test**
+  `TestSymptomMirrorEvalAgentWorkerAgainstRealCli.test_worker_against_real_cli_emits_finished_not_error`
+  that drives `EvalAgentWorker` against the real CLI and asserts
+  `finished(run_dir)` fires (NOT `error("no run directory…")`). If
+  the state-dir fix regresses, this test fails with the exact 2026-05-25
+  symptom string.
+- `tests/unit/gui/dialogs/test_ai_verification_dialog.py` (14 tests)
+- `tests/unit/gui/dialogs/widgets/test_verdict_table_model.py` (7)
+- `tests/unit/gui/dialogs/widgets/test_json_tree_viewer.py` (6)
+- `tests/unit/gui/dialogs/widgets/test_status_pill.py` (5)
+- `tests/unit/gui/dialogs/widgets/test_friendly_copy.py` (8)
+- `tests/unit/gui/dialogs/widgets/test_agent_system_diagram.py` (12)
+
+MOD
+- `src/mhm_pipeline/controller/workers.py` — `EvalAgentWorker` grows
+  `--state-dir` argv, `stats_update` signal, `_proc` handle,
+  `terminate_subprocess()`
+- `src/mhm_pipeline/controller/pipeline_controller.py` — split
+  `start_eval_agent` into `build_eval_agent_worker` + `_start_worker`
+- `src/mhm_pipeline/gui/main_window.py` — `_on_verify_with_ai` opens
+  `AiVerificationDialog` non-modal BEFORE worker start; sentinel
+  branches for `_on_stage_started` / `_on_stage_finished` /
+  `_on_stage_error`
+- `tests/integration/test_credentials_and_eval_agent.py` — fake-CLI
+  fixture now honors `EVAL_AGENT_STATE_DIR` (matches real CLI)
+- `tests/integration/test_main_window_rule_50_e2e.py` — sentinel
+  error test renamed for Rule 53 friendly-name contract
+
+DELETED (folded into the new dialog)
+- `src/mhm_pipeline/gui/dialogs/eval_agent_report_dialog.py`
+- `tests/unit/gui/dialogs/test_eval_agent_report_dialog_e2e.py`
+
+**Tests:** 970 → 1037 (+67). Includes the symptom-mirroring test —
+**the canonical regression test for the 2026-05-25 bug**. Zero
+regressions in the 970-test pre-Rule-52 baseline.
+
+**Safety invariants preserved:** Rules 36 (theme tokens),
+37 (GlassDialog), 38 (Wikidata mod guard), 45 (Wikibase trust
+boundary), 48 (eval-agent trust boundary — subprocess + filesystem
+only). The new `AgentSystemDiagram` reads only `theme.ui()` colours
+so dark + light auto-adapt; no hardcoded hex.
+
+### 53. Real stage / sub-task names — never "Stage N" in user-visible strings (added 2026-05-25)
+
+User directive: *"we should stop use in the code 'Stage n' — we
+should use the real name of the Stage or of the operation. Stage 0
+or any other number is wrong way to do things. … sometimes it's
+not sidebar labels; in this example it's a sub-task under a sidebar
+label."*
+
+User-facing strings (log lines, dialog labels, progress callouts)
+must use:
+
+- The **sidebar label** for top-level stages — "MARC Parsing",
+  "AI-based Enrichment", "Authority Matching", "RDF Graph",
+  "SHACL Validation", "Wikidata Studio", "HMO Wikibase".
+- The **sub-task name** for operations that piggyback on the
+  StageWorker lifecycle but are not their own sidebar stage —
+  e.g. the eval-agent verification (sentinel `EVAL_AGENT_STAGE_INDEX
+  = -1`) is a sub-task under "AI-based Enrichment" and surfaces as
+  **"AI agent verification"**.
+
+Canonical resolver: `pipeline_controller.stage_display_name(index: int)`.
+The `_STAGE_NAMES` dict carries every registered index (0–5 + the
+sentinel -1). Fallback for an unregistered index is the generic
+`"Operation"` — *never* `"Stage N"`.
+
+`main_window._on_stage_started` / `_on_stage_finished` /
+`_on_stage_error` all route through `stage_display_name(index)`
+before emitting log lines. The integration test
+`TestEvalAgentSentinelStageError.test_eval_agent_sentinel_renders_with_friendly_name_not_stage_zero`
+includes a structural assertion `re.search(r"\bStage \d+\b",
+log_text) is None` so a regression that re-introduces "Stage N"
+fails the test suite immediately.
+
+Comments and developer-facing logger calls may still reference
+stage indices for diagnostics. The rule applies to **user-visible**
+strings only.

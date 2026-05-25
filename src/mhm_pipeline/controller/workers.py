@@ -6,6 +6,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -2601,6 +2602,13 @@ class EvalAgentWorker(StageWorker):
             evaluator.
     """
 
+    # Rule 52 — structured stats line from eval-agent's ui.emit_stats().
+    # Emitted with a dict of {"total", "cache_hits", "judged",
+    # "input_tokens", "output_tokens"}; the AiVerificationDialog's Stats
+    # card subscribes to this to render reused-from-prior-run counts and
+    # token-usage numbers live.
+    stats_update = pyqtSignal(dict)
+
     def __init__(
         self,
         pipeline_output_dir: Path,
@@ -2614,6 +2622,10 @@ class EvalAgentWorker(StageWorker):
         # Stamped by run() before subprocess.Popen for testability.
         self._last_cmd: list[str] | None = None
         self._last_cwd: Path | None = None
+        # Live handle on the subprocess so terminate_subprocess() can stop it.
+        # ``Any`` to keep the import inside run() (subprocess module is heavy
+        # and not needed at class-definition time).
+        self._proc: Any | None = None
 
     def run(self) -> None:
         try:
@@ -2661,6 +2673,11 @@ class EvalAgentWorker(StageWorker):
             "-m", "eval_agent.cli",
             "run",
             "--pipeline-output", str(self._pipeline_output_dir),
+            # Rule 52 — defense in depth: pass the writable per-user state
+            # dir BOTH via the env var (below) and via --state-dir, so even
+            # if the env var is stripped or the eval-agent build ignores it
+            # we still land on the writable dir.
+            "--state-dir", str(user_state_dir / "state"),
         ]
         if self._models:
             cmd.extend(["--models", ",".join(sorted(self._models))])
@@ -2706,6 +2723,10 @@ class EvalAgentWorker(StageWorker):
             self.error.emit(f"Could not launch eval-agent subprocess: {exc}")
             return
 
+        # Expose the Popen handle so terminate_subprocess() can stop it
+        # mid-run (e.g. from the dialog's "Stop verification" button).
+        self._proc = proc
+
         progress_pct = 0
         stdout = proc.stdout
         if stdout is not None:
@@ -2724,6 +2745,13 @@ class EvalAgentWorker(StageWorker):
                             progress_pct = pct
                             self.progress.emit(pct)
                     except ValueError:
+                        self.log_line.emit(line)
+                elif line.startswith("[STATS]"):
+                    parsed = _parse_stats_line(line)
+                    if parsed is not None:
+                        self.stats_update.emit(parsed)
+                    else:
+                        # Couldn't parse — surface to log so it's not silently lost.
                         self.log_line.emit(line)
                 else:
                     self.log_line.emit(line)
@@ -2751,6 +2779,54 @@ class EvalAgentWorker(StageWorker):
         self.substep.emit("Verification complete")
         self.log_line.emit(f"Eval-agent run dir: {latest}")
         self.finished.emit(latest)
+
+    def terminate_subprocess(self) -> None:
+        """Stop the eval-agent subprocess if it's running (Rule 52).
+
+        Public API for the AiVerificationDialog's "Stop verification"
+        button. No-op when there's no live subprocess. Defensive: any
+        exception from ``Popen.terminate`` is swallowed because the
+        caller is mid-cancel and shouldn't care that the process was
+        already dead.
+        """
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+        except Exception as exc:
+            logger.warning("EvalAgentWorker.terminate_subprocess: %s", exc)
+
+
+_STATS_RE = re.compile(
+    r"^\[STATS\] total=(\d+) hits=(\d+) judged=(\d+) in_tok=(\d+) out_tok=(\d+)"
+)
+
+
+def _parse_stats_line(line: str) -> dict[str, int] | None:
+    """Parse a structured ``[STATS] …`` line emitted by eval-agent's ui.
+
+    Returns a dict with friendly keys for the GUI:
+      - ``total``: total candidates the run will judge
+      - ``cache_hits``: predictions reused from a prior run
+      - ``judged``: predictions the AI has finished checking this run
+      - ``input_tokens``: cumulative Gemini input tokens
+      - ``output_tokens``: cumulative Gemini output tokens
+
+    Returns ``None`` when the line doesn't match — callers should
+    surface it as a normal log line so we never silently drop output.
+    """
+    match = _STATS_RE.match(line)
+    if match is None:
+        return None
+    total, hits, judged, in_tok, out_tok = (int(x) for x in match.groups())
+    return {
+        "total": total,
+        "cache_hits": hits,
+        "judged": judged,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+    }
 
 
 def _latest_run_dir(runs_dir: Path) -> Path | None:

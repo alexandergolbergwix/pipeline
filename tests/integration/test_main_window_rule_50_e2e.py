@@ -176,3 +176,23 @@ class TestOnVerifyWithAiSlot:
 
         assert captured.get("constructed") is True
         main_window._controller.start_eval_agent.assert_not_called()
+
+
+class TestEvalAgentSentinelStageError:
+    def test_eval_agent_sentinel_renders_with_friendly_name_not_stage_zero(
+        self, main_window: object
+    ) -> None:
+        """Rules 52 + 53 — when the eval-agent emits an error
+        (stage_index = -1), the shared log must use the friendly sub-task
+        name from :func:`stage_display_name` (``"AI agent verification"``),
+        never the misleading ``"Stage 0 ERROR"``."""
+        from mhm_pipeline.controller.pipeline_controller import (
+            EVAL_AGENT_STAGE_INDEX,
+        )
+        main_window._controller.stage_error.emit(EVAL_AGENT_STAGE_INDEX, "boom")
+        log_text = main_window._shared_log._text_edit.toPlainText()
+        assert "AI agent verification ERROR: boom" in log_text
+        assert "Stage 0 ERROR" not in log_text
+        # Rule 53 sanity — generic "Stage N" prefix must never appear.
+        import re
+        assert not re.search(r"\bStage \d+\b", log_text)

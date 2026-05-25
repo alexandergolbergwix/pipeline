@@ -160,6 +160,10 @@ def _write_fake_eval_agent_pkg(root: Path) -> Path:
             run = sub.add_parser("run")
             run.add_argument("--pipeline-output", required=True)
             run.add_argument("--models", required=False)
+            # Match the real eval-agent CLI surface (added 2026-05-25):
+            # accept --state-dir so the EvalAgentWorker's argv doesn't
+            # error out with argparse exit-code 2.
+            run.add_argument("--state-dir", required=False, default=None)
             args = parser.parse_args(argv)
 
             api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -172,7 +176,12 @@ def _write_fake_eval_agent_pkg(root: Path) -> Path:
             print("[STEP] Judging candidates", flush=True)
 
             ts = time.strftime("%Y%m%dT%H%M%S")
-            run_dir = Path.cwd() / "state" / "runs" / ts
+            # Honor EVAL_AGENT_STATE_DIR (per the 2026-05-25 fix);
+            # fall back to the legacy cwd/state/ path so existing
+            # callers keep working.
+            state_env = os.environ.get("EVAL_AGENT_STATE_DIR")
+            state_root = Path(state_env) if state_env else (Path.cwd() / "state")
+            run_dir = state_root / "runs" / ts
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "report.md").write_text("# eval-agent fake report\\n", encoding="utf-8")
             (run_dir / "summary.csv").write_text(

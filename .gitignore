@@ -115,6 +115,8 @@ docs/Screenshot*.png
 # LaTeX build artifacts at ANY depth (was only paper/ before)
 *.aux
 *.toc
+*.lof
+*.lot
 *.out
 *.fls
 *.fdb_latexmk
@@ -166,3 +168,5 @@ eval/results_*.jsonl
 eval/report_*.md
 eval/summary_*.csv
 eval/results_*.csv
+
+*gemini.env

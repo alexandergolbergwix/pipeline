@@ -24,12 +24,15 @@ from mhm_pipeline.settings.settings_manager import SettingsManager
 logger = logging.getLogger(__name__)
 
 _STAGE_NAMES: dict[int, str] = {
-    0: "MARC Parse",
-    1: "NER",
-    2: "Authority",
-    3: "RDF Build",
-    4: "SHACL Validate",
-    5: "Wikidata Studio (merged preview + upload)",
+    # Rule 53 (2026-05-25) — user-facing log lines use the real stage
+    # names instead of "Stage N". Names match the sidebar labels in
+    # main_window._STAGE_LABELS so log + sidebar stay in lock-step.
+    0: "MARC Parsing",
+    1: "AI-based Enrichment",
+    2: "Authority Matching",
+    3: "RDF Graph",
+    4: "SHACL Validation",
+    5: "Wikidata Studio",
 }
 
 # Rule 50 — the eval-agent verification step piggybacks on the
@@ -38,6 +41,19 @@ _STAGE_NAMES: dict[int, str] = {
 # through the existing stage_* signals so the GUI's progress + log
 # wiring transparently picks it up.
 EVAL_AGENT_STAGE_INDEX = -1
+# Rule 53 — friendly name for the sentinel so log lines read
+# "AI agent verification …" instead of "Stage 0 …".
+_STAGE_NAMES[EVAL_AGENT_STAGE_INDEX] = "AI agent verification"
+
+
+def stage_display_name(stage_index: int) -> str:
+    """Return the user-facing name for ``stage_index``.
+
+    Falls back to a generic ``"Operation"`` label (never ``"Stage N"``)
+    when an unregistered index slips through — Rule 53 forbids the
+    numeric-stage idiom anywhere in user-visible strings.
+    """
+    return _STAGE_NAMES.get(stage_index, "Operation")
 
 
 class PipelineController(QObject):
@@ -97,12 +113,48 @@ class PipelineController(QObject):
         self._stage_outputs[stage_index] = output_path
         self.stage_finished.emit(stage_index, output_path)
 
+    def build_eval_agent_worker(
+        self,
+        pipeline_output_dir: Path,
+        gemini_api_key: str,
+        models: set[str] | None = None,
+    ) -> EvalAgentWorker:
+        """Construct (but do NOT start) the eval-agent worker.
+
+        Split from :meth:`start_eval_agent` (Rule 52) so the GUI can
+        build the worker, hand it to :class:`AiVerificationDialog` to
+        wire signals + open the dialog, and only THEN call
+        :meth:`_start_worker` to actually fire the QThread. This avoids
+        the race where the worker starts emitting signals before the
+        dialog has subscribed to them.
+        """
+        return EvalAgentWorker(
+            pipeline_output_dir=pipeline_output_dir,
+            gemini_api_key=gemini_api_key,
+            models=models,
+        )
+
+    def _start_worker(self, worker: EvalAgentWorker, stage_index: int) -> None:
+        """Wire the controller's stage_* signals and start the QThread.
+
+        Internal helper used by :meth:`start_eval_agent` and by
+        callers that built the worker via :meth:`build_eval_agent_worker`
+        and need to defer the start until after a dialog is wired up.
+        """
+        self._current_worker = worker
+        worker.finished.connect(partial(self._on_worker_finished, stage_index))
+        worker.error.connect(partial(self._on_worker_error, stage_index))
+        worker.progress.connect(partial(self._on_worker_progress, stage_index))
+        worker.substep.connect(partial(self._on_worker_substep, stage_index))
+        self.stage_started.emit(stage_index)
+        worker.start()
+
     def start_eval_agent(
         self,
         pipeline_output_dir: Path,
         gemini_api_key: str,
         models: set[str] | None = None,
-    ) -> None:
+    ) -> EvalAgentWorker:
         """Launch the bundled eval-agent over the Stage 2 output dir (Rule 50).
 
         Reuses the existing :class:`StageWorker` lifecycle wiring so
@@ -111,6 +163,12 @@ class PipelineController(QObject):
         ``stage_error`` with ``stage_index = EVAL_AGENT_STAGE_INDEX``.
         The main window's panel listens on that sentinel value and
         opens the eval-agent report dialog on ``stage_finished``.
+
+        Returns the live :class:`EvalAgentWorker` so the caller can pass
+        it to :class:`AiVerificationDialog` (Rule 52). Callers that want
+        to subscribe to worker signals BEFORE the QThread starts should
+        use :meth:`build_eval_agent_worker` + :meth:`_start_worker`
+        instead.
 
         Parameters
         ----------
@@ -125,20 +183,14 @@ class PipelineController(QObject):
             Optional include-set of evaluator ids to run. ``None``
             runs every registered evaluator.
         """
-        worker = EvalAgentWorker(
+        worker = self.build_eval_agent_worker(
             pipeline_output_dir=pipeline_output_dir,
             gemini_api_key=gemini_api_key,
             models=models,
         )
-        self._current_worker = worker
-        stage_index = EVAL_AGENT_STAGE_INDEX
-        worker.finished.connect(partial(self._on_worker_finished, stage_index))
-        worker.error.connect(partial(self._on_worker_error, stage_index))
-        worker.progress.connect(partial(self._on_worker_progress, stage_index))
-        worker.substep.connect(partial(self._on_worker_substep, stage_index))
         logger.info("Starting eval-agent verification on %s", pipeline_output_dir)
-        self.stage_started.emit(stage_index)
-        worker.start()
+        self._start_worker(worker, EVAL_AGENT_STAGE_INDEX)
+        return worker
 
     def cancel(self) -> None:
         """Request the current worker to stop and wait for it to finish."""

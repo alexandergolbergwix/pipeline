@@ -361,9 +361,20 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_verify_with_ai(self, pipeline_output_dir: Path) -> None:
-        """Rule 50 — fire the bundled eval-agent against the Stage 2
-        output dir. If no Gemini key is stored, open the Credentials
-        dialog first so the user has somewhere to paste one."""
+        """Rule 50 / 52 — fire the bundled eval-agent against the Stage 2
+        output dir and open the rich :class:`AiVerificationDialog` to
+        stream live progress + log + stats.
+
+        If no Gemini key is stored, open the Credentials dialog first
+        so the user has somewhere to paste one.
+
+        Build → wire → show → start ordering: the dialog has to
+        subscribe to the worker's signals BEFORE the QThread starts
+        emitting them, so we use the split
+        :meth:`PipelineController.build_eval_agent_worker` /
+        :meth:`PipelineController._start_worker` pair instead of the
+        one-shot ``start_eval_agent``.
+        """
         if not self._settings.gemini_api_key:
             QMessageBox.information(
                 self,
@@ -375,10 +386,25 @@ class MainWindow(QMainWindow):
             self._on_open_credentials()
             if not self._settings.gemini_api_key:
                 return
-        self._controller.start_eval_agent(
+
+        from mhm_pipeline.controller.pipeline_controller import (  # noqa: PLC0415
+            EVAL_AGENT_STAGE_INDEX,
+        )
+        from mhm_pipeline.gui.dialogs.ai_verification_dialog import (  # noqa: PLC0415
+            AiVerificationDialog,
+        )
+
+        worker = self._controller.build_eval_agent_worker(
             pipeline_output_dir=pipeline_output_dir,
             gemini_api_key=self._settings.gemini_api_key,
         )
+        dialog = AiVerificationDialog(
+            pipeline_output_dir=pipeline_output_dir,
+            worker=worker,
+            parent=self,
+        )
+        dialog.show()  # non-modal so the user can keep using the app
+        self._controller._start_worker(worker, EVAL_AGENT_STAGE_INDEX)
 
     # ── Central widget ────────────────────────────────────────────────
 
@@ -523,8 +549,21 @@ class MainWindow(QMainWindow):
     )
 
     def _on_stage_started(self, index: int) -> None:
+        # Rule 53 — never render user-facing log lines as "Stage N";
+        # always use the real stage / sub-task name resolved via
+        # pipeline_controller.stage_display_name(). For the eval-agent
+        # sentinel (-1) this returns "AI agent verification".
+        from mhm_pipeline.controller.pipeline_controller import (  # noqa: PLC0415
+            EVAL_AGENT_STAGE_INDEX,
+            stage_display_name,
+        )
+
+        name = stage_display_name(index)
+        if index == EVAL_AGENT_STAGE_INDEX:
+            self._shared_log.append_line(f"{name} started…")
+            return
         self._update_stage_state(index, "running")
-        self._shared_log.append_line(f"Stage {index + 1} started…")
+        self._shared_log.append_line(f"{name} started…")
         # Reset the panel's DynamicProgressBar so a fresh ETA history begins.
         bar = self._panel_progress_bar(index)
         if bar is not None and hasattr(bar, "reset"):
@@ -558,27 +597,24 @@ class MainWindow(QMainWindow):
         return getattr(panel, "stage_progress", None)
 
     def _on_stage_finished(self, index: int, output: Path) -> None:
-        # Rule 50 — eval-agent runs on the sentinel index -1. Route its
-        # ``finished`` to the report dialog instead of the normal
-        # stage-progress wiring.
+        # Rule 53 — friendly stage names in user-visible log lines (never
+        # "Stage N"). Rule 52 — the eval-agent runs on
+        # EVAL_AGENT_STAGE_INDEX = -1; AiVerificationDialog handles its
+        # own post-run rendering, MainWindow just logs the run dir.
         from mhm_pipeline.controller.pipeline_controller import (  # noqa: PLC0415
             EVAL_AGENT_STAGE_INDEX,
+            stage_display_name,
         )
 
+        name = stage_display_name(index)
         if index == EVAL_AGENT_STAGE_INDEX:
             self._shared_log.append_line(
-                f"AI agent verification finished. Run dir: {output}"
+                f"{name} finished. Run dir: {output}"
             )
-            from mhm_pipeline.gui.dialogs.eval_agent_report_dialog import (  # noqa: PLC0415
-                EvalAgentReportDialog,
-            )
-
-            dialog = EvalAgentReportDialog(output, parent=self)
-            dialog.exec()
             return
 
         self._update_stage_state(index, "done")
-        self._shared_log.append_line(f"Stage {index + 1} finished. Output: {output}")
+        self._shared_log.append_line(f"{name} finished. Output: {output}")
         bar = self._panel_progress_bar(index)
         if bar is not None and hasattr(bar, "finish") and 0 <= index < len(self._STAGE_PROGRESS_LABELS):
             bar.finish(self._STAGE_PROGRESS_LABELS[index][0], success=True)
@@ -749,8 +785,21 @@ class MainWindow(QMainWindow):
             self._hmo_wikibase_panel.set_output_dir(out_dir)
 
     def _on_stage_error(self, index: int, message: str) -> None:
+        # Rule 53 — friendly stage / sub-task names in user-visible log
+        # lines (never "Stage N"). Rule 52 — the eval-agent uses
+        # EVAL_AGENT_STAGE_INDEX = -1; AiVerificationDialog subscribes
+        # to the worker's error signal directly, so MainWindow just logs.
+        from mhm_pipeline.controller.pipeline_controller import (  # noqa: PLC0415
+            EVAL_AGENT_STAGE_INDEX,
+            stage_display_name,
+        )
+
+        name = stage_display_name(index)
+        if index == EVAL_AGENT_STAGE_INDEX:
+            self._shared_log.append_line(f"{name} ERROR: {message}")
+            return
         self._update_stage_state(index, "error")
-        self._shared_log.append_line(f"Stage {index + 1} ERROR: {message}")
+        self._shared_log.append_line(f"{name} ERROR: {message}")
         bar = self._panel_progress_bar(index)
         if bar is not None and hasattr(bar, "finish") and 0 <= index < len(self._STAGE_PROGRESS_LABELS):
             bar.finish(self._STAGE_PROGRESS_LABELS[index][1], success=False)
