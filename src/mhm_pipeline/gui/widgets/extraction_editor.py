@@ -583,6 +583,78 @@ class EditableEntityModel(QAbstractTableModel):
         # so the "Exists in" popup can render the full bibliographic
         # record alongside the matched entities.
         self._marc_by_cn: dict[str, dict] = {}
+        # Shared approval store — lazily attached when the output dir
+        # becomes known (in ExtractionEditor.load_records). Lets the
+        # eval-agent verdict UI and this editor sync approvals live.
+        from mhm_pipeline.controller.approval_store import (  # noqa: PLC0415
+            ApprovalStore,
+        )
+        self._approval_store: ApprovalStore | None = None
+        self._approval_dir: Path | None = None
+
+    # ── Shared approval store (Rule: cross-window approval sync) ──────────
+
+    def _row_group(self) -> str:
+        """Approval group for every NER editor row."""
+        return "ner"
+
+    def _row_approval_key(self, row: dict) -> str:
+        """Canonical, surface-independent approval key for one entity row."""
+        from mhm_pipeline.controller.approval_store import (  # noqa: PLC0415
+            approval_key,
+        )
+        sub_type = str(row.get("role") or row.get("type") or "")
+        return approval_key(
+            str(row.get("_control_number") or ""),
+            self._row_group(),
+            sub_type,
+            str(row.get("text") or ""),
+        )
+
+    def attach_approval_store(self, output_dir: Path) -> None:
+        """Build/attach the shared ApprovalStore keyed at ``output_dir``.
+
+        Idempotent: re-attaching to the same dir is a no-op. Connects the
+        store's ``changed`` signal to :meth:`_reload_approvals_from_store`
+        so an external approval (eval-agent UI, the authority editor) flips
+        the checkboxes here live.
+        """
+        if self._approval_dir == output_dir and self._approval_store is not None:
+            return
+        from mhm_pipeline.controller.approval_store import (  # noqa: PLC0415
+            ApprovalStore,
+        )
+        self._approval_store = ApprovalStore(output_dir)
+        self._approval_dir = output_dir
+        self._approval_store.changed.connect(self._reload_approvals_from_store)
+        self._apply_store_to_rows()
+
+    def _apply_store_to_rows(self) -> None:
+        """Override each row's ``approved`` from the store's opinion.
+
+        A row is approved iff its canonical key is in
+        ``store.approved_keys()``. Rows whose key the store has never seen
+        are left at whatever the loaded data said.
+        """
+        if self._approval_store is None:
+            return
+        approved = self._approval_store.approved_keys()
+        for ent in self._entities:
+            key = self._row_approval_key(ent)
+            if self._approval_store.has(key):
+                ent["approved"] = key in approved
+
+    def _reload_approvals_from_store(self) -> None:
+        """Re-pull the store's approvals and refresh the Approved column."""
+        if self._approval_store is None or not self._entities:
+            return
+        approved = self._approval_store.approved_keys()
+        for ent in self._entities:
+            if self._approval_store.has(self._row_approval_key(ent)):
+                ent["approved"] = self._row_approval_key(ent) in approved
+        tl = self.index(0, COL_APPROVED)
+        br = self.index(self.rowCount() - 1, COL_APPROVED)
+        self.dataChanged.emit(tl, br)
 
     # ── Loading ──────────────────────────────────────────────────────────
 
@@ -643,6 +715,7 @@ class EditableEntityModel(QAbstractTableModel):
                     "end": 0,
                     "approved": False,
                 })
+        self._apply_store_to_rows()
         self._original = copy.deepcopy(self._entities)
         self.endResetModel()
 
@@ -871,7 +944,12 @@ class EditableEntityModel(QAbstractTableModel):
         ent = self._entities[row]
 
         if role == Qt.ItemDataRole.CheckStateRole and col == COL_APPROVED:
-            ent["approved"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
+            approved = Qt.CheckState(value) == Qt.CheckState.Checked
+            ent["approved"] = approved
+            if self._approval_store is not None:
+                self._approval_store.set_approved(
+                    self._row_approval_key(ent), approved, by="ner_editor",
+                )
             self.dataChanged.emit(index, index.siblingAtColumn(COL_ACTIONS))
             return True
 
@@ -2115,6 +2193,11 @@ class ExtractionEditor(QWidget):
     # ── Public API ───────────────────────────────────────────────────────
 
     def load_records(self, records: list[dict], output_path: Path | None = None) -> None:
+        # Attach the shared approval store BEFORE loading rows so the
+        # store's opinion is applied as rows are built (the eval-agent
+        # verdict UI writes the same approvals.json sidecar).
+        if output_path is not None:
+            self._model.attach_approval_store(output_path.parent)
         self._model.load_from_records(records)
         self._output_path = output_path
         self._active_filters = {"sources": set(), "types": set(), "roles": set()}

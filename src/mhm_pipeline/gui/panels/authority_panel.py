@@ -39,6 +39,12 @@ class AuthorityPanel(QWidget):
     """
 
     run_requested = pyqtSignal(Path, Path, Path, bool, bool, str, str)
+    # Rule 50 — "Verify with AI agent" button → MainWindow → controller.
+    # Carries (output dir, use_cache). MainWindow pulls the Gemini API
+    # key from SettingsManager.gemini_api_key before calling the
+    # controller with eval_target="authority". ``use_cache=False``
+    # (Rule 52) passes --no-cache so every prediction hits Gemini fresh.
+    verify_requested = pyqtSignal(Path, bool)
 
     def __init__(
         self,
@@ -63,6 +69,11 @@ class AuthorityPanel(QWidget):
         self._output_selector = FileSelector("Output Dir:", mode="directory")
         layout.addWidget(self._input_selector)
         layout.addWidget(self._output_selector)
+        # Rule 50 — gate the Verify-with-AI-agent button on the presence
+        # of authority_enriched.json in the selected output dir.
+        self._output_selector.path_changed.connect(
+            lambda _p: self._refresh_verify_btn_state()
+        )
 
         # ── NER results (optional, for NER entity matching) ──────────
         self._ner_selector = FileSelector(
@@ -169,12 +180,44 @@ class AuthorityPanel(QWidget):
         self._kima_group.setCheckable(True)
         self._kima_group.setChecked(False)
 
-        # ── Run button ─────────────────────────────────────────────────
+        # ── Run + Verify buttons ───────────────────────────────────────
         self._run_btn = QPushButton("Match Authorities")
         self._run_btn.clicked.connect(self._on_run)
         self._run_btn.setStyleSheet(theme.button_style())
         self._run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(self._run_btn)
+
+        # Rule 50 — "Verify with AI agent" button. Enabled only when the
+        # current output dir holds authority_enriched.json. Mirrors the
+        # NER panel's verify button (style + cursor + tooltip).
+        self._verify_btn = QPushButton("Verify with AI agent")
+        self._verify_btn.setStyleSheet(theme.button_style("load"))
+        self._verify_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._verify_btn.setToolTip(
+            "Run the bundled eval-agent (Google Gemini) over the current "
+            "authority matches. Requires a Gemini API key in "
+            "Settings → Credentials."
+        )
+        self._verify_btn.setEnabled(False)
+        self._verify_btn.clicked.connect(self._on_verify_with_ai)
+
+        # Rule 52 — "Re-check (ignore cache)" toggle. When ticked, the
+        # next Verify run passes --no-cache so the eval-agent skips its
+        # verdict cache and calls Gemini fresh on every prediction.
+        self._verify_fresh_checkbox = QCheckBox("Re-check (ignore cache)")
+        self._verify_fresh_checkbox.setToolTip(
+            "Tick this BEFORE clicking Verify with AI agent to force the AI "
+            "to re-judge every prediction even if a cached answer exists."
+        )
+        self._verify_fresh_checkbox.setStyleSheet(
+            f"QCheckBox {{ color:{theme.ui('text')}; "
+            f" font-size:{theme.FONT_SM}px; padding:2px; }}"
+        )
+
+        run_btn_layout = QHBoxLayout()
+        run_btn_layout.addWidget(self._run_btn)
+        run_btn_layout.addWidget(self._verify_btn)
+        run_btn_layout.addWidget(self._verify_fresh_checkbox)
+        layout.addLayout(run_btn_layout)
 
         # Progress bar — DynamicProgressBar (substep label + ETA).
         self._progress = DynamicProgressBar()
@@ -412,6 +455,42 @@ class AuthorityPanel(QWidget):
             mazal_db_path,
         )
 
+    def _on_verify_with_ai(self) -> None:
+        """Rule 50 — fire the bundled eval-agent against the current
+        output directory's ``authority_enriched.json``."""
+        output_path = self._output_selector.path
+        if output_path is None or not output_path.exists():
+            self._log_viewer.append_line(
+                "Error: select an output directory first."
+            )
+            return
+        authority_path = output_path / "authority_enriched.json"
+        if not authority_path.exists():
+            self._log_viewer.append_line(
+                "Error: no authority_enriched.json in the output directory. "
+                "Run Match Authorities first."
+            )
+            return
+        use_cache = not self._verify_fresh_checkbox.isChecked()
+        cache_note = "" if use_cache else " (cache disabled — every check hits Gemini fresh)"
+        self._log_viewer.append_line(
+            f"Launching AI agent verification on {output_path}…{cache_note}"
+        )
+        self.verify_requested.emit(output_path, use_cache)
+
+    def _refresh_verify_btn_state(self) -> None:
+        """Enable the Verify button iff ``output_dir/authority_enriched.json`` exists."""
+        verify_btn = getattr(self, "_verify_btn", None)
+        if verify_btn is None:
+            return
+        output_path = self._output_selector.path
+        can_verify = bool(
+            output_path
+            and output_path.exists()
+            and (output_path / "authority_enriched.json").exists()
+        )
+        verify_btn.setEnabled(can_verify)
+
     def _on_rebuild_mazal(self) -> None:
         xml_dir = self._xml_dir_selector.path
         db_path = self._mazal_db_selector.path
@@ -503,6 +582,9 @@ class AuthorityPanel(QWidget):
         self._last_output_path = output_path
         self._authority_editor.load_records(records, output_path)
         self._review_edit_btn.setEnabled(bool(records))
+        # Rule 50 — once authority results land, the Verify-with-AI-agent
+        # button becomes available (gated on authority_enriched.json).
+        self._refresh_verify_btn_state()
         if auto_review and records:
             from PyQt6.QtCore import QTimer  # noqa: PLC0415
             QTimer.singleShot(150, self._on_review_matches)

@@ -24,6 +24,11 @@ from typing import Any
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from mhm_pipeline.controller.approval_store import (
+    ApprovalStore,
+    approval_key,
+    group_for_evaluator,
+)
 from mhm_pipeline.gui.dialogs.widgets.friendly_copy import (
     humanise_evaluator,
     humanise_verdict,
@@ -65,6 +70,9 @@ _COLUMNS: list[_Column] = [
             tooltip="The text the AI judged. Hover for the full value."),
     _Column("verdict",     "Verdict",
             tooltip="The AI's overall call: looks right / partly / got it wrong."),
+    _Column("approved",    "Approved",
+            tooltip="Whether you've approved this prediction. Approving here "
+                    "syncs live with the NER and authority editors."),
     _Column("name_ok",     "Name",     tooltip="Did the AI think the name itself was right?"),
     _Column("type_ok",     "Type",     tooltip="Did the AI think the entity type was right?"),
     _Column("role_ok",     "Role",     tooltip="Did the AI think the role / occupation was right?"),
@@ -121,12 +129,17 @@ class VerdictTableModel(QAbstractTableModel):
         self._visible_rows: list[dict[str, Any]] = []
         self._advanced: bool = False
 
+        # Shared approval store — set via ``set_approval_store``. When
+        # absent, the Approved column renders "not_approved" for every row.
+        self._approval_store: ApprovalStore | None = None
+
         # Filter toggles — independent (AND-combined when multiple active).
         self._filter_failures: bool = False
         self._filter_unsure: bool = False
         self._filter_reused: bool = False
         self._filter_errors: bool = False
         self._filter_novel: bool = False
+        self._filter_approved: bool = False
 
     # ── Loading ─────────────────────────────────────────────────────
 
@@ -237,6 +250,87 @@ class VerdictTableModel(QAbstractTableModel):
         self._recompute_visible()
         self.endResetModel()
 
+    def filter_approved_only(self, on: bool) -> None:
+        """Show only rows the curator has approved in the shared store."""
+        self.beginResetModel()
+        self._filter_approved = bool(on)
+        self._recompute_visible()
+        self.endResetModel()
+
+    # ── Approval store integration ──────────────────────────────────
+
+    def set_approval_store(self, store: ApprovalStore | None) -> None:
+        """Bind the shared approval store and repaint the Approved column."""
+        self.beginResetModel()
+        self._approval_store = store
+        self.endResetModel()
+
+    def approval_key_for(self, record: dict[str, Any]) -> str:
+        """Compute the canonical, cross-surface approval key for *record*."""
+        record_id = str(record.get("record_id") or "")
+        evaluator_id = str(record.get("evaluator_id") or "")
+        sub_type = str(record.get("sub_type") or "")
+        text = _candidate_text(record.get("candidate"))
+        return approval_key(
+            record_id, group_for_evaluator(evaluator_id), sub_type, text,
+        )
+
+    def _is_row_approved(self, record: dict[str, Any]) -> bool:
+        if self._approval_store is None:
+            return False
+        return self._approval_store.is_approved(self.approval_key_for(record))
+
+    def approve_row(self, row: int, approved: bool) -> None:
+        """Write the approval for the visible row *row* into the store."""
+        if self._approval_store is None:
+            return
+        record = self.raw_row(row)
+        if record is None:
+            return
+        self._approval_store.set_approved(
+            self.approval_key_for(record), bool(approved), by="eval_agent",
+        )
+        self._emit_approved_column_changed(row)
+
+    def refresh_from_store(self) -> None:
+        """Repaint the Approved column after an external store change.
+
+        Re-applies the approved filter (a row may have flipped in or
+        out of the filtered set) and signals the Approved column for a
+        repaint.
+        """
+        if self._filter_approved:
+            self.beginResetModel()
+            self._recompute_visible()
+            self.endResetModel()
+            return
+        self._emit_approved_column_changed(None)
+
+    def _approved_column_index(self) -> int:
+        cols = self._active_columns()
+        for idx, col in enumerate(cols):
+            if col.key == "approved":
+                return idx
+        return -1
+
+    def _emit_approved_column_changed(self, row: int | None) -> None:
+        col = self._approved_column_index()
+        if col < 0:
+            return
+        roles = [
+            int(Qt.ItemDataRole.DisplayRole),
+            int(VerdictTableModel.StatusRole),
+        ]
+        if row is None:
+            last = self.rowCount() - 1
+            if last < 0:
+                return
+            self.dataChanged.emit(
+                self.index(0, col), self.index(last, col), roles,
+            )
+            return
+        self.dataChanged.emit(self.index(row, col), self.index(row, col), roles)
+
     # ── Row access (used by the detail pane) ────────────────────────
 
     def raw_row(self, row: int) -> dict[str, Any] | None:
@@ -335,6 +429,8 @@ class VerdictTableModel(QAbstractTableModel):
             return False
         if self._filter_novel and not record.get("_novel"):
             return False
+        if self._filter_approved and not self._is_row_approved(record):
+            return False
         return True
 
     # ── Cell renderers ──────────────────────────────────────────────
@@ -352,6 +448,9 @@ class VerdictTableModel(QAbstractTableModel):
             return text[:80] + ("…" if len(text) > 80 else "")
         if key == "verdict":
             return humanise_verdict(str(verdict.get("overall") or ""))
+        if key == "approved":
+            # Rendered as a StatusPill via StatusRole; DisplayRole blank.
+            return ""
         if key in {"name_ok", "type_ok", "role_ok"}:
             raw = str(verdict.get(key, ""))
             return _aspect_glyph(raw)
@@ -411,6 +510,8 @@ class VerdictTableModel(QAbstractTableModel):
         verdict = record.get("verdict") or {}
         if key == "verdict":
             return str(verdict.get("overall") or "")
+        if key == "approved":
+            return "approved" if self._is_row_approved(record) else "not_approved"
         if key in {"name_ok", "type_ok", "role_ok"}:
             return str(verdict.get(key) or "")
         return ""

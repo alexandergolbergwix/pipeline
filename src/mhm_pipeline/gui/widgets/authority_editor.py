@@ -1024,11 +1024,86 @@ class AuthorityMatchModel(QAbstractTableModel):
         self._rows: list[dict] = []
         self._original: list[dict] = []
         self._records: list[dict] = []
+        # Shared approval store — lazily attached when the output dir
+        # becomes known (in AuthorityEditor.load_records). Lets the
+        # eval-agent verdict UI and this editor sync approvals live.
+        from mhm_pipeline.controller.approval_store import (  # noqa: PLC0415
+            ApprovalStore,
+        )
+        self._approval_store: ApprovalStore | None = None
+        self._approval_dir: Path | None = None
+
+    # ── Shared approval store (Rule: cross-window approval sync) ──────────
+
+    def _row_group(self) -> str:
+        """Approval group for every authority editor row."""
+        return "authority"
+
+    def _row_approval_key(self, row: dict) -> str:
+        """Canonical, surface-independent approval key for one match row."""
+        from mhm_pipeline.controller.approval_store import (  # noqa: PLC0415
+            approval_key,
+        )
+        sub_type = str(row.get("role") or row.get("match_type") or "")
+        text = str(row.get("entity_text") or row.get("matched_name") or "")
+        return approval_key(
+            str(row.get("_control_number") or ""),
+            self._row_group(),
+            sub_type,
+            text,
+        )
+
+    def attach_approval_store(self, output_dir: Path) -> None:
+        """Build/attach the shared ApprovalStore keyed at ``output_dir``.
+
+        Idempotent: re-attaching to the same dir is a no-op. Connects the
+        store's ``changed`` signal to :meth:`_reload_approvals_from_store`
+        so an external approval (eval-agent UI, the NER editor) flips the
+        checkboxes here live.
+        """
+        if self._approval_dir == output_dir and self._approval_store is not None:
+            return
+        from mhm_pipeline.controller.approval_store import (  # noqa: PLC0415
+            ApprovalStore,
+        )
+        self._approval_store = ApprovalStore(output_dir)
+        self._approval_dir = output_dir
+        self._approval_store.changed.connect(self._reload_approvals_from_store)
+        self._apply_store_to_rows()
+
+    def _apply_store_to_rows(self) -> None:
+        """Override each row's ``approved`` from the store's opinion.
+
+        A row is approved iff its canonical key is in
+        ``store.approved_keys()``. Rows whose key the store has never seen
+        are left at whatever the loaded data said.
+        """
+        if self._approval_store is None:
+            return
+        approved = self._approval_store.approved_keys()
+        for row in self._rows:
+            key = self._row_approval_key(row)
+            if self._approval_store.has(key):
+                row["approved"] = key in approved
+
+    def _reload_approvals_from_store(self) -> None:
+        """Re-pull the store's approvals and refresh the Approved column."""
+        if self._approval_store is None or not self._rows:
+            return
+        approved = self._approval_store.approved_keys()
+        for row in self._rows:
+            key = self._row_approval_key(row)
+            if self._approval_store.has(key):
+                row["approved"] = key in approved
+        tl = self.index(0, COL_APPROVED)
+        br = self.index(self.rowCount() - 1, COL_APPROVED)
+        self.dataChanged.emit(tl, br)
 
     def load(self, records: list[dict]) -> None:
         self.beginResetModel()
         self._records = records
         self._rows = flatten_authority_records(records)
+        self._apply_store_to_rows()
         self._original = copy.deepcopy(self._rows)
         self.endResetModel()
 
@@ -1155,7 +1230,12 @@ class AuthorityMatchModel(QAbstractTableModel):
             return False
         r = self._rows[row]
         if role == Qt.ItemDataRole.CheckStateRole and col == COL_APPROVED:
-            r["approved"] = (Qt.CheckState(value) == Qt.CheckState.Checked)
+            approved = Qt.CheckState(value) == Qt.CheckState.Checked
+            r["approved"] = approved
+            if self._approval_store is not None:
+                self._approval_store.set_approved(
+                    self._row_approval_key(r), approved, by="authority_editor",
+                )
             self.dataChanged.emit(index, index.siblingAtColumn(COL_ACTIONS))
             return True
         return False
@@ -1683,6 +1763,11 @@ class AuthorityEditor(QWidget):
     # ── Public API ───────────────────────────────────────────────────────
 
     def load_records(self, records: list[dict], output_path: Path | None = None) -> None:
+        # Attach the shared approval store BEFORE loading rows so the
+        # store's opinion is applied as rows are built (the eval-agent
+        # verdict UI writes the same approvals.json sidecar).
+        if output_path is not None:
+            self._model.attach_approval_store(output_path.parent)
         self._model.load(records)
         self._output_path = output_path
         self._refresh_actions()

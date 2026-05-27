@@ -35,6 +35,9 @@ _STATUS_TABLE: dict[str, tuple[str, str, str]] = {
     "unknown": ("Couldn't tell", "—", "warning"),
     "n/a":     ("Not checked",   "—", "info"),
     "error":   ("Error",         "!", "violation"),
+    # Curator approval state, shared with the editor UIs via ApprovalStore.
+    "approved":     ("Approved",     "✓", "success"),
+    "not_approved": ("Not approved", "—", "info"),
 }
 
 

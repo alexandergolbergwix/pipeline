@@ -360,8 +360,25 @@ class MainWindow(QMainWindow):
         dialog = CredentialsDialog(self._settings, parent=self)
         dialog.exec()
 
+    def _on_verify_authority_with_ai(
+        self, output_dir: Path, use_cache: bool = True
+    ) -> None:
+        """Rule 50 — verify Stage 3 authority output with the eval-agent.
+
+        Thin wrapper that delegates to :meth:`_on_verify_with_ai` with
+        ``eval_target="authority"`` so the worker requires
+        ``authority_enriched.json`` and runs only the ``authority``
+        evaluator.
+        """
+        self._on_verify_with_ai(
+            output_dir, use_cache=use_cache, eval_target="authority"
+        )
+
     def _on_verify_with_ai(
-        self, pipeline_output_dir: Path, use_cache: bool = True
+        self,
+        pipeline_output_dir: Path,
+        use_cache: bool = True,
+        eval_target: str = "stage2",
     ) -> None:
         """Rule 50 / 52 — fire the bundled eval-agent against the Stage 2
         output dir and open the rich :class:`AiVerificationDialog` to
@@ -402,6 +419,7 @@ class MainWindow(QMainWindow):
             use_cache=use_cache,
             tier_model=self._settings.eval_agent_tier_model,
             escalate_model=self._settings.eval_agent_escalate_model,
+            eval_target=eval_target,
         )
         dialog = AiVerificationDialog(
             pipeline_output_dir=pipeline_output_dir,
@@ -532,6 +550,9 @@ class MainWindow(QMainWindow):
         self._ner_panel.run_requested.connect(self._on_run_ner)
         # Rule 50 — optional Gemini verification on Stage 2 output.
         self._ner_panel.verify_requested.connect(self._on_verify_with_ai)
+        self._authority_panel.verify_requested.connect(
+            self._on_verify_authority_with_ai
+        )
         self._authority_panel.run_requested.connect(self._on_run_authority)
         self._rdf_panel.run_requested.connect(self._on_run_rdf)
         self._validate_panel.run_requested.connect(self._on_run_validate)

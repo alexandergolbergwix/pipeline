@@ -205,6 +205,71 @@ class TestEvalAgentWorkerSubprocessShape:
         assert argv[argv.index("--escalate-model") + 1] == "gemini-3-pro"
 
 
+class TestEvalAgentWorkerAuthorityTarget:
+    def test_authority_target_appends_evaluators_flag(
+        self, tmp_path: Path, fake_user_state: Path
+    ) -> None:
+        """``eval_target="authority"`` with the right inputs present →
+        ``--evaluators authority`` lands on argv."""
+        out = tmp_path / "auth-out"
+        out.mkdir()
+        (out / "marc_extracted.json").write_text("[]")
+        (out / "authority_enriched.json").write_text("[]")
+        worker = EvalAgentWorker(
+            out, gemini_api_key="AIzaTEST", eval_target="authority"
+        )
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            fake_run = fake_user_state / "state" / "runs" / "auth-run"
+            fake_run.mkdir()
+            with patch.object(workers_mod, "_latest_run_dir", return_value=fake_run):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "--evaluators" in argv
+        assert argv[argv.index("--evaluators") + 1] == "authority"
+
+    def test_authority_target_requires_authority_file(
+        self, tmp_path: Path
+    ) -> None:
+        """``eval_target="authority"`` but only NER files present →
+        error mentioning the missing authority_enriched.json."""
+        out = tmp_path / "ner-only"
+        out.mkdir()
+        (out / "marc_extracted.json").write_text("[]")
+        (out / "ner_results.json").write_text("[]")
+        worker = EvalAgentWorker(
+            out, gemini_api_key="AIzaTEST", eval_target="authority"
+        )
+        captured: list[str] = []
+        worker.error.connect(lambda msg: captured.append(msg))
+        worker.run()
+
+        assert captured
+        assert "authority_enriched.json" in captured[0]
+
+    def test_stage2_target_omits_evaluators_flag(
+        self, fake_pipeline_out: Path, fake_user_state: Path
+    ) -> None:
+        """Default stage2 target must NOT pass ``--evaluators``."""
+        worker = EvalAgentWorker(fake_pipeline_out, gemini_api_key="AIzaTEST")
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            fake_run = fake_user_state / "state" / "runs" / "s2-run"
+            fake_run.mkdir()
+            with patch.object(workers_mod, "_latest_run_dir", return_value=fake_run):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "--evaluators" not in argv
+
+
 class TestEvalAgentWorkerStdoutParsing:
     def test_step_lines_become_substep_emissions(
         self, fake_pipeline_out: Path, fake_user_state: Path

@@ -60,6 +60,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from mhm_pipeline.controller.approval_store import ApprovalStore
 from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.dialogs.widgets.agent_system_diagram import AgentSystemDiagram
 from mhm_pipeline.gui.dialogs.widgets.friendly_copy import (
@@ -221,6 +222,14 @@ class AiVerificationDialog(GlassDialog):
         # Only the FIRST model-error log line per run surfaces to the
         # banner — the rest still stream into the log viewer.
         self._error_shown: bool = False
+        # Source-model row of the verdict currently shown in the detail
+        # pane; -1 when nothing is selected (Approve/Reject act on it).
+        self._detail_row: int = -1
+
+        # Shared approval store keyed at the (stable) pipeline output
+        # dir — the NER editor + authority editor read/write the same
+        # file, so approvals sync live across all three surfaces.
+        self._approval_store = ApprovalStore(self._pipeline_output_dir, self)
 
         self.setWindowTitle("AI verification")
         # Non-modal — the curator may keep using the rest of the app
@@ -587,12 +596,18 @@ class AiVerificationDialog(GlassDialog):
             "captured in the manuscript's structured catalog fields. These "
             "are the predictions Stage 2 actually enriched the record with."
         )
+        self._chip_approved = QCheckBox("Show only approved")
+        self._chip_approved.setToolTip(
+            "Filter to predictions you've approved — synced live with the "
+            "NER and authority editors."
+        )
         for chip in (
             self._chip_failures,
             self._chip_unsure,
             self._chip_reused,
             self._chip_errors,
             self._chip_novel,
+            self._chip_approved,
         ):
             chip.setStyleSheet(
                 f"QCheckBox {{ color:{theme.ui('text')}; "
@@ -617,6 +632,9 @@ class AiVerificationDialog(GlassDialog):
         self._chip_novel.toggled.connect(
             lambda on: self._verdict_model.filter_novel_only(bool(on))
         )
+        self._chip_approved.toggled.connect(
+            lambda on: self._verdict_model.filter_approved_only(bool(on))
+        )
 
         # Search box
         self._verdict_search = QLineEdit()
@@ -629,6 +647,10 @@ class AiVerificationDialog(GlassDialog):
 
         # Table
         self._verdict_model = VerdictTableModel()
+        self._verdict_model.set_approval_store(self._approval_store)
+        # Editor approvals (or any external write) flip our Approved
+        # column live via the store's debounced file watcher.
+        self._approval_store.changed.connect(self._verdict_model.refresh_from_store)
         self._verdict_proxy = VerdictFilterProxy()
         self._verdict_proxy.setSourceModel(self._verdict_model)
 
@@ -654,11 +676,14 @@ class AiVerificationDialog(GlassDialog):
             hheader.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
             hheader.setStretchLastSection(True)
 
-        # Pill delegates for the verdict + per-aspect columns
-        self._verdict_table.setItemDelegateForColumn(
-            3, _PillDelegate(self._verdict_table),
-        )
-        for col in (4, 5, 6):
+        # Pill delegates for the verdict, Approved, + per-aspect columns.
+        # Column order: manuscript(0) checker(1) candidate(2) verdict(3)
+        # approved(4) name_ok(5) type_ok(6) role_ok(7) …
+        for col in (3, 4):
+            self._verdict_table.setItemDelegateForColumn(
+                col, _PillDelegate(self._verdict_table),
+            )
+        for col in (5, 6, 7):
             self._verdict_table.setItemDelegateForColumn(
                 col, _PillDelegate(self._verdict_table, glyph_only=True),
             )
@@ -727,6 +752,25 @@ class AiVerificationDialog(GlassDialog):
             f"color:{theme.ui('text')}; font-size:{theme.FONT_SM}px;"
         )
         layout.addWidget(self._detail_body)
+
+        # Approve / Reject row — acts on the currently-selected verdict
+        # and writes through the shared store, so the NER + authority
+        # editors flip live too.
+        approve_row = QHBoxLayout()
+        self._approve_btn = QPushButton("Approve")
+        self._approve_btn.setStyleSheet(theme.button_style("success"))
+        self._approve_btn.clicked.connect(lambda: self._on_approve_clicked(True))
+        self._approve_btn.setEnabled(False)
+        approve_row.addWidget(self._approve_btn)
+
+        self._reject_btn = QPushButton("Reject")
+        self._reject_btn.setStyleSheet(theme.button_style("ghost"))
+        self._reject_btn.clicked.connect(lambda: self._on_approve_clicked(False))
+        self._reject_btn.setEnabled(False)
+        approve_row.addWidget(self._reject_btn)
+
+        approve_row.addStretch(1)
+        layout.addLayout(approve_row)
 
         # Advanced details disclosure inside the card
         self._detail_advanced_toggle = QToolButton()
@@ -1136,11 +1180,19 @@ class AiVerificationDialog(GlassDialog):
         record = self._verdict_model.raw_row(source_index.row())
         if record is None:
             return
+        self._detail_row = source_index.row()
+        self._approve_btn.setEnabled(True)
+        self._reject_btn.setEnabled(True)
         self._render_detail(record)
         # The "Manuscript" column (index 0) opens the full original
         # MARC record popup for the clicked control number.
         if index.column() == 0:
             self._open_marc_popup_for(record)
+
+    def _on_approve_clicked(self, approved: bool) -> None:
+        if self._detail_row < 0:
+            return
+        self._verdict_model.approve_row(self._detail_row, approved)
 
     def _open_marc_popup_for(self, record: dict[str, Any]) -> None:
         record_id = str(record.get("record_id") or "")

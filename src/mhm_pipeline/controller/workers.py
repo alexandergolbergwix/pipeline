@@ -2617,11 +2617,19 @@ class EvalAgentWorker(StageWorker):
         use_cache: bool = True,
         tier_model: str | None = None,
         escalate_model: str | None = None,
+        eval_target: str = "stage2",
     ) -> None:
         super().__init__()
         self._pipeline_output_dir = Path(pipeline_output_dir)
         self._gemini_api_key = gemini_api_key
         self._models = set(models) if models else None
+        # Which pipeline stage's output to verify:
+        #   "stage2"    → marc_extracted.json + ner_results.json; run all
+        #                 NER evaluators (no --evaluators filter).
+        #   "authority" → marc_extracted.json + authority_enriched.json;
+        #                 run only the authority evaluator
+        #                 (--evaluators authority).
+        self._eval_target = eval_target
         # When False, pass --no-cache so every candidate hits Gemini
         # again even if a cached verdict exists. Useful for re-running
         # the same prediction set with a fresh judgement.
@@ -2658,11 +2666,15 @@ class EvalAgentWorker(StageWorker):
             return
 
         marc_path = self._pipeline_output_dir / "marc_extracted.json"
-        ner_path = self._pipeline_output_dir / "ner_results.json"
-        if not marc_path.exists() or not ner_path.exists():
+        if self._eval_target == "authority":
+            required_secondary = "authority_enriched.json"
+        else:
+            required_secondary = "ner_results.json"
+        secondary_path = self._pipeline_output_dir / required_secondary
+        if not marc_path.exists() or not secondary_path.exists():
             self.error.emit(
                 "Pipeline output dir is missing the inputs the AI agent "
-                "needs. Required: marc_extracted.json + ner_results.json. "
+                f"needs. Required: marc_extracted.json + {required_secondary}. "
                 f"Looked in {self._pipeline_output_dir}."
             )
             return
@@ -2691,6 +2703,9 @@ class EvalAgentWorker(StageWorker):
             # we still land on the writable dir.
             "--state-dir", str(user_state_dir / "state"),
         ]
+        if self._eval_target == "authority":
+            # Run only the authority evaluator (Stage 3 verification).
+            cmd.extend(["--evaluators", "authority"])
         if self._models:
             cmd.extend(["--models", ",".join(sorted(self._models))])
         if not self._use_cache:

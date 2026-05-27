@@ -184,6 +184,65 @@ class TestOnVerifyWithAiSlot:
         main_window._controller.start_eval_agent.assert_not_called()
 
 
+class TestAuthorityPanelVerifyButton:
+    def test_verify_button_and_signal_exist(
+        self, main_window: object
+    ) -> None:
+        from mhm_pipeline.gui.panels.authority_panel import AuthorityPanel
+
+        panel = main_window._authority_panel
+        verify_btn = getattr(panel, "_verify_btn", None)
+        assert verify_btn is not None
+        assert verify_btn.text() == "Verify with AI agent"
+        # Starts disabled until authority_enriched.json exists.
+        assert verify_btn.isEnabled() is False
+        assert hasattr(AuthorityPanel, "verify_requested")
+
+    def test_verify_authority_routes_to_controller_with_authority_target(
+        self,
+        main_window: object,
+        tmp_path: object,
+        stub_keyring: _StubKeyring,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``_on_verify_authority_with_ai`` builds the worker via the
+        controller with ``eval_target="authority"`` and opens the
+        AiVerificationDialog."""
+        # Store a Gemini key so the slot proceeds past the key check.
+        main_window._settings.gemini_api_key = "AIzaTEST"
+
+        captured: dict[str, object] = {}
+        sentinel_worker = object()
+
+        def _fake_build(**kwargs: object) -> object:
+            captured["build_kwargs"] = kwargs
+            return sentinel_worker
+
+        main_window._controller.build_eval_agent_worker = MagicMock(
+            side_effect=_fake_build
+        )
+        main_window._controller._start_worker = MagicMock()
+
+        class _SpyDialog:
+            def __init__(self, **kwargs: object) -> None:
+                captured["dialog_kwargs"] = kwargs
+
+            def show(self) -> None:
+                captured["dialog_shown"] = True
+
+        from mhm_pipeline.gui.dialogs import ai_verification_dialog as av_module
+        monkeypatch.setattr(av_module, "AiVerificationDialog", _SpyDialog)
+
+        main_window._on_verify_authority_with_ai(tmp_path, use_cache=True)
+
+        build_kwargs = captured.get("build_kwargs")
+        assert isinstance(build_kwargs, dict)
+        assert build_kwargs["eval_target"] == "authority"
+        assert build_kwargs["pipeline_output_dir"] == tmp_path
+        assert captured.get("dialog_shown") is True
+        main_window._controller._start_worker.assert_called_once()
+
+
 class TestEvalAgentSentinelStageError:
     def test_eval_agent_sentinel_renders_with_friendly_name_not_stage_zero(
         self, main_window: object
