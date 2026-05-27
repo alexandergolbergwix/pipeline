@@ -241,21 +241,33 @@ class MainWindow(QMainWindow):
         settings_menu.addSeparator()
 
         # ── Utilities ───────────────────────────────────────────────────
+        # macOS menu-merge guard: Qt auto-assigns PreferencesRole to ANY
+        # action whose text contains "settings"/"options"/"config", which
+        # makes macOS yank it out of this menu and into the application
+        # menu's single "Settings…" slot. With two such actions (this file
+        # opener + the Credentials dialog below) the first one wins and the
+        # other silently disappears. Pin every action here to NoRole so
+        # they all stay visible in the Settings menu exactly as authored.
         open_settings_action = QAction("&Open Settings File…", self)
+        open_settings_action.setMenuRole(QAction.MenuRole.NoRole)
         open_settings_action.triggered.connect(self._on_open_settings_file)
         settings_menu.addAction(open_settings_action)
 
         open_log_dir_action = QAction("Open &Log Folder…", self)
+        open_log_dir_action.setMenuRole(QAction.MenuRole.NoRole)
         open_log_dir_action.triggered.connect(self._on_open_log_dir)
         settings_menu.addAction(open_log_dir_action)
 
         reset_wizard_action = QAction("&Reset First-Run Wizard", self)
+        reset_wizard_action.setMenuRole(QAction.MenuRole.NoRole)
         reset_wizard_action.triggered.connect(self._on_reset_first_run)
         settings_menu.addAction(reset_wizard_action)
 
-        # Rule 50 — unified API-key entry surface.
+        # Rule 50 — unified API-key entry surface. The rich Credentials
+        # dialog (secrets, API keys, AI-verification model choice).
         settings_menu.addSeparator()
-        credentials_action = QAction("&Settings && Credentials…", self)
+        credentials_action = QAction("&Credentials && API Keys…", self)
+        credentials_action.setMenuRole(QAction.MenuRole.NoRole)
         credentials_action.setShortcut("Ctrl+,")
         credentials_action.triggered.connect(self._on_open_credentials)
         settings_menu.addAction(credentials_action)

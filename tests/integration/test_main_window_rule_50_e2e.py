@@ -108,6 +108,28 @@ class TestSettingsMenuCredentialsAction:
             "Credentials" in t for t in texts
         ), f"no Credentials/Settings menu item found in {texts}"
 
+    def test_settings_actions_pinned_to_norole(
+        self, main_window: object
+    ) -> None:
+        """macOS would otherwise merge any 'settings'-named action into the
+        app-menu Preferences slot, hiding the rich Credentials dialog. Every
+        Settings-menu action must be pinned to NoRole so they all stay put.
+        """
+        settings_menu = None
+        for action in main_window.menuBar().actions():
+            if action.text() in {"&Settings", "Settings"}:
+                settings_menu = action.menu()
+                break
+        assert settings_menu is not None
+        leaf_actions = [a for a in settings_menu.actions()
+                        if not a.isSeparator() and a.menu() is None]
+        assert leaf_actions, "no leaf actions in Settings menu"
+        for a in leaf_actions:
+            assert a.menuRole() == QAction.MenuRole.NoRole, (
+                f"action {a.text()!r} has role {a.menuRole()} — macOS will "
+                f"merge it into the app menu and hide it"
+            )
+
 
 class TestNerPanelVerifyButton:
     def test_verify_with_ai_button_exists(
