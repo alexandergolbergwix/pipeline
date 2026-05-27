@@ -29,7 +29,12 @@ CLAUDE.md Rule 37 so the liquid-glass backdrop applies.
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
@@ -60,16 +65,56 @@ logger = logging.getLogger(__name__)
 _STORED_PLACEHOLDER = "stored — type to replace"
 
 # Curated suggestions for the AI-verification model combos. The combos are
-# editable so a user can type any Gemini model id; these are just convenient
-# pre-filled choices.
+# editable so a user can type any Gemini model id; these are convenient
+# pre-filled choices. Every entry below is a verified-valid id that resolves
+# on the v1beta generateContent endpoint (checked 2026-05-27) — DO NOT add a
+# bare "gemini-3-pro" / "gemini-3-flash" (those 404; the real ids carry the
+# "-preview" suffix). The "Refresh from API" button repopulates this list
+# live from the user's own key so it always reflects what is actually
+# callable.
 _MODEL_SUGGESTIONS = [
     "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
-    "gemini-3-flash",
-    "gemini-3-pro",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
 ]
+
+_LIST_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+
+
+def fetch_available_gemini_models(api_key: str, timeout: float = 6.0) -> list[str]:
+    """Return the Gemini model ids callable with *api_key*, newest first.
+
+    Queries the live ListModels endpoint and keeps only models that
+    support ``generateContent`` (so embedding / TTS / image-only models
+    don't pollute the judge combos). Never raises — any failure (no key,
+    network error, bad JSON) returns an empty list so the caller falls
+    back to the curated :data:`_MODEL_SUGGESTIONS`.
+    """
+    key = (api_key or "").strip()
+    if not key:
+        return []
+    req = urllib.request.Request(  # noqa: S310 — fixed https host
+        f"{_LIST_MODELS_URL}&key={urllib.parse.quote(key)}",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        logger.warning("ListModels fetch failed: %s", exc)
+        return []
+    out: list[str] = []
+    for model in data.get("models", []):
+        if "generateContent" not in (model.get("supportedGenerationMethods") or []):
+            continue
+        name = str(model.get("name", "")).split("/")[-1]
+        if name.startswith("gemini-"):
+            out.append(name)
+    # Newest families first (gemini-3.5 > gemini-3.1 > gemini-3 > gemini-2.5),
+    # then lexicographic within a family for stable ordering.
+    return sorted(set(out), key=lambda m: (m.split("-")[:2], m), reverse=True)
 
 
 class CredentialsDialog(GlassDialog):
@@ -81,6 +126,7 @@ class CredentialsDialog(GlassDialog):
     """
 
     saved = pyqtSignal(set)  # set[str] — credential ids that changed
+    _models_fetched = pyqtSignal(list)  # list[str] — live model ids (internal)
 
     def __init__(
         self,
@@ -109,9 +155,12 @@ class CredentialsDialog(GlassDialog):
         # AI-verification model combos (non-secret — plain QSettings).
         self._tier_model_combo: QComboBox | None = None
         self._escalate_model_combo: QComboBox | None = None
+        self._refresh_models_btn: QPushButton | None = None
+        self._models_status: QLabel | None = None
 
         self._build_ui()
         self._refresh_placeholders()
+        self._models_fetched.connect(self._apply_fetched_models)
 
     # ── UI construction ─────────────────────────────────────────────
 
@@ -236,6 +285,24 @@ class CredentialsDialog(GlassDialog):
 
         grid.setColumnStretch(1, 1)
         layout.addLayout(grid)
+
+        # Live "Refresh from API" — repopulate the combos with the exact
+        # model ids the user's own Gemini key can call, so an invalid id
+        # (like the old "gemini-3-pro") can't be picked from the list.
+        refresh_row = QHBoxLayout()
+        self._refresh_models_btn = QPushButton("↻ Refresh from API")
+        self._refresh_models_btn.setToolTip(
+            "Fetch the list of Gemini models your saved API key can actually "
+            "call, and replace the suggestions with that live list."
+        )
+        self._refresh_models_btn.clicked.connect(self._on_refresh_models)
+        refresh_row.addWidget(self._refresh_models_btn)
+        self._models_status = QLabel("")
+        self._models_status.setStyleSheet(
+            f"color:{theme.ui('subtext')}; font-size:{theme.FONT_SM}px;"
+        )
+        refresh_row.addWidget(self._models_status, 1)
+        layout.addLayout(refresh_row)
         return section
 
     def _build_model_combo(self, stored: str) -> QComboBox:
@@ -255,6 +322,52 @@ class CredentialsDialog(GlassDialog):
             f"}}"
         )
         return combo
+
+    # ── live model refresh ──────────────────────────────────────────
+
+    def _on_refresh_models(self) -> None:
+        """Fetch the live model list off the saved Gemini key (background)."""
+        try:
+            api_key = self._store.get(GEMINI_API_KEY) if self._store else None
+        except Exception:  # noqa: BLE001 — keychain access is best-effort
+            api_key = None
+        if not api_key:
+            if self._models_status is not None:
+                self._models_status.setText("Save your Gemini key first, then refresh.")
+            return
+        if self._refresh_models_btn is not None:
+            self._refresh_models_btn.setEnabled(False)
+        if self._models_status is not None:
+            self._models_status.setText("Fetching available models…")
+
+        def _work(key: str) -> None:
+            models = fetch_available_gemini_models(key)
+            # Marshal back to the UI thread via the queued signal.
+            self._models_fetched.emit(models)
+
+        threading.Thread(target=_work, args=(api_key,), daemon=True).start()
+
+    def _apply_fetched_models(self, models: list[str]) -> None:
+        """Repopulate the two combos with *models*, preserving selections."""
+        if self._refresh_models_btn is not None:
+            self._refresh_models_btn.setEnabled(True)
+        if not models:
+            if self._models_status is not None:
+                self._models_status.setText(
+                    "Could not reach the model list (offline or invalid key)."
+                )
+            return
+        for combo in (self._tier_model_combo, self._escalate_model_combo):
+            if combo is None:
+                continue
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(models)
+            combo.setCurrentText(current)  # keep the user's pick even if custom
+            combo.blockSignals(False)
+        if self._models_status is not None:
+            self._models_status.setText(f"Loaded {len(models)} available models.")
 
     def _build_wikidata_section(self) -> QWidget:
         section = QFrame()

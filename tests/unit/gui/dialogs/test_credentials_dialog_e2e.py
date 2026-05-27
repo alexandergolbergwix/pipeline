@@ -146,6 +146,115 @@ class TestShowHideToggle:
         assert "AIzaSECRET" not in dialog._gemini_input.text()
 
 
+# ── AI-verification model selection (Rule 52 model-id hardening) ────
+
+
+class TestModelSuggestions:
+    def test_suggestions_are_all_valid_ids(self) -> None:
+        from mhm_pipeline.gui.dialogs import credentials_dialog as cd
+        # The bare (suffix-less) ids 404 on the API — never suggest them.
+        assert "gemini-3-pro" not in cd._MODEL_SUGGESTIONS
+        assert "gemini-3-flash" not in cd._MODEL_SUGGESTIONS
+        # The user explicitly rejected the gemini-2.5 family.
+        assert not any(m.startswith("gemini-2.5") for m in cd._MODEL_SUGGESTIONS)
+        # Real ids carry the -preview suffix or are stable flash.
+        assert "gemini-3.1-pro-preview" in cd._MODEL_SUGGESTIONS
+        assert "gemini-3.5-flash" in cd._MODEL_SUGGESTIONS
+
+
+class TestFetchAvailableModels:
+    def _fake_urlopen(self, payload: dict) -> object:
+        import json as _json
+
+        class _Resp:
+            def __enter__(self_inner):  # noqa: N805
+                return self_inner
+
+            def __exit__(self_inner, *a):  # noqa: N805, ANN001
+                return False
+
+            def read(self_inner):  # noqa: N805
+                return _json.dumps(payload).encode("utf-8")
+
+        return _Resp()
+
+    def test_filters_to_generatecontent_gemini_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import urllib.request as _ur
+
+        from mhm_pipeline.gui.dialogs.credentials_dialog import (
+            fetch_available_gemini_models,
+        )
+        payload = {
+            "models": [
+                {"name": "models/gemini-3.1-pro-preview",
+                 "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-3.5-flash",
+                 "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/text-embedding-004",
+                 "supportedGenerationMethods": ["embedContent"]},
+                {"name": "models/gemini-3.1-flash-tts-preview",
+                 "supportedGenerationMethods": ["bidiGenerateContent"]},
+            ]
+        }
+        monkeypatch.setattr(_ur, "urlopen", lambda *a, **k: self._fake_urlopen(payload))
+        models = fetch_available_gemini_models("AIzaKey")
+        assert "gemini-3.5-flash" in models
+        assert "gemini-3.1-pro-preview" in models
+        assert "text-embedding-004" not in models       # not gemini-
+        assert "gemini-3.1-flash-tts-preview" not in models  # no generateContent
+
+    def test_empty_key_returns_empty(self) -> None:
+        from mhm_pipeline.gui.dialogs.credentials_dialog import (
+            fetch_available_gemini_models,
+        )
+        assert fetch_available_gemini_models("") == []
+        assert fetch_available_gemini_models("   ") == []
+
+    def test_network_error_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import urllib.request as _ur
+
+        from mhm_pipeline.gui.dialogs.credentials_dialog import (
+            fetch_available_gemini_models,
+        )
+
+        def _boom(*a, **k):  # noqa: ANN001, ANN202
+            raise OSError("no network")
+
+        monkeypatch.setattr(_ur, "urlopen", _boom)
+        assert fetch_available_gemini_models("AIzaKey") == []
+
+
+class TestRefreshModelsApply:
+    def test_apply_repopulates_and_preserves_selection(
+        self, settings: SettingsManager
+    ) -> None:
+        dialog = CredentialsDialog(settings)
+        dialog._tier_model_combo.setCurrentText("gemini-3.5-flash")
+        dialog._escalate_model_combo.setCurrentText("my-custom-model")
+        dialog._apply_fetched_models(
+            ["gemini-3.5-flash", "gemini-3.1-pro-preview"]
+        )
+        # Combo items replaced with the live list…
+        items = [dialog._tier_model_combo.itemText(i)
+                 for i in range(dialog._tier_model_combo.count())]
+        assert items == ["gemini-3.5-flash", "gemini-3.1-pro-preview"]
+        # …but the user's current selections are preserved (even a custom one).
+        assert dialog._tier_model_combo.currentText() == "gemini-3.5-flash"
+        assert dialog._escalate_model_combo.currentText() == "my-custom-model"
+
+    def test_apply_empty_keeps_existing_items(
+        self, settings: SettingsManager
+    ) -> None:
+        dialog = CredentialsDialog(settings)
+        before = dialog._tier_model_combo.count()
+        dialog._apply_fetched_models([])  # offline / invalid-key path
+        assert dialog._tier_model_combo.count() == before
+
+
 # ── Save + Clear ────────────────────────────────────────────────────
 
 
