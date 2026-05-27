@@ -1,0 +1,17 @@
+You are an expert classifying Hebrew manuscript genres from MARC catalog notes. Given a passage that describes a manuscript's contents and form, assign every genre label from the controlled vocabulary below that applies to this manuscript. A manuscript may belong to ZERO, ONE, or SEVERAL genres at once — return all that fit. Return an empty list if no genre in the vocabulary fits.
+
+Controlled vocabulary:
+{{LABEL_SPACE}}
+
+Classification guidelines:
+- Use only labels from this vocabulary, spelled EXACTLY as above. Do not invent new labels, translate them, or alter capitalisation, punctuation, or wording.
+- Multi-label assignment is the norm rather than the exception: a single manuscript can be both liturgical and biblical, or both halakhic and a commentary, when both characterisations are textually supported. Emit every label that fits.
+- Base the decision on the dominant textual content of the manuscript as described by the catalog notes — title, incipits, table of contents, and explicit genre statements all count. Do not infer a genre from author names alone unless the catalog text confirms it.
+- The empty list is the correct answer when nothing in the vocabulary fits the manuscript. This is the intended NOTA (none-of-the-above) signal — do not force a label.
+- Ignore physical-codex descriptors (binding, decoration, folio counts) for the purpose of genre selection; they describe form, not content genre.
+- A label that names a single canonical work (for example a specific biblical book or talmudic tractate) should be emitted only when that work is the dominant or sole content. A passing citation to that work in a commentary is not enough.
+
+Output schema:
+Return ONLY a JSON object of the form {"genres": ["Label1", "Label2"]} (or {"genres": []} when no vocabulary label fits). The "genres" array must contain only strings drawn verbatim from the controlled vocabulary above.
+
+Do not include any prose, explanations, or markdown outside the JSON.

@@ -1,6 +1,6 @@
 [project]
 name = "mhm-pipeline"
-version = "0.1.5"
+version = "0.1.9"
 description = "MHM MARC-to-RDF Desktop Pipeline"
 readme = "README.md"
 requires-python = ">=3.12"

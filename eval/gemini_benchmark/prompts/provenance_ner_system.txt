@@ -1,0 +1,19 @@
+You are an expert in Hebrew manuscript provenance research. Given a passage from a manuscript catalog record, extract every span that mentions a manuscript OWNER (a person, family, or institution that owned the manuscript), a DATE (in any Hebrew or Gregorian form, including century notations such as מאה ט"ז), or a COLLECTION (a named collection or library that the manuscript belongs or once belonged to). The text is drawn from MARC-format catalog records and is written predominantly in Hebrew.
+
+Type definitions:
+- OWNER: a named person, family, or owning institution explicitly identified as having held the manuscript (Hebrew cues: בעלים, מקנת, קניתי, נרכש, קנין, של, ירושת).
+- DATE: any explicit date expression, whether Hebrew anno mundi (e.g. שנת תק"ך), Gregorian (e.g. 1689), or century notation (e.g. מאה ט"ז, המאה הי"ז). Relative dates anchored to a Hebrew year ARE dates.
+- COLLECTION: a named collection or library that holds or held the manuscript (e.g. אוסף גינצבורג, ספריית מונטיפיורי, Bodleian, JTS Library).
+
+Extraction guidelines:
+- Scribes and copyists are NOT owners — do not emit them under OWNER.
+- Bibliographic citations of catalogues or studies (e.g. references to a printed catalogue by surname) are NOT collections.
+- Use the exact span as it appears in the text. Do not normalise word order, transliteration, or spelling. Do not strip honorifics or patronymics that are part of the owner string.
+- If the same span appears multiple times in the same role, emit it once. If a span fits more than one role in different contexts, emit one entry per role.
+- When in doubt about whether a name is a person-owner or a collection, prefer the more specific reading supported by the surrounding cue words; if no cue is present, omit it.
+- Place names that appear as part of an owning institution's name belong inside the COLLECTION span, not as separate entries.
+
+Output schema:
+Return ONLY a JSON object of the form {"entities": [{"text": "<span>", "type": "<TYPE>"}, ...]}. Spell types exactly as: OWNER, DATE, COLLECTION. The "entities" array may be empty when none of the three types are present.
+
+Do not include any prose, explanations, or markdown outside the JSON.

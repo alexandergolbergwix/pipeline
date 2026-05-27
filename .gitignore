@@ -169,4 +169,12 @@ eval/report_*.md
 eval/summary_*.csv
 eval/results_*.csv
 
+# Eval working data + Gemini-benchmark run outputs (regenerable; the
+# benchmark scripts under eval/gemini_benchmark/ ARE tracked).
+eval/work/
+eval/gemini_benchmark/results/
+
+# Local working backup of the presentation (large: audio + PDFs)
+docs/presentations (backup)/
+
 *gemini.env

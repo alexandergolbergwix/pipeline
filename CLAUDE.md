@@ -2270,7 +2270,16 @@ A new `authority` evaluator in eval-agent
 manuscript's MARC context?". It reads `authority_enriched.json`
 (carries `marc_authority_matches`) rather than `ner_results.json`;
 eval-agent `ingest.pipeline_run.discover` accepts either filename.
-On the pipeline side, the "Verify with AI agent" button (Rule 50)
+The candidate set mirrors the Authority editor: every *resolved*
+authority decision across all three editor shapes — MARC matches
+that resolved to an id + enriched NER `entities` carrying an
+authority id + `kima_places` — and the confidence threshold does
+NOT gate it (authority verification reviews the uncertain
+medium/low matches; only *unmatched* rows with no authority id are
+skipped). On the `testing test` corpus this took the candidate
+count from 18 (high-confidence MARC only) to 288 (195 MARC + 41
+enriched entities + 52 KIMA), matching the editor's resolved-row
+count. On the pipeline side, the "Verify with AI agent" button (Rule 50)
 now also sits on the Authority panel `gui/panels/authority_panel.py`,
 not just the NER panel — both fire `verify_requested(Path, bool)`
 through `MainWindow` to `PipelineController.build_eval_agent_worker`.
