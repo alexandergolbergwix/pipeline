@@ -37,9 +37,21 @@ def _state(diagram: AgentSystemDiagram, key: str) -> str:
 
 
 class TestAgentSystemDiagramConstruction:
-    def test_constructs_with_10_nodes(self) -> None:
+    def test_constructs_with_12_nodes(self) -> None:
         diagram = AgentSystemDiagram()
-        assert diagram.node_count() == 10
+        assert diagram.node_count() == 12
+
+    def test_has_tools_and_escalate_nodes(self) -> None:
+        diagram = AgentSystemDiagram()
+        assert "tools" in diagram._nodes
+        assert "escalate" in diagram._nodes
+
+    def test_has_agentic_loop_edges(self) -> None:
+        diagram = AgentSystemDiagram()
+        assert ("gemini", "tools") in diagram._edges_by_pair
+        assert ("tools", "gemini") in diagram._edges_by_pair
+        assert ("gemini", "escalate") in diagram._edges_by_pair
+        assert ("escalate", "results") in diagram._edges_by_pair
 
 
 class TestSubstepRouting:
@@ -126,7 +138,48 @@ class TestReset:
             assert node.state() == _AgentNode.STATE_IDLE
 
 
+class TestAgenticEvents:
+    def test_tool_event_activates_tools_node(self) -> None:
+        diagram = AgentSystemDiagram()
+        diagram.on_substep("[STEP] tool expand_note")
+        assert _state(diagram, "tools") == _AgentNode.STATE_ACTIVE
+
+    def test_escalate_event_activates_escalate_node(self) -> None:
+        diagram = AgentSystemDiagram()
+        diagram.on_substep("[STEP] escalate gemini-3.1-pro-preview")
+        assert _state(diagram, "escalate") == _AgentNode.STATE_ACTIVE
+
+    def test_on_finished_moves_tools_and_escalate_to_done(self) -> None:
+        diagram = AgentSystemDiagram()
+        diagram.on_substep("[STEP] tool fetch_marc_field")
+        diagram.on_substep("[STEP] escalate gemini-3.1-pro-preview")
+        diagram.on_finished()
+        for key in ("tools", "escalate"):
+            assert _state(diagram, key) == _AgentNode.STATE_DONE
+        idle = [
+            key for key in diagram._nodes
+            if _state(diagram, key) == _AgentNode.STATE_IDLE
+        ]
+        assert idle == []
+
+
 class TestParseSubstepLine:
+    def test_tool_event_pattern(self) -> None:
+        assert _parse_substep_line("[STEP] tool fetch_marc_field") == {
+            "action": "tool",
+            "tool": "fetch_marc_field",
+        }
+        assert _parse_substep_line("tool lookup_authority") == {
+            "action": "tool",
+            "tool": "lookup_authority",
+        }
+
+    def test_escalate_event_pattern(self) -> None:
+        assert _parse_substep_line("escalate gemini-3.1-pro-preview") == {
+            "action": "escalate",
+            "model": "gemini-3.1-pro-preview",
+        }
+
     def test_loading_rubrics_pattern(self) -> None:
         parsed = _parse_substep_line("Loading rubrics")
         assert parsed == {"action": "load_rubrics"}

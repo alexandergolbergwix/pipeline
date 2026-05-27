@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mhm_pipeline.gui import theme
+from mhm_pipeline.gui.dialogs.widgets.friendly_copy import humanise_model
 
 # ── Layout (scene coordinates) ──────────────────────────────────────
 
@@ -68,10 +69,12 @@ _LAYOUT: dict[str, tuple[int, int]] = {
     "provenance_ner":    (480, 200),
     "contents_ner":      (480, 270),
     "genre_classifier":  (480, 340),
+    "tools":             (720, 110),
     "gemini":            (720, 240),
+    "escalate":          (920, 110),
     "cache":             (720, 380),
-    "results":           (920, 240),
-    "summary":           (920, 380),
+    "results":           (1120, 240),
+    "summary":           (1120, 380),
 }
 
 _EVALUATOR_KEYS_ORDERED: list[str] = [
@@ -82,7 +85,7 @@ _EVALUATOR_KEYS: set[str] = set(_EVALUATOR_KEYS_ORDERED)
 _PIPELINE_KEYS: list[str] = [
     "inputs", "rubric",
     "person_ner", "provenance_ner", "contents_ner", "genre_classifier",
-    "gemini", "cache", "results", "summary",
+    "tools", "gemini", "escalate", "cache", "results", "summary",
 ]
 
 _FRIENDLY_NODES: dict[str, tuple[str, str]] = {
@@ -92,10 +95,20 @@ _FRIENDLY_NODES: dict[str, tuple[str, str]] = {
     "provenance_ner":    ("Owner AI",    "idle"),
     "contents_ner":      ("Contents AI", "idle"),
     "genre_classifier": ("Genre AI",    "idle"),
-    "gemini":            ("Gemini",      "judge model"),
+    "tools":             ("Tools",       "marc · notes · authority"),
+    "gemini":            ("Tier-1 judge", "fast model"),
+    "escalate":          ("Escalate",    "stronger model"),
     "cache":             ("Cache",       "verdict store"),
     "results":           ("Results",     "results.jsonl"),
     "summary":           ("Summary",     "report.md"),
+}
+
+# Friendly short phrases for the four agent tools.
+_TOOL_FRIENDLY: dict[str, str] = {
+    "fetch_marc_field":    "reading MARC",
+    "expand_note":         "expanding notes",
+    "list_record_entities": "listing entities",
+    "lookup_authority":    "checking authority",
 }
 
 # Forward edges and the dotted cache→evaluator loop-back. Tuples are
@@ -113,6 +126,12 @@ _EDGES: list[tuple[str, str, bool]] = [
     ("gemini",           "cache",             False),
     ("gemini",           "results",           False),
     ("results",          "summary",           False),
+    # Agentic tool-loop: model calls a tool, observation returns.
+    ("gemini",           "tools",             True),
+    ("tools",            "gemini",            True),
+    # Conditional escalation to a stronger model, then to results.
+    ("gemini",           "escalate",          True),
+    ("escalate",         "results",           False),
     # Dotted cache→evaluators loop-back: activates only on cache hit.
     ("cache",            "person_ner",        True),
     ("cache",            "provenance_ner",    True),
@@ -137,6 +156,16 @@ _FRIENDLY_TO_KEY: dict[str, str] = {
     "place ai":    "place_ner",
 }
 
+# Agentic tool-loop events. Tolerate an optional ``[STEP] `` prefix.
+_TOOL_RE = re.compile(
+    r"(?:\[step\]\s*)?tool\s+(?P<tool>[\w\-]+)",
+    re.IGNORECASE,
+)
+_ESCALATE_RE = re.compile(
+    r"(?:\[step\]\s*)?escalate\s+(?P<model>[\w\-.:]+)",
+    re.IGNORECASE,
+)
+
 
 def _parse_substep_line(text: str) -> dict[str, Any] | None:
     """Parse a substep line into a structured action dict.
@@ -154,6 +183,14 @@ def _parse_substep_line(text: str) -> dict[str, Any] | None:
         or "writing report" in lowered
     ):
         return {"action": "writing"}
+
+    m = _TOOL_RE.search(text)
+    if m is not None:
+        return {"action": "tool", "tool": m.group("tool").strip().lower()}
+
+    m = _ESCALATE_RE.search(text)
+    if m is not None:
+        return {"action": "escalate", "model": m.group("model").strip()}
 
     m = _RAW_JUDGING_RE.search(text)
     if m is not None:
@@ -920,6 +957,34 @@ class AgentSystemDiagram(QWidget):
                 evaluator_id, "gemini", color_hex=_highlight_color(),
             )
             self._activate("gemini")
+            return
+
+        if action == "tool":
+            tool_name = str(parsed.get("tool") or "")
+            friendly = _TOOL_FRIENDLY.get(tool_name, tool_name or "tool call")
+            self._activate("gemini")
+            self._activate("tools")
+            self._set_status("tools", friendly)
+            self._activate_edge("gemini", "tools")
+            self._activate_edge("tools", "gemini")
+            self._launch_particle(
+                "gemini", "tools", color_hex=_highlight_color(),
+            )
+            self._launch_particle(
+                "tools", "gemini", color_hex=_highlight_color(),
+            )
+            return
+
+        if action == "escalate":
+            model = str(parsed.get("model") or "")
+            friendly = humanise_model(model) if model else "stronger model"
+            self._activate("gemini")
+            self._activate("escalate")
+            self._set_status("escalate", f"→ {friendly}")
+            self._activate_edge("gemini", "escalate")
+            self._launch_particle(
+                "gemini", "escalate", color_hex=_highlight_color(),
+            )
             return
 
         if action == "writing":
