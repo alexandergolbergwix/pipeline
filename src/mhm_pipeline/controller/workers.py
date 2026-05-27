@@ -2456,11 +2456,11 @@ class WikidataUploadWorker(StageWorker):
         try:
             import json as _json  # noqa: PLC0415
 
-            from rdflib import Graph  # noqa: PLC0415
-
             from converter.wikidata.iiif_manifest_builder import (  # noqa: PLC0415
                 IiifManifestBuilder,
             )
+            from rdflib import Graph  # noqa: PLC0415
+
             from mhm_pipeline.settings.settings_manager import (  # noqa: PLC0415
                 SettingsManager,
             )
@@ -2615,6 +2615,8 @@ class EvalAgentWorker(StageWorker):
         gemini_api_key: str,
         models: set[str] | None = None,
         use_cache: bool = True,
+        tier_model: str | None = None,
+        escalate_model: str | None = None,
     ) -> None:
         super().__init__()
         self._pipeline_output_dir = Path(pipeline_output_dir)
@@ -2624,6 +2626,11 @@ class EvalAgentWorker(StageWorker):
         # again even if a cached verdict exists. Useful for re-running
         # the same prediction set with a fresh judgement.
         self._use_cache = bool(use_cache)
+        # Optional model overrides threaded through to the eval-agent CLI
+        # (--tier-model / --escalate-model). None → eval-agent uses its
+        # own configured defaults.
+        self._tier_model = tier_model or None
+        self._escalate_model = escalate_model or None
         # Stamped by run() before subprocess.Popen for testability.
         self._last_cmd: list[str] | None = None
         self._last_cwd: Path | None = None
@@ -2688,6 +2695,10 @@ class EvalAgentWorker(StageWorker):
             cmd.extend(["--models", ",".join(sorted(self._models))])
         if not self._use_cache:
             cmd.append("--no-cache")
+        if self._tier_model:
+            cmd.extend(["--tier-model", self._tier_model])
+        if self._escalate_model:
+            cmd.extend(["--escalate-model", self._escalate_model])
 
         env = dict(os.environ)
         env["GEMINI_API_KEY"] = self._gemini_api_key

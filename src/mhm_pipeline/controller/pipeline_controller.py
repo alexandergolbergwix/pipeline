@@ -8,7 +8,6 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.controller.workers import (
     AuthorityWorker,
     EvalAgentWorker,
@@ -19,6 +18,7 @@ from mhm_pipeline.controller.workers import (
     StageWorker,
     WikidataUploadWorker,
 )
+from mhm_pipeline.platform_.gpu import get_device
 from mhm_pipeline.settings.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,8 @@ class PipelineController(QObject):
         gemini_api_key: str,
         models: set[str] | None = None,
         use_cache: bool = True,
+        tier_model: str | None = None,
+        escalate_model: str | None = None,
     ) -> EvalAgentWorker:
         """Construct (but do NOT start) the eval-agent worker.
 
@@ -138,6 +140,8 @@ class PipelineController(QObject):
             gemini_api_key=gemini_api_key,
             models=models,
             use_cache=use_cache,
+            tier_model=tier_model,
+            escalate_model=escalate_model,
         )
 
     def _start_worker(self, worker: EvalAgentWorker, stage_index: int) -> None:
@@ -161,6 +165,8 @@ class PipelineController(QObject):
         gemini_api_key: str,
         models: set[str] | None = None,
         use_cache: bool = True,
+        tier_model: str | None = None,
+        escalate_model: str | None = None,
     ) -> EvalAgentWorker:
         """Launch the bundled eval-agent over the Stage 2 output dir (Rule 50).
 
@@ -195,6 +201,8 @@ class PipelineController(QObject):
             gemini_api_key=gemini_api_key,
             models=models,
             use_cache=use_cache,
+            tier_model=tier_model,
+            escalate_model=escalate_model,
         )
         logger.info(
             "Starting eval-agent verification on %s (use_cache=%s)",

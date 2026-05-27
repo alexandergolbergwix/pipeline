@@ -159,6 +159,52 @@ class TestEvalAgentWorkerSubprocessShape:
         assert "--no-cache" in argv
 
 
+    def test_no_model_flags_by_default(
+        self, fake_pipeline_out: Path, fake_user_state: Path
+    ) -> None:
+        """No model overrides → neither flag appears on argv."""
+        worker = EvalAgentWorker(fake_pipeline_out, gemini_api_key="AIzaTEST")
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            fake_run = fake_user_state / "state" / "runs" / "fake-run"
+            fake_run.mkdir()
+            with patch.object(workers_mod, "_latest_run_dir", return_value=fake_run):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "--tier-model" not in argv
+        assert "--escalate-model" not in argv
+
+    def test_model_flags_land_on_argv(
+        self, fake_pipeline_out: Path, fake_user_state: Path
+    ) -> None:
+        """tier_model + escalate_model → ``--tier-model X --escalate-model Y``."""
+        worker = EvalAgentWorker(
+            fake_pipeline_out,
+            gemini_api_key="AIzaTEST",
+            tier_model="gemini-3-flash",
+            escalate_model="gemini-3-pro",
+        )
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            fake_run = fake_user_state / "state" / "runs" / "fake-run"
+            fake_run.mkdir()
+            with patch.object(workers_mod, "_latest_run_dir", return_value=fake_run):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "--tier-model" in argv
+        assert argv[argv.index("--tier-model") + 1] == "gemini-3-flash"
+        assert "--escalate-model" in argv
+        assert argv[argv.index("--escalate-model") + 1] == "gemini-3-pro"
+
+
 class TestEvalAgentWorkerStdoutParsing:
     def test_step_lines_become_substep_emissions(
         self, fake_pipeline_out: Path, fake_user_state: Path

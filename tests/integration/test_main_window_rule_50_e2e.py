@@ -100,7 +100,13 @@ class TestSettingsMenuCredentialsAction:
                 break
         assert settings_menu is not None, "Settings menu missing"
         texts = {a.text() for a in settings_menu.actions()}
-        assert "&Credentials…" in texts
+        # Rule 52 follow-on: the Credentials item was relabeled to
+        # "Settings & Credentials…" when the eval-agent model picker was
+        # added to that dialog. Accept either the old or new label so the
+        # assertion tracks intent (a credentials/settings entry exists).
+        assert any(
+            "Credentials" in t for t in texts
+        ), f"no Credentials/Settings menu item found in {texts}"
 
 
 class TestNerPanelVerifyButton:

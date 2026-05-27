@@ -206,7 +206,7 @@ class EntityFilterProxy(QSortFilterProxyModel):
 
 
 def entity_cell_value_for_filter(
-    model: "EditableEntityModel",
+    model: EditableEntityModel,
     source_row: int,
     column: int,
 ) -> str:
@@ -371,16 +371,16 @@ def _build_exists_in_tooltip(
 
     if is_grounded:
         rows.append(
-            f'<div style="color:#16a34a; font-weight:600;">'
-            f'✓ Role-grounded — name is in the MARC field the role implies'
-            f'</div>'
+            '<div style="color:#16a34a; font-weight:600;">'
+            '✓ Role-grounded — name is in the MARC field the role implies'
+            '</div>'
         )
     elif has_match:
         role_fields = _expected_role_fields(ent)
         rows.append(
-            f'<div style="color:#d97706; font-weight:600;">'
-            f'⚠ Wrong field — name is in MARC but NOT in the field the role implies'
-            f'</div>'
+            '<div style="color:#d97706; font-weight:600;">'
+            '⚠ Wrong field — name is in MARC but NOT in the field the role implies'
+            '</div>'
         )
         if role_fields:
             rows.append(
@@ -416,7 +416,7 @@ def _build_exists_in_tooltip(
             items_html.append(
                 f'<div style="color:{subtle};">&nbsp;&nbsp;… +{len(evidence) - 12} more</div>'
             )
-        rows.append(f'<div style="margin-top:6px;">Found in:</div>')
+        rows.append('<div style="margin-top:6px;">Found in:</div>')
         rows.extend(items_html)
 
     rows.append(
@@ -443,14 +443,19 @@ _NER_SOURCE_LABELS: dict[str, str] = {
 
 
 def _ner_confidence_band(score: float) -> tuple[str, str]:
-    """Map a 0–1 model confidence into ``(label, colour-hex)``."""
+    """Map a 0–1 model confidence into ``(label, colour)``.
+
+    Colours come from the central theme token registry (Rule 36) so the
+    band hue follows the active light/dark theme.
+    """
+    from mhm_pipeline.gui import theme  # noqa: PLC0415
     if score >= 0.85:
-        return ("HIGH", "#16a34a")
+        return ("HIGH", theme.ui("success"))
     if score >= 0.6:
-        return ("MEDIUM", "#d97706")
+        return ("MEDIUM", theme.ui("warning"))
     if score > 0:
-        return ("LOW", "#dc2626")
-    return ("UNSCORED", "#6b7280")
+        return ("LOW", theme.ui("error"))
+    return ("UNSCORED", theme.ui("subtext"))
 
 
 def _build_ner_keyword_conf_tooltip(ent: dict) -> str:
@@ -2224,7 +2229,7 @@ class ExtractionEditor(QWidget):
         dlg = SourceViewDialog(cn, full, et, start, end, parent=self)
         dlg.exec()
 
-    def _on_table_double_clicked(self, proxy_idx: "QModelIndex") -> None:
+    def _on_table_double_clicked(self, proxy_idx: QModelIndex) -> None:
         """Open the entity-text edit popup on double-click of the
         Entity column. Other columns keep their default editor (enum
         delegates) or are read-only — only COL_TEXT routes here.
@@ -2234,14 +2239,27 @@ class ExtractionEditor(QWidget):
         source_row = self._proxy.mapToSource(proxy_idx).row()
         self._on_edit_text(source_row)
 
-    def _on_table_clicked(self, proxy_idx: "QModelIndex") -> None:
+    def _on_table_clicked(self, proxy_idx: QModelIndex) -> None:
         """Handle clicks anywhere in the table.
 
-        Currently routes only the "Exists in" column to its popup.
+        Routes the Record (control-number) column to the friendly MARC
+        record popup, and the "Exists in" column to its evidence popup.
         Other columns are handled by the standard table machinery
         (delegate editors, action-cell widgets).
         """
         if not proxy_idx.isValid():
+            return
+        if proxy_idx.column() == COL_RECORD:
+            source_row = self._proxy.mapToSource(proxy_idx).row()
+            ent = self._model.entity_at(source_row)
+            if ent is None:
+                return
+            control_number = str(ent.get("_control_number") or "")
+            marc_record = self._model.marc_for_row(source_row)
+            from mhm_pipeline.gui.dialogs.widgets.marc_record_popup import (  # noqa: PLC0415
+                open_marc_popup,
+            )
+            open_marc_popup(control_number, marc_record, parent=self)
             return
         if proxy_idx.column() != COL_EXISTS_IN:
             return

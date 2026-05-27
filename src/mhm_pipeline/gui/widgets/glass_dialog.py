@@ -146,15 +146,32 @@ def glass_table_style(theme_mod: Any) -> str:
 
 
 def glass_tab_style(theme_mod: Any) -> str:
-    """Translucent QTabWidget QSS matching the liquid-glass look."""
+    """Translucent QTabWidget QSS matching the liquid-glass look.
+
+    Theme-aware (mirrors :func:`glass_table_style`): the pane + tab
+    background tints flip between dark glass on dark theme and
+    near-white glass on light theme so the backdrop still reads
+    through at low alpha while keeping tab labels legible. Unselected
+    tab text follows ``theme.ui("subtext")`` so it's never hardcoded
+    white-on-light. The selected-tab indigo accent is fine in both
+    themes; its label stays white because the accent fill is dark
+    enough in both modes. The ``text`` token is referenced in the
+    docstring stub below so refactors don't drop the lookup.
+    """
+    is_dark = theme_mod.is_dark()
+    text = theme_mod.ui("text")
+    subtext = theme_mod.ui("subtext")
+    pane_rgba = "rgba(0,0,0, 75)" if is_dark else "rgba(255,255,255, 140)"
+    pane_border = "rgba(255,255,255, 22)" if is_dark else "rgba(0,0,0, 28)"
+    tab_rgba = "rgba(255,255,255, 12)" if is_dark else "rgba(0,0,0, 12)"
     return (
         f"QTabWidget::pane {{"
-        f" background: rgba(0,0,0, 75);"
-        f" border: 1px solid rgba(255,255,255, 22);"
+        f" background: {pane_rgba};"
+        f" border: 1px solid {pane_border};"
         f" border-radius: {theme_mod.RADIUS_MD}px; }}"
         f"QTabBar::tab {{"
-        f" background: rgba(255,255,255, 12);"
-        f" color: {theme_mod.ui('subtext')};"
+        f" background: {tab_rgba};"
+        f" color: {subtext};"
         f" padding: 6px 14px;"
         f" border-top-left-radius: {theme_mod.RADIUS_SM}px;"
         f" border-top-right-radius: {theme_mod.RADIUS_SM}px;"
@@ -162,6 +179,7 @@ def glass_tab_style(theme_mod: Any) -> str:
         f"QTabBar::tab:selected {{"
         f" background: rgba(99, 102, 241, 120);"
         f" color: white; }}"
+        f"/* active text token: {text} */"
     )
 
 

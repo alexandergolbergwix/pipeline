@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import (
 from mhm_pipeline.gui import theme
 from mhm_pipeline.gui.widgets.glass_dialog import GlassDialog
 
-
 # ── Highlight colours ────────────────────────────────────────────────────
 #
 # Qt parses ``#RRGGBBAA`` ambiguously: an 8-hex string is ``#AARRGGBB``
@@ -46,20 +45,37 @@ from mhm_pipeline.gui.widgets.glass_dialog import GlassDialog
 # helpers below return CSS strings for QSS contexts and QColor objects
 # for QTextCharFormat — the latter constructed via fromRgb() with
 # explicit channels so the alpha can never be re-interpreted as red.
+#
+# The base RGB channels come from the theme tokens ``match_found``
+# (full match, green) and ``no_match`` (partial match, amber) so the
+# highlight hue tracks the active OS theme (Rule 36) instead of a
+# hardcoded tailwind value. Only the alpha is applied per-context.
 
-# Base RGB tuples (alpha applied per-context below).
-_FULL_RGB = (22, 163, 74)        # tailwind green-600
-_PARTIAL_RGB = (245, 158, 11)    # tailwind amber-500
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    """Parse a ``#rrggbb`` token into an ``(r, g, b)`` tuple."""
+    s = value.lstrip("#")
+    if len(s) == 6:
+        return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    return 128, 128, 128
+
+
+def _full_rgb() -> tuple[int, int, int]:
+    return _hex_to_rgb(theme.ui("match_found"))
+
+
+def _partial_rgb() -> tuple[int, int, int]:
+    return _hex_to_rgb(theme.ui("no_match"))
 
 
 def _highlight_color(match_type: str) -> str:
     """Return a QSS-safe ``rgba(...)`` string for QSS contexts."""
     dark = theme.is_dark()
     if match_type == "full":
-        r, g, b = _FULL_RGB
+        r, g, b = _full_rgb()
         return f"rgba({r},{g},{b},{0.33 if dark else 0.26})"
     if match_type == "partial":
-        r, g, b = _PARTIAL_RGB
+        r, g, b = _partial_rgb()
         return f"rgba({r},{g},{b},{0.33 if dark else 0.40})"
     return "transparent"
 
@@ -70,10 +86,10 @@ def _highlight_qcolor(match_type: str):
     from PyQt6.QtGui import QColor  # noqa: PLC0415
     dark = theme.is_dark()
     if match_type == "full":
-        r, g, b = _FULL_RGB
+        r, g, b = _full_rgb()
         return QColor(r, g, b, 110 if dark else 80)
     if match_type == "partial":
-        r, g, b = _PARTIAL_RGB
+        r, g, b = _partial_rgb()
         return QColor(r, g, b, 120 if dark else 100)
     return QColor(0, 0, 0, 0)
 
@@ -220,7 +236,7 @@ class MarcEvidencePopup(GlassDialog):
         has_evidence = bool(self._exists_in)
         if self._grounded is True:
             chip = (
-                '<span style="color:#16a34a; font-weight:600;">'
+                f'<span style="color:{theme.ui("success")}; font-weight:600;">'
                 '✓ Role-grounded</span>'
             )
             if self._role_fields:
@@ -230,7 +246,7 @@ class MarcEvidencePopup(GlassDialog):
                 )
         elif self._grounded is False and has_evidence:
             chip = (
-                '<span style="color:#f59e0b; font-weight:600;">'
+                f'<span style="color:{theme.ui("warning")}; font-weight:600;">'
                 '⚠ Wrong field for role</span>'
             )
             if self._role_fields:
@@ -240,7 +256,7 @@ class MarcEvidencePopup(GlassDialog):
                 )
         elif not has_evidence:
             chip = (
-                '<span style="color:#3b82f6; font-weight:600;">'
+                f'<span style="color:{theme.ui("info")}; font-weight:600;">'
                 '🆕 Discovery — not in structured MARC fields</span>'
                 f'  <span style="color:{theme.ui("subtext")};">'
                 'Inspect the record below to decide whether this is a real'
@@ -251,8 +267,10 @@ class MarcEvidencePopup(GlassDialog):
         prefix = (chip + "  ·  ") if chip else ""
         summary = QLabel(
             f"{prefix}Record  {cn}  ·  "
-            f"<span style=\"color:#16a34a;\">●</span> {n_full} full  ·  "
-            f"<span style=\"color:#f59e0b;\">●</span> {n_partial} partial"
+            f'<span style="color:{theme.ui("success")};">●</span>'
+            f" {n_full} full  ·  "
+            f'<span style="color:{theme.ui("warning")};">●</span>'
+            f" {n_partial} partial"
         )
         summary.setStyleSheet(
             f"color: {theme.ui('subtext')}; font-size: {theme.FONT_SM}px;"

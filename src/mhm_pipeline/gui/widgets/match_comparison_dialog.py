@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 from mhm_pipeline.platform_.paths import bundled_resource_root as _root_fn  # noqa: E402
+
 _repo = _root_fn()
 for _p in (str(_repo), str(_repo / "src")):
     if _p not in sys.path:
@@ -47,10 +48,11 @@ from converter.authority.biodata import (  # noqa: E402
     extract_mazal_biodata,
     extract_viaf_biodata,
 )
+
 from mhm_pipeline.gui.widgets.glass_dialog import (  # noqa: E402
     GlassDialog,
-    glass_table_style,
     glass_tab_style,
+    glass_table_style,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +157,22 @@ def fetch_biodata_async(
     )
     QThreadPool.globalInstance().start(runnable)
     return runnable.signals
+
+
+# ── Colour helpers ─────────────────────────────────────────────────────
+
+
+def _rgb_str(value: str) -> str:
+    """Parse a ``#rrggbb`` theme token into a CSS ``"r, g, b"`` channel
+    string for use inside an ``rgba(...)`` expression. Falls back to a
+    neutral grey if the token is not a 6-digit hex string."""
+    s = value.lstrip("#")
+    if len(s) == 6:
+        try:
+            return f"{int(s[0:2], 16)}, {int(s[2:4], 16)}, {int(s[4:6], 16)}"
+        except ValueError:
+            pass
+    return "128, 128, 128"
 
 
 # ── Diff helpers ───────────────────────────────────────────────────────
@@ -274,9 +292,17 @@ class MatchComparisonDialog(GlassDialog):
         raw_layout.setContentsMargins(0, 0, 0, 0)
         raw_layout.setSpacing(theme.SPACE_SM)
 
+        # Theme-aware glass tint: dark glass on dark theme, near-white
+        # glass on light theme (mirrors glass_table_style) so dark text
+        # stays legible on a light backdrop (Rule 36).
+        raw_is_dark = theme.is_dark()
+        raw_bg = "rgba(0,0,0, 90)" if raw_is_dark else "rgba(255,255,255, 140)"
+        raw_border = (
+            "rgba(255,255,255, 22)" if raw_is_dark else "rgba(0,0,0, 28)"
+        )
         raw_pane_qss = (
-            f"QTextEdit {{ background: rgba(0,0,0, 90);"
-            f" color: {theme.ui('text')}; border: 1px solid rgba(255,255,255, 22);"
+            f"QTextEdit {{ background: {raw_bg};"
+            f" color: {theme.ui('text')}; border: 1px solid {raw_border};"
             f" border-radius: {theme.RADIUS_MD}px;"
             f" font-family: 'SF Mono', Menlo, Consolas, monospace;"
             f" font-size: {theme.FONT_SM}px;"
@@ -342,8 +368,12 @@ class MatchComparisonDialog(GlassDialog):
         match_name = row.get("matched_name") or ""
         matched_id = row.get("matched_id") or ""
         approved = bool(row.get("approved"))
+        # Translucent green fill that reads in both themes; the badge
+        # text is white over it. The hue comes from the ``success``
+        # token (Rule 36) so it tracks the active theme.
+        success_rgb = _rgb_str(theme.ui("success"))
         badge = (
-            f"<span style='background:rgba(34,197,94,180);"
+            f"<span style='background:rgba({success_rgb},180);"
             f" color:white; padding:2px 8px;"
             f" border-radius:{theme.RADIUS_SM}px; font-size:{theme.FONT_XS}px;"
             f" margin-left:{theme.SPACE_SM}px'>APPROVED</span>"
@@ -355,8 +385,13 @@ class MatchComparisonDialog(GlassDialog):
         # so the reviewer doesn't waste time asking "why is the
         # authority side empty?"
         if source == "marc_field" or not matched_id:
+            # Low-alpha amber tint behind the banner; the foreground
+            # text uses the ``warning`` token (Rule 36) so it stays
+            # legible in both themes. The fill hue is derived from the
+            # same token rather than a hardcoded tailwind amber.
+            warning_rgb = _rgb_str(theme.ui("warning"))
             banner = (
-                f"<div style='background: rgba(245, 158, 11, 60);"
+                f"<div style='background: rgba({warning_rgb}, 60);"
                 f" color: {theme.ui('warning')};"
                 f" padding: 8px 12px; border-radius: {theme.RADIUS_SM}px;"
                 f" margin-top: 8px; font-size: {theme.FONT_SM}px;'>"
@@ -475,12 +510,38 @@ class MatchComparisonDialog(GlassDialog):
 
     # Internals ------------------------------------------------------------
 
-    _VERDICT_COLOURS = {
+    # Light-mode pastel verdict palette (bg, fg). Dark-mode variants
+    # are computed in :meth:`_verdict_colours` from the theme's
+    # semantic tokens so the verdict band reads in both themes
+    # (Rule 36).
+    _VERDICT_COLOURS_LIGHT = {
         "matched":            ("#dcfce7", "#14532d"),
         "differs":            ("#fef3c7", "#78350f"),
         "only-in-marc":       ("#e0e7ff", "#312e81"),
         "only-in-authority":  ("#fdf2f8", "#701a75"),
     }
+
+    def _verdict_colours(self, verdict: str) -> tuple[str, str]:
+        """Return ``(bg, fg)`` for a verdict band, theme-aware.
+
+        Light mode keeps the established pastels. Dark mode derives a
+        low-alpha tint from the matching semantic token (``success`` /
+        ``warning`` / ``info``) with the bright token as foreground so
+        the band reads on the dark glass backdrop.
+        """
+        theme = self._theme
+        if not theme.is_dark():
+            return self._VERDICT_COLOURS_LIGHT.get(verdict, ("#f3f4f6", "#374151"))
+        token = {
+            "matched": "success",
+            "differs": "warning",
+            "only-in-marc": "info",
+            "only-in-authority": "error",
+        }.get(verdict)
+        if token is None:
+            return ("#2a2a3a", theme.ui("subtext"))
+        accent = theme.ui(token)
+        return (f"rgba({_rgb_str(accent)}, 55)", accent)
 
     def _add_row(
         self,
@@ -491,7 +552,7 @@ class MatchComparisonDialog(GlassDialog):
         verdict: str,
     ) -> None:
         item = QTreeWidgetItem([field_label, marc_val or "—", auth_val or "—", verdict])
-        bg, fg = self._VERDICT_COLOURS.get(verdict, ("#f3f4f6", "#374151"))
+        bg, fg = self._verdict_colours(verdict)
         from PyQt6.QtGui import QBrush, QColor  # noqa: PLC0415
         item.setBackground(3, QBrush(QColor(bg)))
         item.setForeground(3, QBrush(QColor(fg)))
@@ -564,9 +625,9 @@ class MatchComparisonDialog(GlassDialog):
         * Still use a ≥ 0.90 similarity threshold on the extracted
           value content.
         """
-        import html              # noqa: PLC0415
-        import json              # noqa: PLC0415
-        import re as _re         # noqa: PLC0415
+        import html  # noqa: PLC0415
+        import json  # noqa: PLC0415
+        import re as _re  # noqa: PLC0415
         from difflib import SequenceMatcher  # noqa: PLC0415
 
         def to_dict(b: BioData) -> dict:
@@ -664,8 +725,12 @@ class MatchComparisonDialog(GlassDialog):
                     marc_matched.add(i)
                     auth_matched.add(j)
 
-        hl_bg = "rgba(59,130,246,70)"
-        hl_fg = "rgba(147,197,253,255)"
+        # Cross-side match highlight — derive the hue from the ``info``
+        # token (Rule 36). A low-alpha tint behind the line + the same
+        # token for the foreground so it reads in both themes.
+        info_rgb = _rgb_str(self._theme.ui("info"))
+        hl_bg = f"rgba({info_rgb},70)"
+        hl_fg = self._theme.ui("info")
 
         def _render(lines: list[str], matched: set[int]) -> str:
             out_lines: list[str] = [

@@ -25,6 +25,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,10 @@ from mhm_pipeline.gui.dialogs.widgets.friendly_copy import (
     humanise_verdict,
 )
 from mhm_pipeline.gui.dialogs.widgets.json_tree_viewer import JsonTreeViewer
+from mhm_pipeline.gui.dialogs.widgets.marc_record_popup import (
+    load_marc_index,
+    open_marc_popup,
+)
 from mhm_pipeline.gui.dialogs.widgets.status_pill import StatusPill
 from mhm_pipeline.gui.dialogs.widgets.verdict_table_model import (
     VerdictTableModel,
@@ -91,6 +96,20 @@ from mhm_pipeline.gui.widgets.glass_dialog import (
 from mhm_pipeline.gui.widgets.log_viewer import LogViewer
 
 logger = logging.getLogger(__name__)
+
+
+# ── Model-execution-failure detection ──────────────────────────────
+
+_MODEL_ERROR_RE = re.compile(
+    r"(not found|INVALID_ARGUMENT|PERMISSION_DENIED|quota|RESOURCE_EXHAUSTED|"
+    r"HTTP [45]\d\d|model .* (?:is not|not supported|does not exist))",
+    re.IGNORECASE,
+)
+
+
+def looks_like_model_error(line: str) -> bool:
+    """Return True when a streamed log line signals a model/API failure."""
+    return bool(_MODEL_ERROR_RE.search(line or ""))
 
 
 # ── Filter proxy that implements ColumnFilteredProxy ────────────────
@@ -199,6 +218,9 @@ class AiVerificationDialog(GlassDialog):
         self._worker = worker
         self._run_dir: Path | None = Path(run_dir) if run_dir is not None else None
         self._advanced: bool = False
+        # Only the FIRST model-error log line per run surfaces to the
+        # banner — the rest still stream into the log viewer.
+        self._error_shown: bool = False
 
         self.setWindowTitle("AI verification")
         # Non-modal — the curator may keep using the rest of the app
@@ -242,6 +264,11 @@ class AiVerificationDialog(GlassDialog):
         )
         outer.addWidget(subtitle)
 
+        # Error banner — hidden by default, surfaced at the very top
+        # (above the tabs) when the worker or a streamed log line
+        # signals a model/API failure.
+        outer.addWidget(self._build_error_banner())
+
         # Tabs
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(glass_tab_style(theme))
@@ -253,6 +280,50 @@ class AiVerificationDialog(GlassDialog):
 
         # Footer
         outer.addLayout(self._build_footer())
+
+    # ── Error banner ────────────────────────────────────────────────
+
+    def _build_error_banner(self) -> QFrame:
+        banner = QFrame()
+        banner.setObjectName("errorBanner")
+        error_hex = theme.ui("error")
+        # Low-alpha error-tint background so the banner reads in both
+        # themes; dark mode needs a brighter tint, light mode a paler
+        # one. Border + text use the solid theme error colour.
+        is_dark = theme.is_dark()
+        tint = "rgba(248,113,113, 38)" if is_dark else "rgba(220,38,38, 28)"
+        banner.setStyleSheet(
+            f"QFrame#errorBanner {{"
+            f" background: {tint};"
+            f" border: 1px solid {error_hex};"
+            f" border-radius: {theme.RADIUS_MD}px;"
+            f" }}"
+        )
+        layout = QHBoxLayout(banner)
+        layout.setContentsMargins(
+            theme.SPACE_MD, theme.SPACE_SM, theme.SPACE_MD, theme.SPACE_SM,
+        )
+        self._error_label = QLabel("")
+        self._error_label.setWordWrap(True)
+        self._error_label.setStyleSheet(
+            f"color:{error_hex}; font-size:{theme.FONT_SM}px;"
+            f" font-weight:{theme.WEIGHT_SEMIBOLD}; background: transparent;"
+            f" border: none;"
+        )
+        layout.addWidget(self._error_label, 1)
+
+        self._error_banner = banner
+        banner.setVisible(False)
+        return banner
+
+    def _show_error_banner(self, headline: str) -> None:
+        self._error_label.setText(headline)
+        self._error_banner.setVisible(True)
+
+    def _hide_error_banner(self) -> None:
+        self._error_label.setText("")
+        self._error_banner.setVisible(False)
+        self._error_shown = False
 
     # ── Tab 1: Working… ─────────────────────────────────────────────
 
@@ -952,6 +1023,11 @@ class AiVerificationDialog(GlassDialog):
     def _on_log_line(self, raw: str) -> None:
         if not raw:
             return
+        # Surface the FIRST model-execution-failure line to the banner.
+        # The full line still streams into the log viewer below.
+        if not self._error_shown and looks_like_model_error(raw):
+            self._error_shown = True
+            self._show_error_banner(f"Model error: {raw.strip()[:160]}")
         # Hide [STATS]/[PROGRESS] markers in non-advanced view to keep
         # the curator-facing log readable; engineers see them when
         # Advanced details is on.
@@ -1001,6 +1077,7 @@ class AiVerificationDialog(GlassDialog):
         # Keep stop button disabled (the subprocess is already done).
         self._stop_btn.setEnabled(False)
         if message:
+            self._show_error_banner(f"Verification error: {message.strip()[:160]}")
             self._log_viewer.setVisible(True)
             self._log_toggle.setChecked(True)
             self._log_viewer.append_line(f"ERROR: {message}")
@@ -1060,6 +1137,21 @@ class AiVerificationDialog(GlassDialog):
         if record is None:
             return
         self._render_detail(record)
+        # The "Manuscript" column (index 0) opens the full original
+        # MARC record popup for the clicked control number.
+        if index.column() == 0:
+            self._open_marc_popup_for(record)
+
+    def _open_marc_popup_for(self, record: dict[str, Any]) -> None:
+        record_id = str(record.get("record_id") or "")
+        if not record_id:
+            return
+        # record_id may be a URI — take the last path segment.
+        cn = record_id.split("/")[-1]
+        if not cn:
+            return
+        marc_index = load_marc_index(self._pipeline_output_dir)
+        open_marc_popup(cn, marc_index.get(cn), parent=self)
 
     def _on_open_folder(self) -> None:
         target = self._run_dir if self._run_dir is not None else self._pipeline_output_dir
@@ -1160,6 +1252,7 @@ class AiVerificationDialog(GlassDialog):
 
     def refresh(self) -> None:
         """Public re-load entrypoint. Tests + the parent window call this."""
+        self._hide_error_banner()
         self._refresh_all_tabs()
 
     def _refresh_verdicts(self) -> None:
@@ -1464,4 +1557,4 @@ def _escape(text: str) -> str:
     )
 
 
-__all__ = ["AiVerificationDialog", "VerdictFilterProxy"]
+__all__ = ["AiVerificationDialog", "VerdictFilterProxy", "looks_like_model_error"]

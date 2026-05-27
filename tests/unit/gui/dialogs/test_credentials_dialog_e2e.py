@@ -227,3 +227,52 @@ class TestWikibaseUsernameAndBotName:
         dialog._on_save()
         assert settings.wikibase_cloud_bot_username == "Alexander Goldberg IL"
         assert settings.wikibase_cloud_bot_name == "MHMPipelineBot"
+
+
+# ── AI-verification model combos (non-secret, prefilled) ────────────
+
+
+class TestAiVerificationModelCombos:
+    def test_combos_render_and_are_editable(
+        self, settings: SettingsManager
+    ) -> None:
+        dialog = CredentialsDialog(settings)
+        assert dialog._tier_model_combo is not None
+        assert dialog._escalate_model_combo is not None
+        assert dialog._tier_model_combo.isEditable()
+        assert dialog._escalate_model_combo.isEditable()
+
+    def test_combos_prefill_from_settings(
+        self, settings: SettingsManager
+    ) -> None:
+        settings.eval_agent_tier_model = "gemini-2.5-flash"
+        settings.eval_agent_escalate_model = "gemini-2.5-pro"
+        dialog = CredentialsDialog(settings)
+        assert dialog._tier_model_combo.currentText() == "gemini-2.5-flash"
+        assert dialog._escalate_model_combo.currentText() == "gemini-2.5-pro"
+
+    def test_combo_accepts_custom_value_not_in_suggestions(
+        self, settings: SettingsManager
+    ) -> None:
+        settings.eval_agent_tier_model = "my-custom-model-id"
+        dialog = CredentialsDialog(settings)
+        assert dialog._tier_model_combo.currentText() == "my-custom-model-id"
+
+    def test_save_persists_typed_model_values(
+        self, settings: SettingsManager
+    ) -> None:
+        dialog = CredentialsDialog(settings)
+        dialog._tier_model_combo.setCurrentText("gemini-3-flash")
+        dialog._escalate_model_combo.setCurrentText("gemini-3-pro")
+        dialog._on_save()
+        assert settings.eval_agent_tier_model == "gemini-3-flash"
+        assert settings.eval_agent_escalate_model == "gemini-3-pro"
+
+    def test_empty_model_value_preserves_stored(
+        self, settings: SettingsManager
+    ) -> None:
+        settings.eval_agent_tier_model = "gemini-3.5-flash"
+        dialog = CredentialsDialog(settings)
+        dialog._tier_model_combo.setCurrentText("   ")
+        dialog._on_save()
+        assert settings.eval_agent_tier_model == "gemini-3.5-flash"

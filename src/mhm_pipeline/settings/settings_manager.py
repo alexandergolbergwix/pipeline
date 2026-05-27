@@ -37,6 +37,9 @@ class SettingsManager:
     WIKIBASE_CLOUD_BOT_PASSWORD = "wikibase/cloud_bot_password"
     # ── Rule 50: Gemini API key for the bundled eval-agent verification ────
     GEMINI_API_KEY = "tokens/gemini_api_key"
+    # ── Rule 52: eval-agent model selection (non-secret; QSettings) ────────
+    EVAL_AGENT_TIER_MODEL = "eval_agent/tier_model"
+    EVAL_AGENT_ESCALATE_MODEL = "eval_agent/escalate_model"
 
     # Repo-relative defaults (resolved at class definition time so they survive
     # being imported from any working directory). When frozen by PyInstaller
@@ -121,6 +124,26 @@ class SettingsManager:
     @gpu_device.setter
     def gpu_device(self, value: str) -> None:
         self.set(self.GPU_DEVICE, value)
+
+    # eval_agent_tier_model — tier-1 model for AI verification (non-secret)
+    @property
+    def eval_agent_tier_model(self) -> str:
+        """Tier-1 (cheap pass) model id for eval-agent verification."""
+        return str(self.get(self.EVAL_AGENT_TIER_MODEL, "gemini-3.5-flash"))
+
+    @eval_agent_tier_model.setter
+    def eval_agent_tier_model(self, value: str) -> None:
+        self.set(self.EVAL_AGENT_TIER_MODEL, value)
+
+    # eval_agent_escalate_model — model the agent loop escalates to
+    @property
+    def eval_agent_escalate_model(self) -> str:
+        """Escalation model id for eval-agent verification (hard cases)."""
+        return str(self.get(self.EVAL_AGENT_ESCALATE_MODEL, "gemini-3.1-pro-preview"))
+
+    @eval_agent_escalate_model.setter
+    def eval_agent_escalate_model(self, value: str) -> None:
+        self.set(self.EVAL_AGENT_ESCALATE_MODEL, value)
 
     # batch_size
     @property

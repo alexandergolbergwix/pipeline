@@ -368,6 +368,13 @@ _UI_LIGHT: dict[str, str] = {
     "warning": "#996600",
     "match_found": "#059669",
     "no_match": "#d97706",
+    # Semantic status colours (success/warning/error) — used by confidence
+    # bands, status pills, match indicators. Tuned for contrast on a LIGHT
+    # background (darker, saturated). Always read via theme.ui() so the
+    # dark-mode variants below take over automatically.
+    "success": "#15803d",
+    "error": "#dc2626",
+    "info": "#2563eb",
     "button_bg": "#3b82f6",
     "button_hover": "#2563eb",
     "button_disabled": "#9ca3af",
@@ -391,6 +398,11 @@ _UI_DARK: dict[str, str] = {
     "warning": "#fbbf24",
     "match_found": "#34d399",
     "no_match": "#fbbf24",
+    # Semantic status colours tuned for contrast on a DARK background
+    # (lighter, brighter than the light-mode variants above).
+    "success": "#4ade80",
+    "error": "#f87171",
+    "info": "#60a5fa",
     "button_bg": "#6366f1",
     "button_hover": "#4f46e5",
     "button_disabled": "#4b5563",

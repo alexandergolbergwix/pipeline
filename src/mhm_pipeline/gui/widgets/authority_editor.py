@@ -511,25 +511,27 @@ _GUARD_FLAG_LABELS: dict[str, str] = {
 
 
 def _confidence_band_label(confidence: float, bucket_hint: str = "") -> tuple[str, str]:
-    """Map a 0–1 confidence into ``(label, colour-hex)``.
+    """Map a 0–1 confidence into ``(label, colour)``.
 
     Stage 3 produces the tri-level via :func:`stage3_guards.score_confidence`;
     when the original string is present in ``bucket_hint`` we honour that
-    directly. Otherwise fall through to the band table.
+    directly. Otherwise fall through to the band table. Colours come from
+    the central theme token registry (Rule 36) so they follow the theme.
     """
+    from mhm_pipeline.gui import theme  # noqa: PLC0415
     if bucket_hint:
         s = bucket_hint.strip().lower()
         if s in {"high", "medium", "low"}:
             return {
-                "high":   ("HIGH",   "#16a34a"),
-                "medium": ("MEDIUM", "#d97706"),
-                "low":    ("LOW",    "#dc2626"),
+                "high":   ("HIGH",   theme.ui("success")),
+                "medium": ("MEDIUM", theme.ui("warning")),
+                "low":    ("LOW",    theme.ui("error")),
             }[s]
     if confidence >= 0.8:
-        return ("HIGH", "#16a34a")
+        return ("HIGH", theme.ui("success"))
     if confidence >= 0.45:
-        return ("MEDIUM", "#d97706")
-    return ("LOW", "#dc2626")
+        return ("MEDIUM", theme.ui("warning"))
+    return ("LOW", theme.ui("error"))
 
 
 def _build_authority_confidence_tooltip(row: dict) -> str:
@@ -540,6 +542,7 @@ def _build_authority_confidence_tooltip(row: dict) -> str:
     preferred name was found, every guard flag with a human-readable
     description, and any hard ``rejection_reason``.
     """
+    from mhm_pipeline.gui import theme  # noqa: PLC0415
     bg, text, subtle = _auth_tooltip_colours()
     confidence = float(row.get("confidence") or 0.0)
     bucket = str(row.get("_confidence_bucket") or "")
@@ -598,7 +601,7 @@ def _build_authority_confidence_tooltip(row: dict) -> str:
 
     def _row(matched: bool, name: str, value: str = "") -> str:
         glyph = "✓" if matched else "—"
-        colour_inner = "#16a34a" if matched else subtle
+        colour_inner = theme.ui("success") if matched else subtle
         suffix = f' <span style="color:{subtle};">({_auth_esc(value)})</span>' if value else ""
         return (
             f'<div style="margin-left:6px; color:{colour_inner};">'
@@ -666,8 +669,8 @@ def _build_authority_confidence_tooltip(row: dict) -> str:
                 str(flag), str(flag).replace("_", " ").capitalize()
             )
             sign_colour = (
-                "#16a34a" if flag in {"wikidata_confirms", "has_wikidata"}
-                else "#dc2626"
+                theme.ui("success") if flag in {"wikidata_confirms", "has_wikidata"}
+                else theme.ui("error")
             )
             parts.append(
                 f'<div style="margin-left:6px; color:{sign_colour};">'
@@ -678,7 +681,7 @@ def _build_authority_confidence_tooltip(row: dict) -> str:
     rejection = str(row.get("_rejection_reason") or "")
     if rejection:
         parts.append(
-            f'<div style="color:#dc2626; margin-top:6px;">'
+            f'<div style="color:{theme.ui("error")}; margin-top:6px;">'
             f'<b>Rejection reason:</b> {_auth_esc(rejection)}'
             f'</div>'
         )
@@ -759,6 +762,7 @@ def _format_dates_cell(row: dict) -> str:
 def _build_authority_dates_tooltip(row: dict) -> str:
     """HTML tooltip for the Dates column — enumerates every input the
     Stage 3 date-conflict guard considered and the rule that applied."""
+    from mhm_pipeline.gui import theme  # noqa: PLC0415
     bg, text, subtle = _auth_tooltip_colours()
     role = str(row.get("role") or "")
     ms_year = row.get("_ms_year")
@@ -785,13 +789,13 @@ def _build_authority_dates_tooltip(row: dict) -> str:
     # Header: verdict
     if "date_conflict" in guard_flags:
         parts.append(
-            '<div style="color:#dc2626; font-weight:600; margin-bottom:6px;">'
+            f'<div style="color:{theme.ui("error")}; font-weight:600; margin-bottom:6px;">'
             'Date conflict fired'
             '</div>'
         )
     elif isinstance(ms_year, int) and isinstance(birth, int) and isinstance(death, int):
         parts.append(
-            '<div style="color:#16a34a; font-weight:600; margin-bottom:6px;">'
+            f'<div style="color:{theme.ui("success")}; font-weight:600; margin-bottom:6px;">'
             'No date conflict'
             '</div>'
         )
@@ -947,7 +951,7 @@ class AuthorityFilterProxy(QSortFilterProxyModel):
 
 
 def cell_value_for_filter(
-    model: "AuthorityMatchModel",
+    model: AuthorityMatchModel,
     source_row: int,
     column: int,
 ) -> str:
@@ -1663,10 +1667,18 @@ class AuthorityEditor(QWidget):
         layout.addWidget(self._table, stretch=1)
 
         self._output_path: Path | None = None
+        # MARC records keyed by control number — injected via
+        # ``set_marc_records`` so the Record-column click can open the
+        # friendly MARC popup with the ORIGINAL bibliographic record
+        # (the authority-enriched records are not the original MARC).
+        self._marc_by_cn: dict[str, dict] = {}
         self._model.dataChanged.connect(self._update_stats)
         self._model.modelReset.connect(self._refresh_actions)
         self._model.rowsInserted.connect(self._refresh_actions)
         self._model.rowsRemoved.connect(self._refresh_actions)
+
+        # Record-column click → friendly MARC record popup.
+        self._table.clicked.connect(self._on_table_clicked)
 
     # ── Public API ───────────────────────────────────────────────────────
 
@@ -1675,6 +1687,38 @@ class AuthorityEditor(QWidget):
         self._output_path = output_path
         self._refresh_actions()
         self._update_stats()
+
+    def set_marc_records(self, records: list[dict]) -> None:
+        """Index the ORIGINAL MARC records by control number.
+
+        Feed before opening the editor so the Record-column click can
+        render the full bibliographic record. Stores only references.
+        """
+        self._marc_by_cn = {
+            str(r.get("_control_number")): r
+            for r in records
+            if r.get("_control_number")
+        }
+
+    def _on_table_clicked(self, proxy_idx: QModelIndex) -> None:
+        """Route a click on the Record (control-number) column to the
+        friendly MARC record popup."""
+        if not proxy_idx.isValid() or proxy_idx.column() != COL_RECORD:
+            return
+        source_row = self._proxy.mapToSource(proxy_idx).row()
+        if not 0 <= source_row < len(self._model._rows):
+            return
+        cn = str(self._model._rows[source_row].get("_control_number") or "")
+        marc_record = self._marc_by_cn.get(cn)
+        if marc_record is None and self._output_path is not None:
+            from mhm_pipeline.gui.dialogs.widgets.marc_record_popup import (  # noqa: PLC0415
+                load_marc_index,
+            )
+            marc_record = load_marc_index(self._output_path.parent).get(cn)
+        from mhm_pipeline.gui.dialogs.widgets.marc_record_popup import (  # noqa: PLC0415
+            open_marc_popup,
+        )
+        open_marc_popup(cn, marc_record, parent=self)
 
     def get_all_sources(self) -> list[str]:
         return sorted({r.get("source") or "" for r in self._model._rows if r.get("source")})
@@ -1811,11 +1855,14 @@ class AuthorityEditor(QWidget):
 
         Called both on initial open and when the user clicks → Next.
         """
+        from converter.authority.biodata import (  # noqa: PLC0415
+            BioComparison,
+            BioData,
+            extract_marc_biodata,
+        )
+
         from mhm_pipeline.gui.widgets.match_comparison_dialog import (  # noqa: PLC0415
             fetch_biodata_async,
-        )
-        from converter.authority.biodata import (  # noqa: PLC0415
-            BioComparison, BioData, extract_marc_biodata,
         )
 
         row = self._model._rows[src]
@@ -1916,7 +1963,9 @@ class AuthorityEditor(QWidget):
         # fallback. Simpler: we just rebuild the initial comparison
         # here and let load_row apply it.
         from converter.authority.biodata import (  # noqa: PLC0415
-            BioComparison, BioData, extract_marc_biodata,
+            BioComparison,
+            BioData,
+            extract_marc_biodata,
         )
 
         next_row = self._model._rows[next_src]

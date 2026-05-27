@@ -34,6 +34,7 @@ import logging
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialogButtonBox,
     QFrame,
     QGridLayout,
@@ -58,6 +59,18 @@ logger = logging.getLogger(__name__)
 
 _STORED_PLACEHOLDER = "stored — type to replace"
 
+# Curated suggestions for the AI-verification model combos. The combos are
+# editable so a user can type any Gemini model id; these are just convenient
+# pre-filled choices.
+_MODEL_SUGGESTIONS = [
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash",
+    "gemini-3-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
+
 
 class CredentialsDialog(GlassDialog):
     """Unified credentials entry. Constructed via ``CredentialsDialog(settings, parent)``.
@@ -77,7 +90,7 @@ class CredentialsDialog(GlassDialog):
         super().__init__(parent)
         self._settings = settings
         self._store = settings.credentials_backend
-        self.setWindowTitle("Credentials")
+        self.setWindowTitle("Settings & Credentials")
         self.setModal(True)
         self.setMinimumSize(560, 640)
 
@@ -93,6 +106,9 @@ class CredentialsDialog(GlassDialog):
         self._wb_password: QLineEdit | None = None
         self._wb_password_show: QPushButton | None = None
         self._wb_password_clear: QPushButton | None = None
+        # AI-verification model combos (non-secret — plain QSettings).
+        self._tier_model_combo: QComboBox | None = None
+        self._escalate_model_combo: QComboBox | None = None
 
         self._build_ui()
         self._refresh_placeholders()
@@ -106,7 +122,7 @@ class CredentialsDialog(GlassDialog):
         )
         outer.setSpacing(theme.SPACE_MD)
 
-        title = QLabel("<b>Credentials</b>")
+        title = QLabel("<b>Settings &amp; Credentials</b>")
         title.setStyleSheet(f"color:{theme.ui('text')}; font-size:{theme.FONT_LG}px;")
         outer.addWidget(title)
 
@@ -120,6 +136,8 @@ class CredentialsDialog(GlassDialog):
         outer.addWidget(subtitle)
 
         outer.addWidget(self._build_gemini_section())
+        outer.addWidget(_separator())
+        outer.addWidget(self._build_ai_models_section())
         outer.addWidget(_separator())
         outer.addWidget(self._build_wikidata_section())
         outer.addWidget(_separator())
@@ -175,6 +193,68 @@ class CredentialsDialog(GlassDialog):
         row.addWidget(self._gemini_clear)
         layout.addLayout(row)
         return section
+
+    def _build_ai_models_section(self) -> QWidget:
+        section = QFrame()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(theme.SPACE_XS)
+
+        header = QLabel("<b>AI verification models</b>")
+        header.setStyleSheet(f"color:{theme.ui('text')};")
+        layout.addWidget(header)
+
+        hint = QLabel(
+            "Gemini models the AI agent verification step uses. The cheap "
+            "tier-1 model checks every prediction; hard cases escalate to the "
+            "stronger model. Pick a suggestion or type any Gemini model id."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{theme.ui('subtext')}; font-size:{theme.FONT_SM}px;")
+        layout.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, theme.SPACE_XS, 0, 0)
+        grid.setHorizontalSpacing(theme.SPACE_SM)
+        grid.setVerticalSpacing(theme.SPACE_XS)
+
+        tier_label = QLabel("Tier-1 model (cheap pass):")
+        tier_label.setStyleSheet(f"color:{theme.ui('subtext')};")
+        grid.addWidget(tier_label, 0, 0)
+        self._tier_model_combo = self._build_model_combo(
+            self._settings.eval_agent_tier_model
+        )
+        grid.addWidget(self._tier_model_combo, 0, 1)
+
+        escalate_label = QLabel("Escalation model (hard cases):")
+        escalate_label.setStyleSheet(f"color:{theme.ui('subtext')};")
+        grid.addWidget(escalate_label, 1, 0)
+        self._escalate_model_combo = self._build_model_combo(
+            self._settings.eval_agent_escalate_model
+        )
+        grid.addWidget(self._escalate_model_combo, 1, 1)
+
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
+        return section
+
+    def _build_model_combo(self, stored: str) -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(_MODEL_SUGGESTIONS)
+        # The stored value may be custom (not in the suggestion list);
+        # editable combos accept arbitrary current text.
+        combo.setCurrentText(stored)
+        combo.setStyleSheet(
+            f"QComboBox {{"
+            f" color:{theme.ui('text')};"
+            f" background:{theme.ui('panel_bg')};"
+            f" border:1px solid {theme.ui('border')};"
+            f" border-radius:{theme.RADIUS_SM}px;"
+            f" padding:2px 4px;"
+            f"}}"
+        )
+        return combo
 
     def _build_wikidata_section(self) -> QWidget:
         section = QFrame()
@@ -347,6 +427,19 @@ class CredentialsDialog(GlassDialog):
                 changed.add(key)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Could not store credential %s: %s", key, exc)
+
+        # AI-verification model ids (non-secret — plain QSettings).
+        # Empty input → leave the stored value unchanged.
+        if self._tier_model_combo is not None:
+            tier = self._tier_model_combo.currentText().strip()
+            if tier and tier != self._settings.eval_agent_tier_model:
+                self._settings.eval_agent_tier_model = tier
+                changed.add("eval_agent_tier_model")
+        if self._escalate_model_combo is not None:
+            escalate = self._escalate_model_combo.currentText().strip()
+            if escalate and escalate != self._settings.eval_agent_escalate_model:
+                self._settings.eval_agent_escalate_model = escalate
+                changed.add("eval_agent_escalate_model")
 
         self.saved.emit(changed)
         self.accept()

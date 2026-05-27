@@ -255,7 +255,7 @@ class MainWindow(QMainWindow):
 
         # Rule 50 — unified API-key entry surface.
         settings_menu.addSeparator()
-        credentials_action = QAction("&Credentials…", self)
+        credentials_action = QAction("&Settings && Credentials…", self)
         credentials_action.setShortcut("Ctrl+,")
         credentials_action.triggered.connect(self._on_open_credentials)
         settings_menu.addAction(credentials_action)
@@ -400,6 +400,8 @@ class MainWindow(QMainWindow):
             pipeline_output_dir=pipeline_output_dir,
             gemini_api_key=self._settings.gemini_api_key,
             use_cache=use_cache,
+            tier_model=self._settings.eval_agent_tier_model,
+            escalate_model=self._settings.eval_agent_escalate_model,
         )
         dialog = AiVerificationDialog(
             pipeline_output_dir=pipeline_output_dir,
