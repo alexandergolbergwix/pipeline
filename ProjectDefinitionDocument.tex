@@ -231,7 +231,7 @@ The pipeline consists of six sequential stages, each feeding its output to the n
   Three NER models run sequentially: (1)~the person NER model (\code{JointNERPipeline}) extracts person name spans from note fields (500, 520, 545, 546, 561, 957) and classifies roles using keyword-based heuristics on Hebrew role terms; (2)~the provenance NER model (\code{NERInferencePipeline}) extracts OWNER, DATE, and COLLECTION entities from MARC 561 provenance text; (3)~the contents NER model extracts WORK, FOLIO, and WORK\_AUTHOR entities from MARC 505. All entities are merged into a single list with a \code{source} discriminator (\code{person\_ner}, \code{provenance\_ner}, \code{contents\_ner}).
 
 \item[Stage 3: Authority Resolution]
-  Extracted entity names (persons, places, works) are matched against multiple authority sources: the NLI Mazal authority file (local SQLite database with fuzzy matching), VIAF (public SRU API, persons), and KIMA --- an open, attestation-based database of 48,128 Hebrew historical place names, 100\% Wikidata-linked, queried via a local SQLite index. Matched entities receive stable global identifiers.
+  Extracted entity names (persons, places, works) are matched against multiple authority sources: the NLI Mazal authority file (local SQLite database with fuzzy matching), VIAF (public SRU API, persons), and KIMA --- an open, attestation-based database of 48,128 Hebrew historical place names, 100\% Wikidata-linked, queried via a local SQLite index. Matched entities receive stable global identifiers. The stage writes \code{authority\_enriched.json}, which is both the input to Stage~4 and an \emph{evaluation target}: the sibling eval-agent's \code{authority} evaluator reads this file and judges, per match, whether the resolved authority record is the correct real-world entity for the catalogued name (triggered by a ``\emph{Verify with AI agent}'' action on the Authority panel). Curator approval of a match is recorded in the shared \code{approvals.json} sidecar (see \S\ref{sec:inventory}), keyed canonically by control number, group, role/type, and normalised text, so the decision is shared across the manual authority editor and the AI-verdict review surface.
 
 \item[Stage 4: RDF Graph Construction]
   The \code{GraphBuilder} assembles an RDF graph from the enriched extracted data. When curator-reviewed authority data are available, Stage~4 uses \code{authority\_enriched\_reviewed.json}; otherwise it falls back to \code{authority\_enriched.json}. The later \code{*\_wikidata\_verified.json} files are Wikidata Studio review state and are never used as manuscript-source input for RDF construction. The \code{UriGenerator} creates stable URIs for each entity. The builder implements the HMO three-layer architecture: creating F4\_Manifestation\_Singleton instances, Work-Expression pairs, BU-CU-PU composition structures, production and transfer events, text traditions, and epistemological annotations.
@@ -1394,6 +1394,37 @@ This chapter provides a complete inventory of all data files, model artifacts, a
 \filepath{pipeline/data/output/csv\_sample.ttl} & 8.5\,KB & CSV conversion test \\
 \hline
 \filepath{pipeline/data/pilot-sample/sample-barberini-82.ttl} & --- & Individual pilot \\
+\hline
+\end{longtable}
+
+\subsection{Pipeline Run Artefacts}
+
+Each pipeline run writes a sequence of intermediate JSON artefacts beside the chosen output directory. These are produced per run rather than committed to the repository; the table lists the artefacts referenced elsewhere in this document.
+
+\begin{longtable}{|p{6cm}|p{8cm}|}
+\hline
+\textbf{Artefact} & \textbf{Description} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Artefact} & \textbf{Description} \\
+\hline
+\endhead
+\hline
+\endfoot
+\filepath{marc\_extracted.json} & Stage~1 output: typed \code{ExtractedData} per record. Also read by the eval-agent as the source-of-truth catalog field reference. \\
+\hline
+\filepath{ner\_results.json} & Stage~2 output: merged NER entities (person / provenance / contents) with \code{source} discriminator. An eval-agent target. \\
+\hline
+\filepath{authority\_enriched.json} & Stage~3 output: entities annotated with authority matches (Mazal / VIAF / Wikidata / KIMA) and identifiers. Input to Stage~4 and an eval-agent target for the \code{authority} evaluator. \\
+\hline
+\filepath{authority\_enriched\_reviewed.json} & Curator-reviewed variant of the above; preferred Stage~4 input when present. \\
+\hline
+\filepath{approvals.json} & Shared approval store: the single source of truth for which extracted entities and authority matches the curator has approved. Keyed canonically by control number, entity group, role/type, and normalised text. Read/written by the NER editor, the authority editor, and the AI-verdict review surface, kept in sync by a live file watcher. The Wikidata-export gate projects only approved entities. \\
+\hline
+\filepath{output.ttl} & Stage~4/5 output: the canonical full HMO scholarly RDF graph and preferred Stage~6 input. \\
+\hline
+\filepath{*\_wikidata\_verified.json} & Wikidata Studio review state (round-trippable validation snapshot); never used as manuscript-source input for RDF construction. \\
 \hline
 \end{longtable}
 

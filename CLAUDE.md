@@ -2254,3 +2254,63 @@ fails the test suite immediately.
 Comments and developer-facing logger calls may still reference
 stage indices for diagnostics. The rule applies to **user-visible**
 strings only.
+
+### 54. Authority-stage AI evaluation + shared bidirectional approval store (added 2026-05-27)
+
+Builds on the agentic eval-agent (Rules 52/53). Two pieces ship
+together: the eval-agent now audits Stage-3 authority matches as well
+as Stage-2 extraction, and a single approval store is shared live
+across all three review surfaces.
+
+**A. `authority` eval-agent evaluator + authority verify button.**
+A new `authority` evaluator in eval-agent
+`eval_agent/evaluators/authority.py` judges each Stage-3 match
+(Mazal / VIAF / Wikidata / KIMA) the pipeline assigned to a name:
+"is this the correct authority record for this name, given the
+manuscript's MARC context?". It reads `authority_enriched.json`
+(carries `marc_authority_matches`) rather than `ner_results.json`;
+eval-agent `ingest.pipeline_run.discover` accepts either filename.
+On the pipeline side, the "Verify with AI agent" button (Rule 50)
+now also sits on the Authority panel `gui/panels/authority_panel.py`,
+not just the NER panel — both fire `verify_requested(Path, bool)`
+through `MainWindow` to `PipelineController.build_eval_agent_worker`.
+The Rule-48 trust boundary is unchanged — eval-agent reads pipeline
+JSON on disk only; no Python imports across.
+
+**B. Shared bidirectional approval store.** One `approvals.json`
+sidecar in the pipeline output dir is the single source of truth for
+which entities / authority matches the curator approved.
+`src/mhm_pipeline/controller/approval_store.py` (`ApprovalStore`,
+`QObject`) reads + writes it; the canonical key is
+`"<control_number>|<group>|<sub_type>|<normalized_text>"`
+(`group` ∈ {`ner`, `authority`}; `sub_type` = role/type upper;
+`normalized_text` = casefolded + ISBD-punctuation-collapsed, Hebrew
+verbatim). All three surfaces share the store with live
+`QFileSystemWatcher` sync (120 ms debounce, self-write guard):
+the NER editor `gui/widgets/extraction_editor.py`, the authority
+editor `gui/widgets/authority_editor.py`, and the eval-agent verdict
+UI `gui/dialogs/ai_verification_dialog.py`. Approve once on any
+surface → reflected on every open surface instantly. The verdict UI
+gained an "Approved" column, a "Show only approved" chip, and
+Approve/Reject buttons that act on the selected verdict.
+
+**Downstream unchanged**: the editors' Save still filters
+`ner_results.json` / `authority_enriched.json` to approved-only —
+the sidecar is additive and does not change the Wikidata-export
+contract. The agent suggests; the human decides; the `approved`
+flag is always a human action, never the agent's verdict.
+
+**C. User-configurable eval-agent models.** The tier-1 and
+escalation models are user-selectable in Settings
+(`settings_manager.py`: `EVAL_AGENT_TIER_MODEL`,
+`EVAL_AGENT_ESCALATE_MODEL` → `eval_agent_tier_model` /
+`eval_agent_escalate_model` properties; non-secret, QSettings).
+
+**Safety invariants preserved:** Rules 36 (theme tokens), 37
+(`GlassDialog`), 38 (Wikidata four-stage modification guard), 48
+(eval-agent trust boundary — subprocess + filesystem only).
+
+Tests: `tests/unit/controller/test_approval_store.py` (13),
+`tests/unit/gui/dialogs/test_verdict_approval.py` (10),
+`tests/unit/gui/widgets/test_editor_approval_sync.py` (10);
+eval-agent `tests/test_authority_evaluator.py` (12).
