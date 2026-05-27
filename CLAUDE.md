@@ -2315,6 +2315,22 @@ escalation models are user-selectable in Settings
 `EVAL_AGENT_ESCALATE_MODEL` → `eval_agent_tier_model` /
 `eval_agent_escalate_model` properties; non-secret, QSettings).
 
+**Model-id validity + escalation fallback (added 2026-05-27).** Two
+guards keep a bad model id from killing a run:
+
+1. The Settings model combos (`credentials_dialog.py`) only *suggest*
+   verified-valid ids — NEVER a bare `gemini-3-pro` / `gemini-3-flash`
+   (those 404 on v1beta; the real ids carry `-preview`). A
+   **"Refresh from API"** button repopulates the combos live from the
+   user's own key via `fetch_available_gemini_models()` (ListModels,
+   `generateContent`-only, background thread, graceful no-op offline),
+   so the offered list always reflects what is actually callable.
+2. The eval-agent agentic loop (`agentic/loop.py`) falls back to the
+   (known-good) tier model when the escalation model errors — a 404 on
+   the escalate id reverts to the tier model that already answered once,
+   instead of surfacing the error onto every escalated candidate
+   (`tests/test_agentic_loop.py::test_bad_escalation_model_falls_back_to_tier`).
+
 **Safety invariants preserved:** Rules 36 (theme tokens), 37
 (`GlassDialog`), 38 (Wikidata four-stage modification guard), 48
 (eval-agent trust boundary — subprocess + filesystem only).
