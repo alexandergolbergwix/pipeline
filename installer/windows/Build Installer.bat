@@ -6,8 +6,8 @@ REM Prerequisites on this Windows host:
 REM   1. Python 3.12 from python.org (so `py -3.12` works).
 REM   2. Inno Setup 6 from jrsoftware.org (default install path).
 REM
-REM Double-click this file. ~30 minutes later, dist\MHMPipeline-Setup-0.1.0.exe
-REM appears in the repo root.
+REM Double-click this file. ~30 minutes later, dist\MHMPipeline-Setup-<version>.exe
+REM appears in the repo root (the <version> matches pyproject.toml).
 REM ===========================================================================
 
 setlocal
@@ -46,12 +46,29 @@ if not exist "%ISCC%" (
     echo Install it from https://jrsoftware.org/isdl.php and re-run.
     goto :err
 )
-"%ISCC%" installer\windows\build_installer.iss
+
+REM Read the version from pyproject.toml so the installer filename
+REM (and the version reported in Programs & Features) always matches
+REM the source we just built. Falls back to the default baked into
+REM build_installer.iss if pyproject is unreadable for any reason.
+set "APPVER="
+for /f "usebackq tokens=*" %%v in (`python -c "import re,sys;m=re.search(r'^version\s*=\s*\"([^\"]+)\"',open('pyproject.toml').read(),re.M);print(m.group(1) if m else '')"`) do set "APPVER=%%v"
+if "%APPVER%"=="" (
+    echo WARNING: could not read version from pyproject.toml; using .iss default.
+    "%ISCC%" installer\windows\build_installer.iss
+) else (
+    echo Building installer for version %APPVER%
+    "%ISCC%" /DMyAppVersion=%APPVER% installer\windows\build_installer.iss
+)
 if errorlevel 1 goto :err
 
 echo.
 echo === DONE ===
-echo Installer: dist\MHMPipeline-Setup-0.1.0.exe
+if "%APPVER%"=="" (
+    echo Installer: dist\MHMPipeline-Setup-^<version^>.exe
+) else (
+    echo Installer: dist\MHMPipeline-Setup-%APPVER%.exe
+)
 echo Send that single file to the supervisor.
 pause
 exit /b 0

@@ -4,7 +4,15 @@
 ; Run on a Windows host after PyInstaller succeeds:
 ;   "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer\windows\build_installer.iss
 ;
-; Output: dist\MHMPipeline-Setup-0.1.0.exe (~4-5 GB compressed)
+; The version is derived from pyproject.toml. The default below is auto-
+; updated by ``scripts/package_for_windows_build.sh`` on every Mac-side
+; package run, and ``Build Installer.bat`` ALSO passes ``/DMyAppVersion=…``
+; on the ISCC command line so the .exe filename always reflects the source
+; even if someone edits the .iss by hand. Output:
+;   dist\MHMPipeline-Setup-<version>.exe (~4-5 GB compressed)
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.12"
+#endif
 
 [Setup]
 ; SourceDir resolves all relative paths in this script (LicenseFile, SetupIconFile,
@@ -12,13 +20,14 @@
 ; ISCC was invoked from.
 SourceDir=..\..
 AppName=MHM Pipeline
-AppVersion=0.1.0
+AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersion}
 AppPublisher=Bar-Ilan University
 AppPublisherURL=https://github.com/alexgoldberg/mhm-pipeline
 DefaultDirName={autopf}\MHMPipeline
 DefaultGroupName=MHM Pipeline
 OutputDir=dist
-OutputBaseFilename=MHMPipeline-Setup-0.1.0
+OutputBaseFilename=MHMPipeline-Setup-{#MyAppVersion}
 ; lzma2/ultra64 is required: the bundled payload (~9 GB uncompressed) only
 ; fits under Inno Setup's 4.2 GB single-file Setup.exe ceiling at this
 ; compression level. lzma2/normal produced a ~5 GB payload that triggered

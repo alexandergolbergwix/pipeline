@@ -2,7 +2,7 @@
 # Stage MHM Pipeline source + bundled models + Windows build scripts into a
 # single zip the operator uploads to a Windows host. The Windows host then
 # unzips and double-clicks `installer\windows\Build Installer.bat` to produce
-# `dist\MHMPipeline-Setup-0.1.0.exe`.
+# `dist\MHMPipeline-Setup-<version>.exe` (version read from pyproject.toml).
 
 set -euo pipefail
 
@@ -22,6 +22,25 @@ echo "Repo root: ${ROOT}"
 if [ -z "${SKIP_VERSION_BUMP:-}" ] && [ -f "$ROOT/scripts/bump_patch_version.py" ]; then
     NEW_VERSION="$(python3 "$ROOT/scripts/bump_patch_version.py")"
     echo "Bumped pyproject.toml version → $NEW_VERSION"
+fi
+
+# Keep the Inno Setup ``#define MyAppVersion`` default in lockstep with
+# pyproject.toml — even though ``Build Installer.bat`` ALSO passes
+# /DMyAppVersion on the command line, the committed default matters when
+# someone invokes ISCC by hand. Both knobs ensure the .exe filename always
+# matches the source version (no more "MHMPipeline-Setup-0.1.0.exe" being
+# produced from a 0.1.11 source tree).
+VERSION="$(python3 -c "import re,sys; m=re.search(r'^version\s*=\s*\"([^\"]+)\"', open('pyproject.toml').read(), re.M); print(m.group(1) if m else '', end='')")"
+if [ -n "$VERSION" ]; then
+    python3 -c "
+import re, pathlib
+p = pathlib.Path('installer/windows/build_installer.iss')
+text = p.read_text()
+new = re.sub(r'(#define MyAppVersion )\"[^\"]+\"', r'\1\"${VERSION}\"', text, count=1)
+if new != text:
+    p.write_text(new)
+    print('Updated Inno default MyAppVersion → ${VERSION}')
+"
 fi
 
 rm -rf "$STAGING" "$OUT"
@@ -96,6 +115,7 @@ fi
 echo
 echo "[3/4] Bundling Hugging Face snapshots..."
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+LOCAL_JOINT_SRC="models/hebrew-manuscript-joint-ner-v2"
 JOINT_SRC="${HF_CACHE}/models--alexgoldberg--hebrew-manuscript-joint-ner-v2"
 DICTA_SRC="${HF_CACHE}/models--dicta-il--dictabert"
 # Rule 46 (2026-05-18, fourth iteration): TaatikNet for hebrew_translit
@@ -104,9 +124,11 @@ DICTA_SRC="${HF_CACHE}/models--dicta-il--dictabert"
 # the work-label falls back to "NLI <control_number>" on either platform.
 TAATIKNET_SRC="${HF_CACHE}/models--malper--taatiknet"
 
-if [ ! -d "$JOINT_SRC" ]; then
-  echo "ERROR: HF snapshot not found at: $JOINT_SRC" >&2
-  echo "Run the app once on this machine to populate the HF cache, then retry." >&2
+if [ ! -d "$LOCAL_JOINT_SRC" ] && [ ! -d "$JOINT_SRC" ]; then
+  echo "ERROR: Person NER model not found at local replacement path or HF cache:" >&2
+  echo "  $LOCAL_JOINT_SRC" >&2
+  echo "  $JOINT_SRC" >&2
+  echo "Train/copy the local replacement or run the app once to populate the HF cache, then retry." >&2
   exit 1
 fi
 if [ ! -d "$DICTA_SRC" ]; then
@@ -149,8 +171,14 @@ flatten_hf_snapshot() {
   cp -RL "$snapshot_dir"/. "$dest/"
 }
 
-echo "  Flattening hebrew-manuscript-joint-ner-v2 snapshot..."
-flatten_hf_snapshot "$JOINT_SRC" "$STAGING/models/hebrew-manuscript-joint-ner-v2"
+if [ -d "$LOCAL_JOINT_SRC" ]; then
+  echo "  Copying local hebrew-manuscript-joint-ner-v2 replacement..."
+  mkdir -p "$STAGING/models/hebrew-manuscript-joint-ner-v2"
+  cp -R "$LOCAL_JOINT_SRC"/. "$STAGING/models/hebrew-manuscript-joint-ner-v2/"
+else
+  echo "  Flattening hebrew-manuscript-joint-ner-v2 snapshot..."
+  flatten_hf_snapshot "$JOINT_SRC" "$STAGING/models/hebrew-manuscript-joint-ner-v2"
+fi
 echo "  Flattening dictabert snapshot..."
 flatten_hf_snapshot "$DICTA_SRC" "$STAGING/models/dictabert"
 if [ -d "$TAATIKNET_SRC" ]; then
