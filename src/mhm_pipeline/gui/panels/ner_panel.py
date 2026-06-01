@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -69,6 +70,7 @@ class NerPanel(QWidget):
     # so every prediction hits Gemini fresh, ignoring any verdict
     # cached from a prior run.
     verify_requested = pyqtSignal(Path, bool)
+    orchestrate_requested = pyqtSignal(Path, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -188,6 +190,16 @@ class NerPanel(QWidget):
         self._verify_btn.setEnabled(False)
         self._verify_btn.clicked.connect(self._on_verify_with_ai)
 
+        self._orchestrate_btn = QPushButton("Plan with AI orchestrator")
+        self._orchestrate_btn.setStyleSheet(theme.button_style("load"))
+        self._orchestrate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._orchestrate_btn.setToolTip(
+            "Ask the bundled eval-agent orchestrator to inspect the current "
+            "evaluation state and recommend the next model/evaluation step."
+        )
+        self._orchestrate_btn.setEnabled(False)
+        self._orchestrate_btn.clicked.connect(self._on_orchestrate_with_ai)
+
         # Rule 52 — "Re-check (ignore cache)" toggle. When ticked, the
         # next Verify run passes --no-cache so the eval-agent skips its
         # verdict cache and calls Gemini fresh on every prediction.
@@ -209,6 +221,7 @@ class NerPanel(QWidget):
         btn_layout.addWidget(self._run_btn)
         btn_layout.addWidget(self._load_btn)
         btn_layout.addWidget(self._verify_btn)
+        btn_layout.addWidget(self._orchestrate_btn)
         btn_layout.addWidget(self._verify_fresh_checkbox)
         layout.addLayout(btn_layout)
 
@@ -911,9 +924,37 @@ class NerPanel(QWidget):
         )
         self.verify_requested.emit(output_path, use_cache)
 
+    def _on_orchestrate_with_ai(self) -> None:
+        """Run the LLM orchestrator over the current eval-agent state."""
+        output_path = self._output_selector.path
+        if output_path is None or not output_path.exists():
+            self._log_viewer.append_line(
+                "Error: select an output directory first."
+            )
+            return
+        default_goal = (
+            "Inspect the latest MHM Pipeline Stage 2 output, eval-agent state, "
+            "and person/provenance/contents benchmark evidence. Recommend the "
+            "next evaluation or retraining operation, and clearly distinguish "
+            "strict gold F1 from eval-agent candidate-level verdict rates."
+        )
+        goal, ok = QInputDialog.getMultiLineText(
+            self,
+            "AI orchestrator goal",
+            "Goal",
+            default_goal,
+        )
+        if not ok or not goal.strip():
+            return
+        self._log_viewer.append_line(
+            f"Launching AI orchestrator on {output_path}…"
+        )
+        self.orchestrate_requested.emit(output_path, goal.strip())
+
     def _refresh_verify_btn_state(self) -> None:
         """Enable the Verify button iff ``output_dir/ner_results.json`` exists."""
         verify_btn = getattr(self, "_verify_btn", None)
+        orchestrate_btn = getattr(self, "_orchestrate_btn", None)
         if verify_btn is None:
             return
         output_path = self._output_selector.path
@@ -923,6 +964,8 @@ class NerPanel(QWidget):
             and (output_path / "ner_results.json").exists()
         )
         verify_btn.setEnabled(can_verify)
+        if orchestrate_btn is not None:
+            orchestrate_btn.setEnabled(can_verify)
 
     def _on_load_results(self) -> None:
         """Load and display previously generated NER results."""

@@ -204,6 +204,40 @@ class TestEvalAgentWorkerSubprocessShape:
         assert "--escalate-model" in argv
         assert argv[argv.index("--escalate-model") + 1] == "gemini-3-pro"
 
+    def test_orchestrator_goal_uses_orchestrate_command(
+        self, fake_pipeline_out: Path, fake_user_state: Path
+    ) -> None:
+        """orchestrator_goal routes to ``eval_agent.cli orchestrate``."""
+        worker = EvalAgentWorker(
+            fake_pipeline_out,
+            gemini_api_key="AIzaTEST",
+            orchestrator_goal="Plan next eval step",
+        )
+
+        with patch("subprocess.Popen") as popen:
+            popen.return_value = _FakeProc(stdout_lines=[])
+            from mhm_pipeline.controller import workers as workers_mod
+
+            session_dir = (
+                fake_user_state
+                / "state"
+                / "orchestrator"
+                / "sessions"
+                / "orch-run"
+            )
+            session_dir.mkdir(parents=True)
+            with patch.object(workers_mod, "_latest_run_dir", return_value=session_dir):
+                worker.run()
+
+        argv = popen.call_args.args[0]
+        assert "orchestrate" in argv
+        assert "--goal" in argv
+        assert argv[argv.index("--goal") + 1] == "Plan next eval step"
+        assert "--plan-only" in argv
+        assert "--pipeline-root" in argv
+        assert "--pipeline-output" in argv
+        assert "run" not in argv
+
 
 class TestEvalAgentWorkerAuthorityTarget:
     def test_authority_target_appends_evaluators_flag(

@@ -441,6 +441,50 @@ class MainWindow(QMainWindow):
         dialog.show()  # non-modal so the user can keep using the app
         self._controller._start_worker(worker, EVAL_AGENT_STAGE_INDEX)
 
+    def _on_orchestrate_with_ai(
+        self,
+        pipeline_output_dir: Path,
+        goal: str,
+    ) -> None:
+        """Run the eval-agent LLM orchestrator in read-only planning mode."""
+        if not self._settings.gemini_api_key:
+            QMessageBox.information(
+                self,
+                "Gemini API key required",
+                "The AI orchestrator needs a Gemini API key. "
+                "Get a free one at https://aistudio.google.com/app/apikey "
+                "and paste it into Settings → Credentials.",
+            )
+            self._on_open_credentials()
+            if not self._settings.gemini_api_key:
+                return
+
+        from mhm_pipeline.controller.pipeline_controller import (  # noqa: PLC0415
+            EVAL_AGENT_STAGE_INDEX,
+        )
+
+        worker = self._controller.build_eval_agent_worker(
+            pipeline_output_dir=pipeline_output_dir,
+            gemini_api_key=self._settings.gemini_api_key,
+            tier_model=self._settings.eval_agent_tier_model,
+            escalate_model=self._settings.eval_agent_escalate_model,
+            orchestrator_goal=goal,
+            orchestrator_mode="plan_only",
+        )
+
+        def _show_report(path: Path) -> None:
+            report_path = path / "final_report.md"
+            if report_path.exists():
+                QMessageBox.information(
+                    self,
+                    "AI orchestrator complete",
+                    "The orchestrator wrote its report to:\n"
+                    f"{report_path}",
+                )
+
+        worker.finished.connect(_show_report)
+        self._controller._start_worker(worker, EVAL_AGENT_STAGE_INDEX)
+
     # ── Central widget ────────────────────────────────────────────────
 
     def _build_central(self) -> None:
@@ -562,6 +606,7 @@ class MainWindow(QMainWindow):
         self._ner_panel.run_requested.connect(self._on_run_ner)
         # Rule 50 — optional Gemini verification on Stage 2 output.
         self._ner_panel.verify_requested.connect(self._on_verify_with_ai)
+        self._ner_panel.orchestrate_requested.connect(self._on_orchestrate_with_ai)
         self._authority_panel.verify_requested.connect(
             self._on_verify_authority_with_ai
         )

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Benchmark Provenance NER: trained NERInferencePipeline vs. Gemini 2.5 Flash.
+"""Benchmark Provenance NER: trained NERInferencePipeline vs. Gemini 3.5 Flash.
 
 Compares three methods on a deterministic validation fold:
     1. Trained model (ner/provenance_ner_model.pt via NERInferencePipeline)
-    2. Gemini 2.5 Flash zero-shot
-    3. Gemini 2.5 Flash 3-shot (stratified)
+    2. Gemini 3.5 Flash zero-shot
+    3. Gemini 3.5 Flash 3-shot (stratified)
 
 Run from the repo root::
 
@@ -47,7 +47,7 @@ def gemini_predict(
     text: str,
     system_prompt: str,
     few_shots: list[tuple[str, str]] | None = None,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3.5-flash",
 ) -> list[tuple[str, str]]:
     schema = {
         "type": "object",
@@ -98,13 +98,13 @@ def few_shot_demonstrations(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark Provenance NER against Gemini 2.5 Flash.",
+        description="Benchmark Provenance NER against Gemini 3.5 Flash.",
     )
     parser.add_argument("--sample", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-eval-agent", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--gemini-model", default="gemini-2.5-flash")
+    parser.add_argument("--gemini-model", default="gemini-3.5-flash")
     parser.add_argument(
         "--checkpoint", type=Path, default=Path(PROVENANCE_CHECKPOINT),
     )

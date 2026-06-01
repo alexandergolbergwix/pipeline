@@ -75,6 +75,7 @@ rsync -a --delete \
     --exclude='.coverage' \
     --exclude='dist' \
     --exclude='build' \
+    --exclude='models' \
     --exclude='tests' \
     --exclude='scripts' \
     --exclude='modifications' \
@@ -89,6 +90,11 @@ rsync -a --delete \
     --exclude='*.pdf' \
     --exclude='ner/raw-data' \
     --exclude='ner/processed-data' \
+    --exclude='ner/experiments' \
+    --exclude='ner/results' \
+    --exclude='ner/contents_model_kfold' \
+    --exclude='ner/provenance_model_kfold' \
+    --exclude='ner/*_kfold' \
     --exclude='ner/*_model_kfold' \
     --exclude='ner/*_fold_*.pt' \
     --exclude='ner/*_head.pt' \
@@ -170,12 +176,19 @@ echo "Step 4/5: Bundling NER models..."
 MODELS_DIR="$RESOURCES/models"
 mkdir -p "$MODELS_DIR"
 
-# Bundle the joint NER model (pytorch_model.bin, ~2.1 GB)
+# Bundle the person NER model. Prefer the repo-local replacement directory so
+# rebuilt apps use the current role-aware checkpoint under the legacy bundle
+# name; fall back to the HuggingFace cache for older checkouts.
 NER_CACHE="$HF_CACHE/$NER_MODEL_ID"
-if [ -d "$NER_CACHE/snapshots" ]; then
+NER_LOCAL="$REPO_ROOT/models/hebrew-manuscript-joint-ner-v2"
+NER_DEST="$MODELS_DIR/hebrew-manuscript-joint-ner-v2"
+if [ -d "$NER_LOCAL" ]; then
+    mkdir -p "$NER_DEST"
+    cp -R "$NER_LOCAL/"* "$NER_DEST/" 2>/dev/null || true
+    echo "  NER model: $(du -sh "$NER_DEST" | cut -f1)"
+elif [ -d "$NER_CACHE/snapshots" ]; then
     NER_SNAPSHOT=$(ls -1 "$NER_CACHE/snapshots/" | head -1)
     if [ -n "$NER_SNAPSHOT" ]; then
-        NER_DEST="$MODELS_DIR/hebrew-manuscript-joint-ner-v2"
         mkdir -p "$NER_DEST"
         # Copy snapshot files, resolving symlinks to actual blobs
         cp -L "$NER_CACHE/snapshots/$NER_SNAPSHOT/"* "$NER_DEST/" 2>/dev/null || true

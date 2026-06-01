@@ -1,11 +1,13 @@
 # Gemini-vs-trained-models benchmark
 
 Compare the project's four trained models (Person NER, Provenance NER, Contents
-NER, Genre classifier) against Gemini 2.5 Flash in zero-shot and 3-shot modes,
+NER, Genre classifier) against Gemini 3.5 Flash in zero-shot and 3-shot modes,
 on a deterministic `seed=42` sample of 100 held-out validation records per
-task. Strict metrics come from the benchmark itself; lenient (rubric-based)
-metrics come from a sibling eval-agent run that judges every prediction with
-Gemini 3.x as a second-opinion judge.
+task. Strict metrics come from the benchmark itself and are the numbers to use
+for model-accuracy claims. Lenient, candidate-level audit metrics come from a
+sibling eval-agent run that judges every prediction with Gemini 3.x as a
+second-opinion judge; they are useful for triage but do not count all missing
+gold entities as false negatives.
 
 ## Prerequisites
 
@@ -20,8 +22,11 @@ Gemini 3.x as a second-opinion judge.
   - `ner/provenance_ner_model.pt`
   - `ner/contents_ner_model.pt`
   - `ner/genre_classifier_model.pt`
-  - HF model `alexgoldberg/hebrew-manuscript-joint-ner-v2` (downloaded
-    automatically on first run, cached under `~/.cache/huggingface/`).
+  - HF model `alexgoldberg/hebrew-manuscript-joint-ner-v2`, now the
+    role-aware v3 person model (downloaded automatically on first run, cached
+    under `~/.cache/huggingface/`).
+  - Person NER role-aware v3 benchmark data at
+    `ner/experiments/person_role_v3/data/{train,val}.jsonl`.
 - For `--no-eval-agent` runs (strict metrics only), nothing else is needed.
   For full runs the sibling eval-agent project at
   `/Users/alexandergo/Documents/Doctorat/eval-agent/` must be present and
@@ -29,18 +34,24 @@ Gemini 3.x as a second-opinion judge.
 
 ## Quick start
 
-All commands run from the repo root and use the project venv. The default
-invocation is the canonical 100-record / `seed=42` benchmark; the `--sample 2
---no-eval-agent` variant is a smoke test that exercises every code path
-without burning Gemini budget.
+All commands run from the repo root and use the project venv. The person NER
+default is a calibrated 100-record representative sample
+(`--sample-mode representative`, fixed sample seed `73509`) whose trained-model
+scores approximate the full v3 held-out split. The `--sample 2 --no-eval-agent`
+variant skips eval-agent but still calls Gemini; use `--trained-only
+--no-eval-agent` for a no-cost trained-model smoke test.
 
 ```bash
 cd /Users/alexandergo/Documents/Doctorat/pipeline
 
 # Person NER — full benchmark
 PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_person_ner
+# old seed-based random benchmark:
+PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_person_ner --sample-mode random --seed 42
 # smoke:
 PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_person_ner --sample 2 --no-eval-agent
+# no-cost trained-model smoke:
+PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_person_ner --sample 20 --trained-only --no-eval-agent
 
 # Provenance NER — full benchmark
 PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_provenance_ner
@@ -58,8 +69,9 @@ PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_genre_class
 PYTHONPATH=src:. .venv/bin/python -m eval.gemini_benchmark.benchmark_genre_classifier --sample 2 --no-eval-agent
 ```
 
-Defaults: `--sample 100 --seed 42 --gemini-model gemini-2.5-flash --few-shot-k
-3 --output-dir eval/gemini_benchmark/results/<task>/`.
+Defaults: `--sample 100 --seed 42 --gemini-model gemini-3.5-flash
+--output-dir eval/gemini_benchmark/results/<task>/`; the person benchmark uses
+`--sample-mode representative` and 3 few-shot examples internally.
 
 ## Output layout
 
@@ -77,8 +89,9 @@ eval/gemini_benchmark/results/<task>/<UTC-timestamp>/
   inspect individual cases or recompute metrics with custom matching rules.
 - `verdicts.jsonl` — the eval-agent's per-prediction judgement (pass / fail /
   partial / unsure) used to compute the lenient column in `metrics.json`.
-- `metrics.json` — the numbers that go into the paper. Both strict
-  (gold-vs-pred exact match) and lenient (Gemini judge) for each method.
+- `metrics.json` — strict gold-vs-pred exact match metrics plus lenient
+  candidate-level Gemini judge rates. Use strict metrics for the paper's F1
+  claims; use lenient rates only as an audit/triage signal.
 - `summary.md` — the same numbers rendered as a Markdown table, suitable for
   paste-into-Slack / paste-into-paper.
 
@@ -102,9 +115,16 @@ done
 
 ## Determinism and reproducibility
 
-- The validation split is recomputed deterministically from `--seed` plus the
+- Person NER uses the dedicated role-aware v3 `train.jsonl` / `val.jsonl`
+  split so strict F1 measures exact `(name, role)` tuples. The other tasks
+  recompute their validation split deterministically from `--seed` plus the
   task's raw dataset file — same `seed` + same dataset bytes → same 100 item
   IDs.
+- The person benchmark also reports the three v3 training-style metrics:
+  strict name span + role F1, name-only F1, and role accuracy among matched
+  names. The representative 100-item sample is calibrated to approximate the
+  full held-out split for these three trained-model metrics; use
+  `--sample-mode random` when you want an uncalibrated random sample.
 - The trained-model column of `predictions.jsonl` is byte-identical across
   re-runs on the same machine. Floating-point ordering on MPS / CUDA can
   shift the last digit on a different host, but the predicted labels and
@@ -122,7 +142,11 @@ Per script, per full benchmark (`--sample 100`, both zero-shot and 3-shot):
 
 - 2 Gemini methods × 100 items = **~200 Gemini API calls per script**, so
   ~800 calls for the full 4-script suite.
-- At `gemini-2.5-flash` pricing this is roughly **$2–4 per full run**.
+- At `gemini-3.5-flash` pricing this is roughly **$2–4 per full run**.
+
+Do not downgrade the benchmark default to `gemini-2.5-flash`; use
+`--gemini-model` explicitly only when intentionally comparing another Gemini
+version.
 
 Adding the eval-agent (drop the `--no-eval-agent` flag) issues roughly 3
 additional judge calls per prediction (one per method) — about **400 extra
@@ -149,7 +173,7 @@ calls per script**, or roughly **$8–12 total** for the full suite.
 
 | Script | Model under test | Label space | Source data | Evaluator id |
 |---|---|---|---|---|
-| `benchmark_person_ner.py` | `alexgoldberg/hebrew-manuscript-joint-ner-v2` (HF) | `PERSON` spans + role | `ner/processed-data/multi_entity_{train_filtered,val_filtered,test}.jsonl` | `person_ner` |
+| `benchmark_person_ner.py` | `alexgoldberg/hebrew-manuscript-joint-ner-v2` (HF role-aware v3) | `AUTHOR`, `TRANSCRIBER`, `OWNER`, `CENSOR`, `TRANSLATOR`, `COMMENTATOR` spans | `ner/experiments/person_role_v3/data/{train,val}.jsonl` | `person_ner` |
 | `benchmark_provenance_ner.py` | `ner/provenance_ner_model.pt` | `OWNER`, `DATE`, `COLLECTION` | `ner/processed-data/provenance_dataset.jsonl` | `provenance_ner` |
 | `benchmark_contents_ner.py` | `ner/contents_ner_model.pt` | `WORK`, `FOLIO`, `WORK_AUTHOR` | `ner/processed-data/contents_dataset.jsonl` | `contents_ner` |
 | `benchmark_genre_classifier.py` | `ner/genre_classifier_model.pt` | 8-class multi-label genre + NOTA | `data/tsvs/genre_samples.tsv` | `genre_classifier` |

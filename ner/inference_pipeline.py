@@ -278,6 +278,8 @@ class JointNERPipeline:
         from pathlib import Path as _Path
         from transformers import AutoTokenizer
 
+        model_path = self._resolve_model_directory_alias(model_path)
+
         # Ensure ner/ is on sys.path so JointModel can be imported
         _ner_dir = str(_Path(__file__).parent)
         if _ner_dir not in _sys.path:
@@ -292,6 +294,22 @@ class JointNERPipeline:
             self.device = torch.device(_dev)
         else:
             self.device = torch.device(device)
+
+        if self._is_role_aware_hf_model(model_path):
+            print(f"Loading role-aware person NER model from {model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.model = AutoModelForTokenClassification.from_pretrained(model_path)
+            self.model.to(self.device)
+            self.model.eval()
+            self.role_aware_id2label = {
+                int(idx): str(label)
+                for idx, label in self.model.config.id2label.items()
+            }
+            self._role_aware_mode = True
+            print(f"Role-aware person NER pipeline ready on {self.device}.")
+            return
+
+        self._role_aware_mode = False
 
         # Honour MHM_BUNDLED_DICTABERT — set by app.py / launcher.sh / launcher.m
         # to a local flat directory containing config.json + model.safetensors so
@@ -347,6 +365,50 @@ class JointNERPipeline:
         print(f"Downloading pytorch_model.bin from HuggingFace repo {model_path}")
         return hf_hub_download(repo_id=model_path, filename="pytorch_model.bin")
 
+    @staticmethod
+    def _resolve_model_directory_alias(model_path: str) -> str:
+        """Prefer the bundled replacement when callers pass the legacy HF ID."""
+        import os
+        from pathlib import Path
+
+        env_path = os.environ.get("MHM_BUNDLED_NER_MODEL", "")
+        if env_path and Path(env_path).exists():
+            return env_path
+        if model_path != "alexgoldberg/hebrew-manuscript-joint-ner-v2":
+            return model_path
+        repo_local = Path(__file__).resolve().parents[1] / "models" / "hebrew-manuscript-joint-ner-v2"
+        if repo_local.exists():
+            return str(repo_local)
+        return model_path
+
+    @staticmethod
+    def _is_role_aware_hf_model(model_path: str) -> bool:
+        """Return True for v3 HuggingFace token classifiers with role BIO labels."""
+        from pathlib import Path
+
+        local = Path(model_path)
+        if local.is_dir():
+            config_path = local / "config.json"
+            if not config_path.exists():
+                return False
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return False
+        else:
+            try:
+                from transformers import AutoConfig
+
+                config_obj = AutoConfig.from_pretrained(model_path)
+                config = {"id2label": config_obj.id2label}
+            except Exception:
+                return False
+        labels_raw = config.get("id2label", {})
+        if not isinstance(labels_raw, dict):
+            return False
+        labels = {str(label) for label in labels_raw.values()}
+        return "B-AUTHOR" in labels and "B-OWNER" in labels
+
     # ── inference ────────────────────────────────────────────────────
 
     def process_text(self, text: str) -> List[Dict]:
@@ -356,6 +418,9 @@ class JointNERPipeline:
         The role is predicted once per text and assigned to all detected entities.
         """
         import torch
+
+        if getattr(self, "_role_aware_mode", False):
+            return self._process_role_aware_text(text, torch)
 
         tokens = text.split()
         if not tokens:
@@ -480,6 +545,104 @@ class JointNERPipeline:
 
         return entities
 
+    def _process_role_aware_text(self, text: str, torch_mod: object) -> List[Dict]:
+        """Extract person spans whose BIO label already encodes the role."""
+        torch = torch_mod
+        tokens = text.split()
+        if not tokens:
+            return []
+
+        encoding = self.tokenizer(
+            tokens,
+            is_split_into_words=True,
+            return_tensors='pt',
+            truncation=True,
+            max_length=256,
+        )
+        input_ids = encoding['input_ids'].to(self.device)
+        attention_mask = encoding['attention_mask'].to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+
+        probs = torch.softmax(outputs.logits[0], dim=-1)
+        pred_ids = torch.argmax(outputs.logits[0], dim=-1).cpu().tolist()
+        max_probs = probs.max(dim=-1).values.cpu().tolist()
+
+        word_ids = encoding.word_ids(batch_index=0)
+        tags: List[str] = []
+        tag_probs: List[float] = []
+        prev_word_id = None
+        for idx, word_id in enumerate(word_ids):
+            if word_id is None:
+                continue
+            if word_id != prev_word_id:
+                tags.append(self.role_aware_id2label.get(int(pred_ids[idx]), 'O'))
+                tag_probs.append(float(max_probs[idx]))
+            prev_word_id = word_id
+
+        token_offsets = _token_offsets(text, tokens)
+        entities: List[Dict] = []
+        current_tokens: List[str] = []
+        current_probs: List[float] = []
+        current_start_idx: int | None = None
+        current_role: str | None = None
+
+        def flush(end_idx: int) -> None:
+            nonlocal current_tokens, current_probs, current_start_idx, current_role
+            if current_start_idx is None or current_role is None or not current_tokens:
+                current_tokens = []
+                current_probs = []
+                current_start_idx = None
+                current_role = None
+                return
+            start_char = token_offsets[current_start_idx][0]
+            end_char = token_offsets[end_idx - 1][1]
+            raw_text = text[start_char:end_char]
+            cleaned = normalize_entity_text(raw_text)
+            if cleaned:
+                offset_in_raw = raw_text.find(cleaned)
+                if offset_in_raw >= 0:
+                    start = start_char + offset_in_raw
+                    end = start + len(cleaned)
+                    confidence = round(sum(current_probs) / len(current_probs), 4)
+                    entities.append({
+                        'person': cleaned,
+                        'role': current_role,
+                        'confidence': confidence,
+                        'model_confidence': confidence,
+                        'start': start,
+                        'end': end,
+                    })
+            current_tokens = []
+            current_probs = []
+            current_start_idx = None
+            current_role = None
+
+        for idx, (token, tag, prob) in enumerate(zip(tokens, tags, tag_probs)):
+            if tag.startswith('B-'):
+                flush(idx)
+                current_tokens = [token]
+                current_probs = [prob]
+                current_start_idx = idx
+                current_role = tag[2:]
+            elif tag.startswith('I-'):
+                role = tag[2:]
+                if current_start_idx is None or current_role != role:
+                    flush(idx)
+                    current_tokens = [token]
+                    current_probs = [prob]
+                    current_start_idx = idx
+                    current_role = role
+                else:
+                    current_tokens.append(token)
+                    current_probs.append(prob)
+            else:
+                flush(idx)
+
+        flush(len(tokens))
+        return entities
+
     def _classify_role(self, person_name: str, context: str, torch_mod: object) -> tuple:
         """Classify role for a person using keyword heuristics on context.
 
@@ -489,6 +652,9 @@ class JointNERPipeline:
         Keyword-based classification matches the cataloger's own terminology.
         """
         return _classify_role_by_keywords(person_name, context)
+
+    def process_batch(self, texts: List[str]) -> List[List[Dict]]:
+        return [self.process_text(text) for text in texts]
 
 
 # Hebrew role keyword patterns for context-based role classification.
@@ -537,8 +703,19 @@ def _classify_role_by_keywords(person_name: str, context: str) -> tuple:
     # Default: AUTHOR (most common role in manuscript catalogs)
     return 'AUTHOR', 0.60
 
-    def process_batch(self, texts: List[str]) -> List[List[Dict]]:
-        return [self.process_text(text) for text in texts]
+
+def _token_offsets(text: str, tokens: List[str]) -> List[tuple[int, int]]:
+    """Find whitespace-token offsets in the original text."""
+    offsets: List[tuple[int, int]] = []
+    search_from = 0
+    for token in tokens:
+        start = text.find(token, search_from)
+        if start < 0:
+            start = search_from
+        end = start + len(token)
+        offsets.append((start, end))
+        search_from = end
+    return offsets
 
 
 def main():
@@ -617,4 +794,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

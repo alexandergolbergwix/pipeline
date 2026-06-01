@@ -23,9 +23,13 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 BASELINE="${1:-86e6bfb}"
 HEAD_REF="$(git rev-parse --short HEAD)"
+if [ -n "$(git status --porcelain)" ]; then
+    HEAD_REF="${HEAD_REF}+working-tree"
+fi
 STAGING="${ROOT}/dist/_windelta"
 OUT_ZIP="${ROOT}/dist/mhm-pipeline-source-delta.zip"
 OUT_TXT="${ROOT}/dist/mhm-pipeline-source-delta.txt"
+INCLUDE_PERSON_MODEL="${INCLUDE_PERSON_MODEL_DELTA:-1}"
 
 echo "=== MHM Pipeline — Windows DELTA bundler ==="
 echo "Baseline commit: ${BASELINE}"
@@ -38,8 +42,8 @@ mkdir -p "$STAGING" "${ROOT}/dist"
 # ── Collect changed files via git ───────────────────────────────────
 echo
 echo "[1/3] Computing diff..."
-ADDED_OR_MODIFIED="$(git diff --name-status "${BASELINE}" HEAD | grep -E '^[AMR]' | awk '{print $2}')"
-DELETED="$(git diff --name-status "${BASELINE}" HEAD | grep -E '^D' | awk '{print $2}')"
+ADDED_OR_MODIFIED="$(git diff --name-status "${BASELINE}" | grep -E '^[AMR]' | awk '{print $2}')"
+DELETED="$(git diff --name-status "${BASELINE}" | grep -E '^D' | awk '{print $2}')"
 
 NUM_AM=$(echo "$ADDED_OR_MODIFIED" | grep -c . || true)
 NUM_DEL=$(echo "$DELETED" | grep -c . || true)
@@ -64,6 +68,17 @@ if [ -n "$ADDED_OR_MODIFIED" ]; then
             echo "  +$f"
         fi
     done <<< "$ADDED_OR_MODIFIED"
+fi
+
+# The person NER replacement is a model-artifact change, not just code.
+# Include it by default so Windows build hosts that apply the delta do not
+# keep the previous custom checkpoint under models/hebrew-manuscript-joint-ner-v2.
+if [ "$INCLUDE_PERSON_MODEL" = "1" ] && [ -d "models/hebrew-manuscript-joint-ner-v2" ]; then
+    mkdir -p "$STAGING/models"
+    rsync -a --delete \
+        "models/hebrew-manuscript-joint-ner-v2" \
+        "$STAGING/models/"
+    echo "  +models/hebrew-manuscript-joint-ner-v2 ($(du -sh "$STAGING/models/hebrew-manuscript-joint-ner-v2" | cut -f1))"
 fi
 
 # ── Stage the bundled eval-agent (Rule 50, 2026-05-25) ─────────────
@@ -128,6 +143,10 @@ echo "[3/3] Writing manifest..."
     else
         echo "    (no deletions)"
     fi
+    if [ "$INCLUDE_PERSON_MODEL" = "1" ]; then
+        echo "    DEL models\\hebrew-manuscript-joint-ner-v2\\pytorch_model.bin"
+        echo "    DEL models\\hebrew-manuscript-joint-ner-v2\\kfold_results.json"
+    fi
     echo ""
     echo "6. Re-run installer\\windows\\Build Installer.bat as usual."
     echo ""
@@ -136,6 +155,9 @@ echo "[3/3] Writing manifest..."
     if [ -n "$ADDED_OR_MODIFIED" ]; then
         echo "$ADDED_OR_MODIFIED" | grep -vE '^(paper/|docs/presentations/|docs/cv/|tests/)' \
             | sed 's/^/    /'
+    fi
+    if [ "$INCLUDE_PERSON_MODEL" = "1" ] && [ -d "models/hebrew-manuscript-joint-ner-v2" ]; then
+        echo "    models/hebrew-manuscript-joint-ner-v2/"
     fi
     echo ""
     echo "Commit summary:"

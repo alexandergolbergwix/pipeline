@@ -435,7 +435,7 @@ def _build_exists_in_tooltip(
 
 # Human-readable labels for the NER source channels surfaced by Stage 2.
 _NER_SOURCE_LABELS: dict[str, str] = {
-    "person_ner":      "Person NER (alexgoldberg/hebrew-manuscript-joint-ner-v2, F1 85.7 %)",
+    "person_ner":      "Person NER (role-aware v3, span+role F1 80.3 %)",
     "provenance_ner":  "Provenance NER v2 (ner/provenance_ner_model.pt, F1 95.9 %)",
     "contents_ner":    "Contents NER (ner/contents_ner_model.pt, F1 99.9 %)",
     "genre_ml":        "Genre classifier (distant-supervision DictaBERT, micro-F1 0.88)",

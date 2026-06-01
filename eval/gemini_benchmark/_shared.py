@@ -38,11 +38,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NER_DATA_DIR = _REPO_ROOT / "ner" / "processed-data"
 _TSV_DIR = _REPO_ROOT / "data" / "tsvs"
 
-_PERSON_DATA_FILES: tuple[Path, ...] = (
-    _NER_DATA_DIR / "multi_entity_train_filtered.jsonl",
-    _NER_DATA_DIR / "multi_entity_val_filtered.jsonl",
-    _NER_DATA_DIR / "multi_entity_test.jsonl",
+_PERSON_ROLE_V3_DATA_DIR = (
+    _REPO_ROOT / "ner" / "experiments" / "person_role_v3" / "data"
 )
+_PERSON_ROLE_V3_TRAIN_FILE = _PERSON_ROLE_V3_DATA_DIR / "train.jsonl"
+_PERSON_ROLE_V3_VAL_FILE = _PERSON_ROLE_V3_DATA_DIR / "val.jsonl"
 
 _PROVENANCE_DATA_FILE = _NER_DATA_DIR / "provenance_dataset.jsonl"
 _CONTENTS_DATA_FILE = _NER_DATA_DIR / "contents_dataset.jsonl"
@@ -161,12 +161,19 @@ def _build_ner_items(
         tokens = list(sample.get("tokens") or [])
         tags = list(sample.get("ner_tags") or [])
         entities = _bio_to_entities(tokens, tags)
-        text = " ".join(tokens)
+        text = str(sample.get("text") or " ".join(tokens))
         items.append(BenchmarkItem(
             item_id=f"{task}-{idx:06d}",
             text=text,
             gold=entities,
-            metadata={"tokens": tokens, "ner_tags": tags, "source_index": idx},
+            metadata={
+                "tokens": tokens,
+                "ner_tags": tags,
+                "source_index": idx,
+                "source_file": sample.get("source_file"),
+                "source_id": sample.get("source_id"),
+                "roles": list(sample.get("roles") or []),
+            },
         ))
     return items
 
@@ -186,25 +193,19 @@ def _stratification_labels(samples: list[dict], task: str) -> np.ndarray:
     raise ValueError(f"_stratification_labels: unexpected task {task}")
 
 
-def _load_person_samples() -> list[dict]:
-    samples: list[dict] = []
-    missing: list[Path] = []
-    for path in _PERSON_DATA_FILES:
-        if not path.is_file():
-            missing.append(path)
-            continue
-        samples.extend(_read_jsonl(path))
-    if missing and not samples:
-        raise FileNotFoundError(
-            "no person NER source files found; looked for: "
-            + ", ".join(str(p) for p in _PERSON_DATA_FILES)
-        )
+def _load_person_role_v3_splits() -> tuple[list[dict], list[dict]]:
+    """Load the dedicated role-aware train/validation split for Person NER."""
+    paths = (_PERSON_ROLE_V3_TRAIN_FILE, _PERSON_ROLE_V3_VAL_FILE)
+    missing = [path for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError(
-            "one or more person NER source files are missing: "
+            "person role-aware v3 source file(s) missing: "
             + ", ".join(str(p) for p in missing)
+            + ". Re-run the v3 person-role data/training pipeline first."
         )
-    return samples
+    return _read_jsonl(_PERSON_ROLE_V3_TRAIN_FILE), _read_jsonl(
+        _PERSON_ROLE_V3_VAL_FILE,
+    )
 
 
 def _load_genre_samples() -> list[dict[str, Any]]:
@@ -227,7 +228,11 @@ def load_validation_fold(
     fold: int = 0,
     seed: int = 42,
 ) -> tuple[list[BenchmarkItem], list[BenchmarkItem]]:
-    """Returns ``(train_fold, val_fold)`` replaying the trainer's KFold."""
+    """Return deterministic train/validation items for a benchmark task.
+
+    Person NER uses the dedicated role-aware v3 split created for the current
+    model. The other tasks replay their trainer's five-fold split.
+    """
     if task not in _VALID_TASKS:
         raise ValueError(
             f"unknown task {task!r}; expected one of {sorted(_VALID_TASKS)}"
@@ -236,14 +241,11 @@ def load_validation_fold(
         raise ValueError(f"fold must be in [0, 5); got {fold}")
 
     if task == "person_ner":
-        samples = _load_person_samples()
-        strat = _stratification_labels(samples, task)
-        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
-        splits = list(skf.split(samples, strat))
-        train_idx, val_idx = splits[fold]
-        train = _build_ner_items([samples[i] for i in train_idx], task)
-        val = _build_ner_items([samples[i] for i in val_idx], task)
-        return train, val
+        train_samples, val_samples = _load_person_role_v3_splits()
+        return (
+            _build_ner_items(train_samples, task),
+            _build_ner_items(val_samples, task),
+        )
 
     if task == "provenance_ner":
         samples = _read_jsonl(_PROVENANCE_DATA_FILE)
@@ -441,7 +443,7 @@ def call_gemini(
     user_text: str,
     response_schema: dict | None = None,
     few_shots: list[tuple[str, str]] | None = None,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3.5-flash",
     max_attempts: int = 4,
     temperature: float = 0.2,
 ) -> dict:
@@ -557,6 +559,94 @@ def _to_ner_set(items: Any) -> set[tuple[str, str]]:
             if text is not None and etype is not None:
                 out.add((str(text), str(etype)))
     return out
+
+
+def _normalise_entity_text(text: object) -> str:
+    return " ".join(str(text).split())
+
+
+def _person_name_role_sets(
+    items: Any,
+    *,
+    include_role: bool,
+) -> set[tuple[str, str] | str]:
+    out: set[tuple[str, str] | str] = set()
+    for text, role in _to_ner_set(items):
+        norm_text = _normalise_entity_text(text)
+        if include_role:
+            out.add((norm_text, role))
+        else:
+            out.add(norm_text)
+    return out
+
+
+def compute_person_role_metrics(
+    predictions: list[Any],
+    gold: list[Any],
+) -> dict:
+    """Person NER metrics matching the v3 training report shape."""
+    if len(predictions) != len(gold):
+        raise ValueError(
+            f"predictions ({len(predictions)}) and gold ({len(gold)}) "
+            "must have the same length"
+        )
+
+    strict_tp = strict_fp = strict_fn = 0
+    name_tp = name_fp = name_fn = 0
+    matched_names = 0
+    correct_roles = 0
+
+    for pred_item, gold_item in zip(predictions, gold):
+        pred_span_role = _person_name_role_sets(pred_item, include_role=True)
+        gold_span_role = _person_name_role_sets(gold_item, include_role=True)
+        strict_tp += len(pred_span_role & gold_span_role)
+        strict_fp += len(pred_span_role - gold_span_role)
+        strict_fn += len(gold_span_role - pred_span_role)
+
+        pred_names = _person_name_role_sets(pred_item, include_role=False)
+        gold_names = _person_name_role_sets(gold_item, include_role=False)
+        name_tp += len(pred_names & gold_names)
+        name_fp += len(pred_names - gold_names)
+        name_fn += len(gold_names - pred_names)
+
+        pred_roles_by_name: dict[str, set[str]] = {}
+        for text, role in _to_ner_set(pred_item):
+            pred_roles_by_name.setdefault(
+                _normalise_entity_text(text), set(),
+            ).add(role)
+        for text, role in _to_ner_set(gold_item):
+            name = _normalise_entity_text(text)
+            if name not in pred_roles_by_name:
+                continue
+            matched_names += 1
+            if role in pred_roles_by_name[name]:
+                correct_roles += 1
+
+    strict_p, strict_r, strict_f = _prf(strict_tp, strict_fp, strict_fn)
+    name_p, name_r, name_f = _prf(name_tp, name_fp, name_fn)
+    return {
+        "strict_span_role": {
+            "precision": strict_p,
+            "recall": strict_r,
+            "f1": strict_f,
+            "tp": strict_tp,
+            "fp": strict_fp,
+            "fn": strict_fn,
+        },
+        "name_only": {
+            "precision": name_p,
+            "recall": name_r,
+            "f1": name_f,
+            "tp": name_tp,
+            "fp": name_fp,
+            "fn": name_fn,
+        },
+        "role_given_name": {
+            "matched_names": matched_names,
+            "correct_roles": correct_roles,
+            "accuracy": _safe_div(correct_roles, matched_names),
+        },
+    }
 
 
 def _to_label_set(items: Any) -> set[str]:
@@ -853,7 +943,7 @@ def _summarise_verdicts(verdicts: list[dict]) -> dict[str, int]:
             buckets["other"] += 1
             continue
         norm = overall.lower().replace("-", "_")
-        if norm in ("pass", "looks_right", "correct"):
+        if norm in ("pass", "full", "looks_right", "correct"):
             buckets["looks_right"] += 1
         elif norm in ("fail", "wrong", "incorrect"):
             buckets["wrong"] += 1
@@ -889,6 +979,12 @@ def _build_summary_md(
     lines.append(f"- task: `{task}`")
     lines.append(f"- sample size: {sample_size}")
     lines.append(f"- seed: {seed}")
+    sample_mode = metadata.get("sample_mode")
+    sample_seed = metadata.get("sample_seed")
+    if sample_mode is not None:
+        lines.append(f"- sample mode: `{sample_mode}`")
+    if sample_seed is not None:
+        lines.append(f"- sample seed: {sample_seed}")
     lines.append(f"- gemini model: `{gemini_model}`")
     lines.append(f"- timestamp: {ts}")
     few_shots = metadata.get("few_shot_examples")
@@ -952,6 +1048,32 @@ def _build_summary_md(
     else:
         lines.append("_no per-type metrics available_")
 
+    person_role_methods = {
+        method: metric.get("person_role")
+        for method, metric in metrics_by_method.items()
+        if isinstance(metric.get("person_role"), dict)
+    }
+    if person_role_methods:
+        lines.append("")
+        lines.append("## Person role metrics")
+        lines.append("")
+        lines.append(
+            "| Method | Strict span+role F1 | Name-only F1 | Role correct when name matched |"
+        )
+        lines.append("|---|---|---|---|")
+        for method, person_metrics in person_role_methods.items():
+            strict = person_metrics.get("strict_span_role", {})
+            name_only = person_metrics.get("name_only", {})
+            role_given_name = person_metrics.get("role_given_name", {})
+            lines.append(
+                "| {method} | {strict_f1} | {name_f1} | {role_acc} |".format(
+                    method=method,
+                    strict_f1=_format_pct(strict.get("f1", 0.0)),
+                    name_f1=_format_pct(name_only.get("f1", 0.0)),
+                    role_acc=_format_pct(role_given_name.get("accuracy", 0.0)),
+                )
+            )
+
     lines.append("")
     return "\n".join(lines)
 
@@ -1014,6 +1136,7 @@ __all__ = [
     "stratified_few_shots",
     "call_gemini",
     "compute_strict_metrics",
+    "compute_person_role_metrics",
     "run_eval_agent_judge",
     "write_results_bundle",
 ]

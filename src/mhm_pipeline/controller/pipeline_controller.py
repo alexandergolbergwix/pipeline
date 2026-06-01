@@ -122,6 +122,8 @@ class PipelineController(QObject):
         tier_model: str | None = None,
         escalate_model: str | None = None,
         eval_target: str = "stage2",
+        orchestrator_goal: str | None = None,
+        orchestrator_mode: str = "plan_only",
     ) -> EvalAgentWorker:
         """Construct (but do NOT start) the eval-agent worker.
 
@@ -144,6 +146,8 @@ class PipelineController(QObject):
             tier_model=tier_model,
             escalate_model=escalate_model,
             eval_target=eval_target,
+            orchestrator_goal=orchestrator_goal,
+            orchestrator_mode=orchestrator_mode,
         )
 
     def _start_worker(self, worker: EvalAgentWorker, stage_index: int) -> None:
@@ -170,6 +174,8 @@ class PipelineController(QObject):
         tier_model: str | None = None,
         escalate_model: str | None = None,
         eval_target: str = "stage2",
+        orchestrator_goal: str | None = None,
+        orchestrator_mode: str = "plan_only",
     ) -> EvalAgentWorker:
         """Launch the bundled eval-agent over the Stage 2 output dir (Rule 50).
 
@@ -207,6 +213,8 @@ class PipelineController(QObject):
             tier_model=tier_model,
             escalate_model=escalate_model,
             eval_target=eval_target,
+            orchestrator_goal=orchestrator_goal,
+            orchestrator_mode=orchestrator_mode,
         )
         logger.info(
             "Starting eval-agent verification on %s (use_cache=%s)",

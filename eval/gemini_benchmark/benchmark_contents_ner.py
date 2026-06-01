@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark Contents NER: trained NERInferencePipeline vs. Gemini 2.5 Flash (0-shot + 3-shot).
+"""Benchmark Contents NER: trained NERInferencePipeline vs. Gemini 3.5 Flash (0-shot + 3-shot).
 
 Run from the repo root:
 
@@ -117,7 +117,7 @@ def main() -> int:
         help="Skip eval-agent judging — for quick smoke tests.",
     )
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--gemini-model", default="gemini-2.5-flash")
+    parser.add_argument("--gemini-model", default="gemini-3.5-flash")
     parser.add_argument(
         "--checkpoint", type=Path, default=Path(CONTENTS_CHECKPOINT),
     )

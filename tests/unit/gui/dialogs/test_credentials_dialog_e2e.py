@@ -354,10 +354,10 @@ class TestAiVerificationModelCombos:
     def test_combos_prefill_from_settings(
         self, settings: SettingsManager
     ) -> None:
-        settings.eval_agent_tier_model = "gemini-2.5-flash"
+        settings.eval_agent_tier_model = "gemini-3.5-flash"
         settings.eval_agent_escalate_model = "gemini-2.5-pro"
         dialog = CredentialsDialog(settings)
-        assert dialog._tier_model_combo.currentText() == "gemini-2.5-flash"
+        assert dialog._tier_model_combo.currentText() == "gemini-3.5-flash"
         assert dialog._escalate_model_combo.currentText() == "gemini-2.5-pro"
 
     def test_combo_accepts_custom_value_not_in_suggestions(

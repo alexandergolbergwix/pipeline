@@ -1,6 +1,6 @@
 Run the standalone eval-agent against a pipeline output folder.
 
-The eval-agent lives at `/Users/alexandergo/Documents/Doctorat/eval-agent` (separate project from this pipeline repo). It uses Gemini 3.x as judge to score every prediction (NER entities + classifier outputs) against the original MARC record and emits per-model precision reports.
+The eval-agent lives at `/Users/alexandergo/Documents/Doctorat/eval-agent` (separate project from this pipeline repo). It uses Gemini 3.x as judge to score every prediction (NER entities + classifier outputs) against the original MARC record and emits per-model candidate-level precision reports. For trained-model F1 claims, prefer the gold benchmark outputs under `eval/gemini_benchmark/results/`; eval-agent verdict rates do not count all missing gold entities as false negatives.
 
 ## When to use this command
 
@@ -33,6 +33,27 @@ make run PIPELINE_OUTPUT=/Users/alexandergo/Documents/Doctorat/pipeline/eval/wor
 ls -t state/runs/ | head -1 | xargs -I{} cat state/runs/{}/report.md
 ```
 
+## LLM orchestrator
+
+Use this when the task is to decide the next evaluation/retraining operation.
+The orchestrator is a Gemini planning loop with a Python policy layer: Gemini
+chooses one JSON action at a time, Python validates it, and only allowlisted
+tools run.
+
+```bash
+cd /Users/alexandergo/Documents/Doctorat/eval-agent
+GEMINI_API_KEY="$GEMINI_API_KEY" .venv/bin/python -m eval_agent.cli orchestrate \
+  --goal "Inspect the latest person NER benchmark and recommend the next eval step" \
+  --plan-only \
+  --pipeline-root /Users/alexandergo/Documents/Doctorat/pipeline \
+  --pipeline-output /Users/alexandergo/Documents/Doctorat/pipeline/eval/work
+```
+
+The MHM app's Stage 2 **Plan with AI orchestrator** button uses read-only
+`--plan-only`. Orchestrator artifacts are written under
+`state/orchestrator/sessions/<ts>/`: `trace.jsonl`, `decisions.jsonl`, and
+`final_report.md`.
+
 ## Default judge + budget
 
 | Parameter | Default | Where to override |
@@ -62,6 +83,9 @@ ls -t state/runs/ | head -1 | xargs -I{} cat state/runs/{}/report.md
 
 # Health check (API key, schemas, state dirs)
 .venv/bin/python -m eval_agent.cli doctor
+
+# LLM orchestrator over eval-agent state and benchmark evidence
+.venv/bin/python -m eval_agent.cli orchestrate --goal "..." --plan-only
 ```
 
 ## Hard rules (DO NOT VIOLATE)
@@ -70,6 +94,15 @@ ls -t state/runs/ | head -1 | xargs -I{} cat state/runs/{}/report.md
 2. **Never import eval-agent modules from this repo.** File-coupling only — the pipeline writes JSON, the eval-agent reads JSON.
 3. **Never modify files under `/Users/alexandergo/Documents/Doctorat/eval-agent/`** from this repo.
 4. **Pass through to the eval-agent's own session-startup procedure.** Don't pre-empt or simulate it from here.
+5. **Keep the default judge as `gemini-3.5-flash`.** Use `--judge` only for
+   intentional comparison runs; never silently downgrade defaults to
+   `gemini-2.5-flash`.
+6. **Do not treat eval-agent candidate rates as strict F1.** For person NER v3,
+   the canonical accuracy claim is the strict gold benchmark run
+   `eval/gemini_benchmark/results/person_ner/20260529T062556Z`: trained
+   `TP=88 FP=23 FN=20`, strict `(name, role)` F1 `80.4%`, name-only F1
+   `86.8%`, role accuracy among matched names `92.6%`. The eval-agent
+   "looks right" rate is useful triage, not a replacement for gold FNs.
 
 ## Reading the report
 

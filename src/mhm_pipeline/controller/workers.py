@@ -2618,6 +2618,8 @@ class EvalAgentWorker(StageWorker):
         tier_model: str | None = None,
         escalate_model: str | None = None,
         eval_target: str = "stage2",
+        orchestrator_goal: str | None = None,
+        orchestrator_mode: str = "plan_only",
     ) -> None:
         super().__init__()
         self._pipeline_output_dir = Path(pipeline_output_dir)
@@ -2639,6 +2641,8 @@ class EvalAgentWorker(StageWorker):
         # own configured defaults.
         self._tier_model = tier_model or None
         self._escalate_model = escalate_model or None
+        self._orchestrator_goal = orchestrator_goal.strip() if orchestrator_goal else None
+        self._orchestrator_mode = orchestrator_mode
         # Stamped by run() before subprocess.Popen for testability.
         self._last_cmd: list[str] | None = None
         self._last_cwd: Path | None = None
@@ -2666,18 +2670,19 @@ class EvalAgentWorker(StageWorker):
             return
 
         marc_path = self._pipeline_output_dir / "marc_extracted.json"
-        if self._eval_target == "authority":
-            required_secondary = "authority_enriched.json"
-        else:
-            required_secondary = "ner_results.json"
-        secondary_path = self._pipeline_output_dir / required_secondary
-        if not marc_path.exists() or not secondary_path.exists():
-            self.error.emit(
-                "Pipeline output dir is missing the inputs the AI agent "
-                f"needs. Required: marc_extracted.json + {required_secondary}. "
-                f"Looked in {self._pipeline_output_dir}."
-            )
-            return
+        if not self._orchestrator_goal:
+            if self._eval_target == "authority":
+                required_secondary = "authority_enriched.json"
+            else:
+                required_secondary = "ner_results.json"
+            secondary_path = self._pipeline_output_dir / required_secondary
+            if not marc_path.exists() or not secondary_path.exists():
+                self.error.emit(
+                    "Pipeline output dir is missing the inputs the AI agent "
+                    f"needs. Required: marc_extracted.json + {required_secondary}. "
+                    f"Looked in {self._pipeline_output_dir}."
+                )
+                return
 
         try:
             bundled_root = locate_bundled_eval_agent()
@@ -2692,28 +2697,41 @@ class EvalAgentWorker(StageWorker):
             return
 
         python_exe = resolve_python_executable()
-        cmd: list[str] = [
-            python_exe,
-            "-m", "eval_agent.cli",
-            "run",
-            "--pipeline-output", str(self._pipeline_output_dir),
-            # Rule 52 — defense in depth: pass the writable per-user state
-            # dir BOTH via the env var (below) and via --state-dir, so even
-            # if the env var is stripped or the eval-agent build ignores it
-            # we still land on the writable dir.
-            "--state-dir", str(user_state_dir / "state"),
-        ]
-        if self._eval_target == "authority":
-            # Run only the authority evaluator (Stage 3 verification).
-            cmd.extend(["--evaluators", "authority"])
-        if self._models:
-            cmd.extend(["--models", ",".join(sorted(self._models))])
-        if not self._use_cache:
-            cmd.append("--no-cache")
-        if self._tier_model:
-            cmd.extend(["--tier-model", self._tier_model])
-        if self._escalate_model:
-            cmd.extend(["--escalate-model", self._escalate_model])
+        if self._orchestrator_goal:
+            repo_root = Path(__file__).resolve().parents[3]
+            cmd = [
+                python_exe,
+                "-m", "eval_agent.cli",
+                "orchestrate",
+                "--goal", self._orchestrator_goal,
+                f"--{self._orchestrator_mode.replace('_', '-')}",
+                "--state-dir", str(user_state_dir / "state"),
+                "--pipeline-root", str(repo_root),
+                "--pipeline-output", str(self._pipeline_output_dir),
+            ]
+        else:
+            cmd = [
+                python_exe,
+                "-m", "eval_agent.cli",
+                "run",
+                "--pipeline-output", str(self._pipeline_output_dir),
+                # Rule 52 — defense in depth: pass the writable per-user state
+                # dir BOTH via the env var (below) and via --state-dir, so even
+                # if the env var is stripped or the eval-agent build ignores it
+                # we still land on the writable dir.
+                "--state-dir", str(user_state_dir / "state"),
+            ]
+            if self._eval_target == "authority":
+                # Run only the authority evaluator (Stage 3 verification).
+                cmd.extend(["--evaluators", "authority"])
+            if self._models:
+                cmd.extend(["--models", ",".join(sorted(self._models))])
+            if not self._use_cache:
+                cmd.append("--no-cache")
+            if self._tier_model:
+                cmd.extend(["--tier-model", self._tier_model])
+            if self._escalate_model:
+                cmd.extend(["--escalate-model", self._escalate_model])
 
         env = dict(os.environ)
         env["GEMINI_API_KEY"] = self._gemini_api_key
@@ -2731,11 +2749,19 @@ class EvalAgentWorker(StageWorker):
 
         self._last_cmd = cmd
         self._last_cwd = user_state_dir
-        self.substep.emit("Starting AI agent verification")
-        self.log_line.emit(
-            f"Launching eval-agent: {python_exe} -m eval_agent.cli run "
-            f"--pipeline-output {self._pipeline_output_dir.name}"
-        )
+        if self._orchestrator_goal:
+            self.substep.emit("Starting AI orchestrator")
+            self.log_line.emit(
+                f"Launching eval-agent orchestrator: {python_exe} "
+                f"-m eval_agent.cli orchestrate --pipeline-output "
+                f"{self._pipeline_output_dir.name}"
+            )
+        else:
+            self.substep.emit("Starting AI agent verification")
+            self.log_line.emit(
+                f"Launching eval-agent: {python_exe} -m eval_agent.cli run "
+                f"--pipeline-output {self._pipeline_output_dir.name}"
+            )
 
         # Subprocess: capture both streams, line-buffered so progress is
         # visible. We never reveal the API key in any log line — it's only
@@ -2797,20 +2823,31 @@ class EvalAgentWorker(StageWorker):
             )
             return
 
-        # Resolve the latest run dir — eval-agent stamps it as state/runs/<ts>/.
-        runs_dir = user_state_dir / "state" / "runs"
-        latest = _latest_run_dir(runs_dir)
+        # Resolve the latest output dir. Candidate verification writes
+        # state/runs/<ts>/; the orchestrator writes
+        # state/orchestrator/sessions/<ts>/.
+        if self._orchestrator_goal:
+            output_root = user_state_dir / "state" / "orchestrator" / "sessions"
+        else:
+            output_root = user_state_dir / "state" / "runs"
+        latest = _latest_run_dir(output_root)
         if latest is None:
             self.error.emit(
-                "AI agent finished but no run directory was produced under "
-                f"{runs_dir}."
+                "AI agent finished but no output directory was produced under "
+                f"{output_root}."
             )
             return
 
         if progress_pct < 100:
             self.progress.emit(100)
-        self.substep.emit("Verification complete")
-        self.log_line.emit(f"Eval-agent run dir: {latest}")
+        self.substep.emit(
+            "Orchestrator complete" if self._orchestrator_goal else "Verification complete"
+        )
+        self.log_line.emit(f"Eval-agent output dir: {latest}")
+        if self._orchestrator_goal:
+            report_path = latest / "final_report.md"
+            if report_path.exists():
+                self.log_line.emit(f"Orchestrator final report: {report_path}")
         self.finished.emit(latest)
 
     def terminate_subprocess(self) -> None:

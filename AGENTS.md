@@ -141,6 +141,21 @@ PYTHONPATH=src:. .venv/bin/python -m mhm_pipeline.app
     mapped in `_TYPE_MAP` in `src/mhm_pipeline/gui/widgets/knowledge_graph_view.py`
     (for example `TransmissionWitness`, `TextTradition`, `CanonicalReference`,
     `Colophon`, `DigitalAccess`, `TextLocation`, or vocabulary nodes).
+17. Gemini benchmark and eval-agent defaults are `gemini-3.5-flash`. Do not
+    change defaults back to `gemini-2.5-flash`; use an explicit
+    `--gemini-model` / `--judge` override only for intentional comparison runs.
+18. For person NER v3 reporting, use strict gold benchmark metrics as the
+    accuracy claim: trained model `TP=88 FP=23 FN=20`, strict `(name, role)`
+    F1 `80.4%`, name-only F1 `86.8%`, role accuracy among matched names
+    `92.6%` on the representative 100-record sample
+    (`eval/gemini_benchmark/results/person_ner/20260529T062556Z`). Treat
+    eval-agent verdict rates as candidate-level plausibility/audit signals,
+    not as F1 or a replacement for gold false negatives.
+19. The eval-agent LLM orchestrator is invoked only by subprocess:
+    `python -m eval_agent.cli orchestrate`. The MHM app uses the read-only
+    `--plan-only` mode from the Stage 2 "Plan with AI orchestrator" button.
+    Do not import eval-agent Python modules into the pipeline app; read
+    orchestrator evidence from `state/orchestrator/sessions/<ts>/`.
 
 ## Paper-Claim Verification (`paper/verification/`)
 
