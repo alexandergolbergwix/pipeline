@@ -2457,3 +2457,36 @@ inference call through `inference_cache.cache_lookup_or_call`),
 `W-14` (AI verify state_dir per-RUN not per-session — fixes the
 cache-miss bug where every modal open got a fresh empty cache),
 `W-15` (modal/ is a deploy target, never an import).
+
+### 59. Web port — Stage 2 review surface ships in feature parity with desktop (added 2026-06-01)
+
+The collaborative web port now mirrors every capability of the
+desktop's `ExtractionEditor` (2,606 LOC at
+`src/mhm_pipeline/gui/widgets/extraction_editor.py`) on the
+`/runs/{id}/extraction` page:
+
+| Desktop surface | Web equivalent | Rule |
+|---|---|---|
+| 10-column entity table | `frontend/src/components/extraction/EntityTable.tsx` | W-16 |
+| Three-dimensional filter chips | `EntityFilterChips.tsx` | W-16 |
+| Per-column distinct-value popup | `ColumnFilterPopup.tsx` | W-16 + Rule 49 §E |
+| Bulk approve + select-all-visible | `EntityActionsBar.tsx` | W-16 |
+| Auto-approve rule builder | `AutoApproveRuleBuilder.tsx` | W-16 |
+| Side-by-side edit modal | `EntityEditModal.tsx` | W-16 |
+| MARC source viewer with span highlight | `MarcSourceDrawer.tsx` (right-side drawer) | W-16 |
+| AI verdict pill on every row | `AiVerdictPill.tsx` | W-13 + W-17 |
+| Exists-in MARC novelty badge | `marc_structured_index.py` (backend) → `EntityTable` cell | W-16 |
+| Live approval store with file watcher | `useApprovalStore` hook (DB polling, 2s active / 30s idle) | W-16 |
+| AI verification modal | `NerVerificationModal.tsx` + `extraction_verify.py` router | W-17 |
+
+The desktop pipeline is unchanged — Python-side files in this repo
+were read for reference only. The web app vendors the desktop's
+`ner/` + `converter/authority/` modules verbatim through the Modal
+container (Rule 58) for inference, and ports
+`marc_structured_index.py` verbatim into the FastAPI backend for the
+novelty classification.
+
+Test surface: `mhm-pipeline-web/frontend/e2e/extraction-review.spec.ts`
+is a 29-scenario Playwright suite covering every user-flow listed
+above, mocking the backend deterministically (Rule W-19). E2E is the
+canonical regression layer for the curator UI.
