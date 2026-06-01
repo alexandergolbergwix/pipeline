@@ -116,7 +116,7 @@ Three requirements drive every decision in this document:
 
 \begin{description}[style=nextline, leftmargin=3cm]
 \item[GUI framework] \textbf{PyQt6} --- already adopted in \filepath{converter/gui/main\_window.py}, GPL-compatible, richest widget set for pipeline UIs, Apple Silicon arm64 wheels available on PyPI.
-\item[Distribution] \textbf{Hybrid packaging by platform} --- macOS uses a native app bundle / DMG workflow, while Windows uses a fully offline PyInstaller one-folder build wrapped by Inno Setup into a single \code{.exe}. Five ML models are bundled with the installed application on both platforms: Person NER ($\approx$2.2\,GB, HuggingFace snapshot), Provenance NER ($\approx$704\,MB), Contents NER ($\approx$704\,MB), MARC~500 Colophon~ML sentence classifier ($\approx$703\,MB), and Genre~ML classifier ($\approx$703\,MB, used by Stage~3 for P136 fallback). The Windows source bundle used to prepare the offline installer is $\approx$6\,GB compressed and expands to $\approx$9.5\,GB before Inno Setup compression; the resulting \code{MHMPipeline-Setup-0.1.0.exe} is $\approx$4--5\,GB.
+\item[Distribution] \textbf{Hybrid packaging by platform} --- macOS uses a native app bundle / DMG workflow, while Windows uses a fully offline PyInstaller one-folder build wrapped by Inno Setup into a single \code{.exe}. Five ML models are bundled with the installed application on both platforms: Person NER ($\approx$704\,MB, local role-aware \code{models/hebrew-manuscript-joint-ner-v2} directory), Provenance NER ($\approx$704\,MB), Contents NER ($\approx$704\,MB), MARC~500 Colophon~ML sentence classifier ($\approx$703\,MB), and Genre~ML classifier ($\approx$703\,MB, used by Stage~3 for P136 fallback). The Windows source bundle used to prepare the offline installer is $\approx$6\,GB compressed and expands to $\approx$9.5\,GB before Inno Setup compression; the resulting \code{MHMPipeline-Setup-0.1.0.exe} is $\approx$4--5\,GB.
 \item[Build toolchain] \textbf{pkgbuild / productbuild} (macOS, included in Xcode Command Line Tools) and \textbf{PyInstaller + Inno Setup 6} (Windows, free). The Windows build is executed on a Windows host via \filepath{installer/windows/Build Installer.bat}; the Mac host prepares a transport bundle via \filepath{scripts/package\_for\_windows\_build.sh}.
 \item[Project config] A single \code{pyproject.toml} at the repository root replaces all per-module \code{requirements.txt} files and centralises \code{ruff}, \code{mypy}, and \code{pytest} configuration.
 \end{description}
@@ -193,7 +193,7 @@ PyQt6 is selected for the following reasons:
 
 \subsection{Installer Tool Comparison}
 
-The heavy ML dependencies (PyTorch 2.x $\approx$ 2\,GB, HuggingFace Transformers, joint NER model $\approx$ 2.2\,GB) make standard Python freezing tools impractical.
+The heavy ML dependencies (PyTorch 2.x $\approx$ 2\,GB, HuggingFace Transformers, and multi-hundred-MB NER checkpoints) make standard Python freezing tools impractical.
 
 \begin{longtable}{|l|l|l|p{2cm}|l|l|}
 \hline
@@ -291,6 +291,24 @@ The DMG builder creates a temporary writable HFS+ sparse image, copies the compl
 \label{fig:install-flow}
 \end{figure}
 
+\subsection{Collaborative Web Port and Pay-per-Call Inference}
+\label{sec:web-port-deployment}
+
+A sibling project at \code{mhm-pipeline-web} re-exposes the same pipeline as a FastAPI + React browser application for multi-user curator collaboration. The Stage~3--6 logic, ontology files, and safety guards are byte-identical to the desktop tree (re-mirrored via a \code{sync-from-desktop} command); only the Stage~2 inference \emph{host} differs.
+
+\paragraph{Three extraction modes via one environment variable.} The web backend's \code{EXTRACTION\_MODE} environment variable selects between:
+\begin{itemize}
+\item \code{local} --- in-process torch (same as desktop), useful only on dynos with $\geq$2.5\,GB RAM available;
+\item \code{hf-api} --- HuggingFace Inference Providers (works for repos HuggingFace has actually deployed; rejected for our four niche models on the free tier);
+\item \code{modal} --- a single serverless Modal container that loads all four checkpoints and exposes a unified \code{POST /extract} endpoint.
+\end{itemize}
+
+\paragraph{Modal deployment.} The Modal container (\code{mhm-pipeline-web/modal/modal\_app.py}) vendors the desktop's \code{ner/} and \code{converter/authority/} modules verbatim via \code{image.add\_local\_dir(..., copy=True)}, pre-bakes ~3\,GB of weights from public Hugging Face Hub repositories (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, \code{-provenance-ner}, \code{-contents-ner}, \code{-genre-classifier}) into the image at build time, and shares the DictaBERT base across the three derived NER models. Cold start: ~30--60\,s; warm latency: ~300\,ms per record on a CPU-2 container. Cost: approximately \$0.00006 per record (\$30/month free credit covers typical research workloads). The container scales to zero after five minutes of inactivity.
+
+\paragraph{Shared cross-user inference cache.} Every external inference call (NER, classifier, authority lookup) routes through a Postgres \code{inference\_cache} table content-addressed by SHA-256 of canonical query JSON. First team member to resolve a candidate populates the cache; everyone else warm-hits in milliseconds regardless of which inference host originally served the call. The cache contract is host-agnostic and survives EXTRACTION\_MODE flips.
+
+\paragraph{Trust boundary.} The FastAPI backend does \textbf{not} import the Modal app. Communication is HTTPS only --- a single \code{MODAL\_NER\_URL} environment variable points the backend at the deployed endpoint, and the backend posts JSON to \code{<URL>/extract}. This mirrors the same trust contract that separates the pipeline from the eval-agent (CLAUDE.md Rule~48): no Python imports across, only subprocess / filesystem / HTTP. The Modal app is a deploy target, never an import.
+
 \subsection{Bootstrap Scripts}
 \label{sec:bootstrap}
 
@@ -354,7 +372,7 @@ On the first launch after installation, the application detects that the NER mod
 \item[Page 1 --- Welcome] Displays hardware detection results: GPU type (Apple MPS / NVIDIA CUDA / CPU-only), available disk space, and estimated download size. Warns the user if less than 10\,GB of free disk space is available.
 \item[Page 2 --- Model Profile] Displays the three NER models that will be downloaded:
   \begin{itemize}
-    \item \textbf{Person NER model} (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, $\approx$2.2\,GB): DictaBERT-based model that performs PERSON entity detection (NER F1 85.7\%) with keyword-based role classification (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR); runs on MPS, CUDA, or CPU.
+    \item \textbf{Person NER model} (\filepath{models/hebrew-manuscript-joint-ner-v2}, $\approx$704\,MB): DictaBERT-based role-aware BIO model that extracts person spans and roles directly (80.4\% strict span+role F1; 86.8\% name-only F1; 92.6\% role accuracy among matched names on the representative 100-record benchmark; AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR); runs on MPS, CUDA, or CPU.
     \item \textbf{Provenance NER model} (\filepath{ner/provenance\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 561 provenance fields; extracts OWNER, DATE, and COLLECTION entities (95.91\% F1, v2 multi-entity augmented).
     \item \textbf{Contents NER model} (\filepath{ner/contents\_ner\_model.pt}, $\approx$704\,MB): DictaBERT + token-classification head trained on MARC 505 contents fields; extracts WORK, FOLIO, and WORK\_AUTHOR entities (99.99\% F1).
   \end{itemize}
@@ -434,7 +452,7 @@ The application is organised into four horizontal layers. Each layer depends onl
 \hline
 \code{SettingsManager} & Reads/writes \code{QSettings}; exposes typed accessors & Main & All components \\
 \hline
-\code{NerWorker} & Runs 3 NER pipelines sequentially (person, provenance, contents); accepts \code{provenance\_model\_path} and \code{contents\_model\_path} constructor params; uses \code{\_split\_provenance\_text()} for provenance preprocessing; provenance and contents models share DictaBERT base via \code{NERInferencePipeline.from\_shared\_base()} & Worker & Core NER modules \\
+\code{NerWorker} & Runs 3 NER pipelines sequentially (role-aware person, provenance, contents); accepts \code{provenance\_model\_path} and \code{contents\_model\_path} constructor params; uses \code{\_split\_provenance\_text()} for provenance preprocessing; provenance and contents models share DictaBERT base via \code{NERInferencePipeline.from\_shared\_base()} & Worker & Core NER modules \\
 \hline
 \code{AuthorityWorker} & Matches NER entities (persons, OWNER, WORK\_AUTHOR) and MARC name fields against Mazal (SQLite) + VIAF (SRU) + Wikidata (SPARQL); matches MARC places against KIMA (SQLite). v1.10 (\filepath{CLAUDE.md} rule~49): expanded MARC field coverage from 100/110/111/700/710/711 to also include 600/610 (subject persons/orgs), 651 (geographic subjects, routed to KIMA), 752 (hierarchical place names, most-specific component via \code{handle\_752}), and 800/810/811 (series added entries, carry a \code{field} annotation so the matcher tags them as \code{role="series\_contributor"}). The same revision adds a Wikidata \code{find\_dates\_by\_qid} P569/P570 backfill that feeds the role-aware date-conflict guard with biographical years even when only the Wikidata SPARQL path resolved the candidate, and introduces \code{role="subject"} for MARC~600 subject persons that suppresses the death-side date check while keeping the universal birth check & Worker & Core authority module, \code{WikidataMatcher} \\
 \hline
@@ -868,6 +886,9 @@ Approval of an extracted entity or authority match is no longer scoped to a sing
 
 \paragraph{AI-assisted authority verification.}
 Stage~3 authority matches can be sent for an independent second opinion via a ``\emph{Verify with AI agent}'' button on the Authority panel, mirroring the existing Stage~2 button. The button invokes the sibling eval-agent (a separate tool that reads pipeline JSON from disk; see Rule~48) whose \code{authority} evaluator reads \code{authority\_enriched.json} and judges whether each resolved record (Mazal / VIAF / Wikidata / KIMA) is the correct authority for the catalogued entity. The agent's verdicts surface in \code{AiVerificationDialog}, whose approve action writes through the same shared \code{approvals.json} store described above, so accepting the agent's judgement is the same act as approving in the manual editor.
+
+\paragraph{LLM evaluation orchestrator.}
+The Stage~2 panel also exposes a ``\emph{Plan with AI orchestrator}'' action once \code{ner\_results.json} exists. This does not replace the deterministic pipeline stages or the strict benchmark scripts. It launches the bundled sibling eval-agent via subprocess as \code{python -m eval\_agent.cli orchestrate}, passes the current pipeline output directory and repository root, and asks a Gemini 3.x orchestrator to choose the next evaluation operation from an allowlisted tool catalogue. The default mode is \code{plan\_only}: tools may inspect eval-agent state, latest reports, Gemini benchmark metrics, failed candidates, and feature-list status, but cannot run new evaluations or mutate pipeline files. Explicit CLI modes \code{-{}-supervised} and \code{-{}-autonomous} widen the eval-agent-side policy to controlled execution/proposal tools; the GUI uses only the read-only mode. Every orchestrator session writes append-only traces, decisions, and \code{final\_report.md} under \code{state/orchestrator/sessions/<timestamp>/}. The Rule~48 trust boundary remains unchanged: the MHM app imports no eval-agent Python code and communicates only through command-line arguments, environment variables, and files.
 
 \subsection{Wikidata Modification Safety Chain (CLAUDE.md Rule 38)}
 \label{sec:rule38}
@@ -1451,7 +1472,7 @@ Windows & 10 64-bit & 11 64-bit & PowerShell 5.1+ \\
 \hline
 Disk (app) & 3\,GB & 5\,GB & App + CPU PyTorch \\
 \hline
-Disk (models) & 3.6\,GB & 3.6\,GB & 3 NER models: person ($\sim$2.2\,GB), provenance ($\sim$704\,MB), contents ($\sim$704\,MB) \\
+Disk (models) & 2.2\,GB & 3.0\,GB & 3 NER models: person ($\sim$704\,MB), provenance ($\sim$704\,MB), contents ($\sim$704\,MB) \\
 \hline
 RAM & 16\,GB & 32\,GB & For NER batch inference \\
 \hline
@@ -1537,6 +1558,8 @@ v2.1 & Stage~3 reach + tooltips & MARC field coverage expansion (\filepath{CLAUD
 v2.2 & AI verification: novelty + cache control & \code{AiVerificationDialog}'s ``What the AI thought'' table grows a ``\textbf{New info}'' column (\filepath{CLAUDE.md} rule~52): for every verdict the AI rated ``Looks right'' (and only those), the candidate text is compared against the source manuscript's structured catalog fields (MARC 100/110/700/710 contributors, 245 title, 600/610/650/651 subjects, 655 genre, 505 contents, 561/541 ownership). A new \code{MarcStructuredIndex} helper performs tolerant bidirectional substring matching; MARC inverted ``Surname, Given'' tokens are exploded into both orderings so the form NER emits (``Given Surname'') still matches. A ``Show only new info'' filter chip and a ``\textbf{Re-check (ignore cache)}'' toggle next to the Verify button (panel-level) let curators re-run the same prediction set with \code{--no-cache} when they suspect the verdict cache is stale; the flag plumbs through \code{EvalAgentWorker.use\_cache} into the subprocess argv. Every dialog widget (incl.\ \code{JsonTreeViewer}) now reads colours from \code{theme.ui()} so dark/light mode renders cleanly. +24 unit tests (884~$\to$~915 across dialog suite). & May 2026 \\
 \hline
 v2.3 & Agentic eval-agent + authority eval + shared approval store & The sibling eval-agent (reads pipeline JSON, no Python coupling) moves from a flat LLM-as-judge workflow to a \emph{gated ReAct tool-loop}: a cheap tier-1 model judges every candidate in one shot, and only \emph{abstain}/\emph{partial} verdicts enter a loop where the model calls \code{fetch\_marc\_field}, \code{expand\_note}, \code{list\_record\_entities}, and \code{lookup\_authority} (VIAF/Wikidata) before escalating once to a stronger model. \code{-{}-linear} keeps the reproducible single-shot path; \code{-{}-agentic-all} routes every candidate through the loop; both the tier-1 and escalation models are user-configurable in Settings. A new \code{authority} evaluator reads \code{authority\_enriched.json} and judges whether each Stage~3 match (Mazal/VIAF/Wikidata/KIMA) is the correct authority record for the entity, exposed via a ``\emph{Verify with AI agent}'' button on the Authority panel mirroring the Stage~2 button. A single \code{approvals.json} sidecar becomes the source of truth for curator-approved entities and matches (canonical key = control-number + group + role/type + normalised text); the NER editor, authority editor, and AI-verdict UI all read/write it, kept in sync live by a file watcher, supporting a ``review once, trust everywhere'' workflow. The downstream Wikidata-export gate is unchanged (still filters to approved). & May 2026 \\
+\hline
+v2.4 & LLM orchestrator harness for evaluation planning & The sibling eval-agent gains \code{eval\_agent.cli orchestrate}: a true LLM orchestration loop inspired by code-agent harnesses. Gemini emits strict JSON turns containing either one proposed tool call or a final report; Python validates each turn against a policy layer, runs only allowlisted tools, and records \code{trace.jsonl}, \code{decisions.jsonl}, and \code{final\_report.md} under \code{state/orchestrator/sessions/<ts>/}. The default GUI path is read-only \code{plan\_only}, surfaced as ``\emph{Plan with AI orchestrator}'' on the Stage~2 panel, so curators can ask what benchmark/eval operation should come next without risking hidden writes. CLI-only \code{-{}-supervised} and \code{-{}-autonomous} modes are explicit opt-ins for controlled eval-agent execution/proposal tools. & May 2026 \\
 \hline
 \end{longtable}
 

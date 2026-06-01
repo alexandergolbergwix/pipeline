@@ -100,7 +100,7 @@ This document defines the Mapping Hebrew Manuscripts (MHM) MARC-to-RDF Conversio
 
 \begin{enumerate}
 \item \textbf{MARC Parser and Field Decomposer} --- reads binary MARC (\code{.mrc}), CSV, and TSV files, extracting structured data from more than 30 MARC fields and subfields.
-\item \textbf{Named Entity Recognition (NER) System} --- a three-model deep-learning pipeline: (1)~a DictaBERT-based person NER model (85.7\% F1) with keyword-based role classification that extracts person names and roles (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR) from note fields (MARC 500, 520, 545, 546, 561, 957); (2)~a provenance NER model (93.96\% F1) that extracts OWNER, DATE, and COLLECTION entities from MARC 561; and (3)~a contents NER model (99.99\% F1) that extracts WORK, FOLIO, and WORK\_AUTHOR entities from MARC 505.
+\item \textbf{Named Entity Recognition (NER) System} --- a three-model deep-learning pipeline: (1)~a DictaBERT-based role-aware person NER model (80.4\% strict span+role F1; 86.8\% name-only F1; 92.6\% role accuracy when the name span is matched, measured on the representative 100-record held-out benchmark sample) that extracts person names and roles (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR) directly from BIO role labels in note fields (MARC 500, 520, 545, 546, 561, 957); (2)~a provenance NER model (95.91\% F1, v2 multi-entity augmented) that extracts OWNER, DATE, and COLLECTION entities from MARC 561; and (3)~a contents NER model (99.99\% F1) that extracts WORK, FOLIO, and WORK\_AUTHOR entities from MARC 505.
 \item \textbf{Authority File Integration} --- matching extracted entities against the NLI Authority File (Mazal), VIAF, and KIMA (Hebrew historical place names) for geographic enrichment.
 \item \textbf{RDF Graph Builder with SHACL Validation} --- constructing an OWL/RDF graph aligned with CIDOC CRM and LRMoo, implementing HMO's three-layer architecture (cataloging-bibliographic, philological, epistemological) and BU-CU-PU structural model, with constraint validation via SHACL shapes.
 \end{enumerate}
@@ -173,7 +173,7 @@ The pipeline integrates two major research contributions:
 
 The ontology also defines the BU-CU-PU structural model (Bibliographic Unit, Codicological Unit, Paleographical Unit) for representing the physical composition of manuscripts, and an event-centric approach for production, ownership transfer, and provenance.
 
-\textbf{The NER System (Paper 2).} The Named Entity Recognition system uses distant supervision on MARC structured fields to train models that extract entities from unstructured note fields. The system comprises three models: (1)~a person NER model that identifies person name spans and classifies their roles (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR) using keyword-based heuristics on Hebrew role terms; (2)~a provenance NER model trained on MARC 561 that extracts OWNER, DATE, and COLLECTION entities; and (3)~a contents NER model trained on MARC 505 that extracts WORK, FOLIO, and WORK\_AUTHOR entities. The provenance and contents models share a DictaBERT base to reduce memory usage ($\sim$2.1\,GB $\to$ $\sim$700\,MB).
+\textbf{The NER System (Paper 2).} The Named Entity Recognition system uses distant supervision on MARC structured fields to train models that extract entities from unstructured note fields. The system comprises three models: (1)~a role-aware person NER model that identifies person name spans and classifies their roles (AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR) in a single BIO token-classification head; (2)~a provenance NER model trained on MARC 561 that extracts OWNER, DATE, and COLLECTION entities; and (3)~a contents NER model trained on MARC 505 that extracts WORK, FOLIO, and WORK\_AUTHOR entities. The provenance and contents models share a DictaBERT base to reduce memory usage ($\sim$2.1\,GB $\to$ $\sim$700\,MB).
 
 
 %% ============================================================
@@ -228,7 +228,7 @@ The pipeline consists of six sequential stages, each feeding its output to the n
   The \code{UnifiedReader} detects the input format (binary MARC \code{.mrc}, CSV, or TSV) and produces a stream of \code{MarcRecord} objects. The \code{field\_handlers.py} module then decomposes each record into an \code{ExtractedData} structure containing typed fields for titles, authors, dates, materials, scripts, notes, contents, provenance, and external identifiers.
 
 \item[Stage 2: NER Extraction]
-  Three NER models run sequentially: (1)~the person NER model (\code{JointNERPipeline}) extracts person name spans from note fields (500, 520, 545, 546, 561, 957) and classifies roles using keyword-based heuristics on Hebrew role terms; (2)~the provenance NER model (\code{NERInferencePipeline}) extracts OWNER, DATE, and COLLECTION entities from MARC 561 provenance text; (3)~the contents NER model extracts WORK, FOLIO, and WORK\_AUTHOR entities from MARC 505. All entities are merged into a single list with a \code{source} discriminator (\code{person\_ner}, \code{provenance\_ner}, \code{contents\_ner}).
+  Three NER models run sequentially: (1)~the person NER model (\code{JointNERPipeline}) extracts person name spans from note fields (500, 520, 545, 546, 561, 957) with roles encoded directly in the token labels; (2)~the provenance NER model (\code{NERInferencePipeline}) extracts OWNER, DATE, and COLLECTION entities from MARC 561 provenance text; (3)~the contents NER model extracts WORK, FOLIO, and WORK\_AUTHOR entities from MARC 505. All entities are merged into a single list with a \code{source} discriminator (\code{person\_ner}, \code{provenance\_ner}, \code{contents\_ner}).
 
 \item[Stage 3: Authority Resolution]
   Extracted entity names (persons, places, works) are matched against multiple authority sources: the NLI Mazal authority file (local SQLite database with fuzzy matching), VIAF (public SRU API, persons), and KIMA --- an open, attestation-based database of 48,128 Hebrew historical place names, 100\% Wikidata-linked, queried via a local SQLite index. Matched entities receive stable global identifiers. The stage writes \code{authority\_enriched.json}, which is both the input to Stage~4 and an \emph{evaluation target}: the sibling eval-agent's \code{authority} evaluator reads this file and judges, per match, whether the resolved authority record is the correct real-world entity for the catalogued name (triggered by a ``\emph{Verify with AI agent}'' action on the Authority panel). Curator approval of a match is recorded in the shared \code{approvals.json} sidecar (see \S\ref{sec:inventory}), keyed canonically by control number, group, role/type, and normalised text, so the decision is shared across the manual authority editor and the AI-verdict review surface.
@@ -315,12 +315,27 @@ The pipeline components are implemented as Python modules with well-defined inte
 \item \code{converter.transformer.mapper.MarcToRdfMapper} --- orchestrator
 \item \code{converter.rdf.graph\_builder.GraphBuilder} --- RDF construction
 \item \code{converter.authority.mazal\_matcher.MazalMatcher} --- local authority resolution
-\item \code{ner.inference\_pipeline.JointNERPipeline} --- person NER + keyword-based role classification
+\item \code{ner.inference\_pipeline.JointNERPipeline} --- person NER with role-aware BIO labels
 \item \code{ner.ner\_inference\_pipeline.NERInferencePipeline} --- provenance and contents NER (shared DictaBERT base)
 \item \code{converter.validation.shacl\_validator.ShaclValidator} --- constraint checking
 \end{itemize}
 
 The \code{MarcToRdfMapper} class serves as the main orchestrator, accepting a \code{MarcRecord} and optionally a \code{MazalMatcher} instance, and coordinating the extraction, enrichment, and graph construction process.
+
+\subsection{Deployment Modes for Stage~2 Inference}
+\label{sec:deployment-modes}
+
+The four Stage~2 model checkpoints (joint Person NER, Provenance NER, Contents NER, Genre classifier) can be hosted in three different ways. The application-level code that consumes them is identical; only the inference \emph{host} differs.
+
+\begin{itemize}
+\item \textbf{Desktop (in-process torch).} The macOS DMG and Windows installer bundle the four \code{.pt} checkpoints (~2.5\,GB total) alongside a DictaBERT base directory. \code{JointNERPipeline} and \code{NERInferencePipeline} call \code{torch.load} directly on those bundled files and use the MPS$\rightarrow$CUDA$\rightarrow$CPU device chain. This is the canonical research deployment: offline, no per-call cost, ~50\,ms per record on Apple Silicon. The cross-platform parity contract (CLAUDE.md Rule~46) forbids dropping a model from either installer.
+
+\item \textbf{Collaborative web port (FastAPI backend).} A sibling project at \code{mhm-pipeline-web} exposes the same pipeline as a FastAPI service with a React/TypeScript browser frontend. The backend selects between three Stage~2 inference backends via an \code{EXTRACTION\_MODE} environment variable (\code{local}, \code{hf-api}, or \code{modal}). The remaining stages (3--6) are byte-identical to the desktop tree, re-mirrored through a \code{sync-from-desktop} command.
+
+\item \textbf{Pay-per-call inference backend (Modal).} For web deployments that cannot bundle ~2.5\,GB of weights into the application slug, all four checkpoints are also published as public Hugging Face Hub repositories (\code{alexgoldberg/hebrew-manuscript-joint-ner-v2}, \code{-provenance-ner}, \code{-contents-ner}, \code{-genre-classifier}) and packaged in a single serverless Modal container (\code{mhm-pipeline-web/modal/modal\_app.py}). The container loads all four models at warm-up, shares the DictaBERT base across the three derived NER models, and exposes one \code{POST /extract} endpoint that returns Person, Provenance, Contents, and Genre output in one round-trip per record. Cold start: ~30--60\,s for the four-model load; warm latency: ~300\,ms per record on a CPU-2 container. Cost is approximately \$0.00006 per record, well under \$1 for a 10{,}000-record corpus; Modal's free-tier credit covers typical research workloads entirely. The Modal container vendors the same desktop \code{JointNERPipeline} / \code{NERInferencePipeline} / \code{GenreClassifier} loader code via \code{image.add\_local\_dir(..., copy=True)}; weights are baked into the image at build time so cold start is just \code{torch.load}, not a network fetch.
+\end{itemize}
+
+A shared cross-user inference cache (Postgres JSONB table \code{inference\_cache}, content-addressed by SHA-256 of canonical query JSON) routes every external NER, classifier, and authority call through a single lookup function. The first team member to resolve a candidate populates the cache; everyone else warm-hits in milliseconds regardless of which inference host actually served the original call. The desktop application uses on-disk verdict caches per matcher; the web port uses the same logical contract via the shared DB table.
 
 
 %% ============================================================
@@ -580,29 +595,29 @@ Output: {"text": "Moreh Nevukhim", "type": "WORK", "source": "contents_ner"}
 \draw[arrow] (prov) -- (out);
 \draw[arrow] (cont) -- (out);
 
-\node[note, above=0.1cm of person] {85.7\% F1};
+\node[note, above=0.1cm of person] {80.3\% span+role F1};
 \node[note, right=0.1cm of prov] {95.91\% F1};
 \node[note, right=0.1cm of cont] {99.99\% F1};
 
 \end{tikzpicture}
-\caption{Three-model NER architecture. Person NER uses keyword-based role classification; provenance v2 and contents models each load independent DictaBERT instances.}
+\caption{Three-model NER architecture. Person NER uses role-aware BIO token labels; provenance v2 and contents models each load independent DictaBERT instances.}
 \label{fig:ner-architecture}
 \end{figure}
 
 \subsubsection{Model 1: Person NER (JointNERPipeline)}
 
-The person NER model is based on DictaBERT, fine-tuned for token classification with BIO labelling (B-PERSON, I-PERSON, O) on a dataset of 7,580 samples derived through distant supervision from 123,621 MARC records.
+The person NER model is based on DictaBERT, fine-tuned for role-aware token classification with BIO labels such as B-AUTHOR, I-AUTHOR, B-OWNER, and I-OWNER. It is trained on an isolated v3 dataset combining the earlier multi-entity person corpus with relator-derived role examples, keeping the legacy bundle name \code{hebrew-manuscript-joint-ner-v2} so application code can continue to instantiate \code{JointNERPipeline}.
 
 Key characteristics:
 \begin{itemize}
 \item Handles 1--10 persons per text segment
-\item Multi-entity training improves performance by +2.15\% over single-entity training
-\item F1 score: 85.7\% (HuggingFace model: \code{alexgoldberg/hebrew-manuscript-joint-ner-v2})
+\item Multi-entity and relator-derived role examples improve direct role supervision
+\item F1 score on the representative 100-record held-out benchmark sample: 80.4\% strict span+role; 86.8\% name-only; 92.6\% role accuracy among matched names (local model directory: \code{models/hebrew-manuscript-joint-ner-v2})
 \end{itemize}
 
-\subsubsection{Role Classification: Keyword-Based Heuristics}
+\subsubsection{Role Classification: Role-Aware BIO Labels}
 
-After person NER identifies person name spans, role classification uses keyword-based heuristics on Hebrew role terms in the surrounding context (rather than a separate neural classifier). The \code{\_classify\_role\_by\_keywords()} function detects Hebrew terms associated with each role category. It classifies each person into one of six roles:
+The current person NER checkpoint predicts the role jointly with each name span, so a span labelled B-TRANSCRIBER/I-TRANSCRIBER is emitted directly as a TRANSCRIBER entity. \code{JointNERPipeline} still retains the old keyword fallback for legacy checkpoints, but the bundled application model uses neural role-aware BIO labels for the six production roles:
 
 \begin{longtable}{|l|p{8cm}|}
 \hline
@@ -679,10 +694,10 @@ The \code{PostProcessingRules} module applies rule-based corrections to person N
 \textbf{Task} & \textbf{Model} & \textbf{Score} & \textbf{Training Data} \\
 \midrule
 Person NER & DictaBERT (baseline) & 80.42\% F1 & General Hebrew \\
-Person NER & HalleluBERT (single) & 86.56\% F1 & 8,186 single-person \\
-\textbf{Person NER} & \textbf{DictaBERT (multi, v2)} & \textbf{85.7\% F1} & \textbf{7,580 mixed} \\
+Person NER & HalleluBERT (single) & 86.56\% name-only F1 & 8,186 single-person \\
+\textbf{Person NER v3} & \textbf{DictaBERT role-aware BIO} & \textbf{80.4\% span+role F1; 86.8\% name-only F1} & \textbf{6,823 train / 911 val / 904 test; representative 100-record benchmark} \\
 \midrule
-Role & Keyword heuristics & --- & Hebrew role terms \\
+Role & BIO token labels & 92.7\% given matched name & Six production roles \\
 \midrule
 \textbf{Provenance NER v2} & \textbf{DictaBERT + NER head} & \textbf{95.91\% F1} & \textbf{12.1K (28.4\% multi-entity)} \\
 \textbf{Contents NER} & \textbf{DictaBERT + NER head} & \textbf{99.99\% F1} & \textbf{10K from 123K MARC} \\
@@ -768,8 +783,8 @@ The NER system is invoked through three pipeline classes, orchestrated by \code{
 from ner.inference_pipeline import JointNERPipeline
 from ner.ner_inference_pipeline import NERInferencePipeline
 
-# Model 1: Person NER (keyword-based role classification)
-person_pipeline = JointNERPipeline(model_path="alexgoldberg/hebrew-manuscript-joint-ner-v2")
+# Model 1: Person NER (role-aware BIO labels)
+person_pipeline = JointNERPipeline(model_path="models/hebrew-manuscript-joint-ner-v2")
 person_results = person_pipeline.process(text)
 # Returns: [{"person": "name", "role": "AUTHOR", "source": "person_ner"}]
 
@@ -1466,7 +1481,7 @@ Each pipeline run writes a sequence of intermediate JSON artefacts beside the ch
 \endhead
 \hline
 \endfoot
-\filepath{pipeline/ner/joint\_entity\_role\_model/best\_model.pt} & 2.1\,GB & Person NER model (joint) \\
+\filepath{pipeline/models/hebrew-manuscript-joint-ner-v2/model.safetensors} & 701\,MB & Person NER v3 role-aware BIO model (80.4\% span+role F1 on representative benchmark) \\
 \hline
 \filepath{pipeline/ner/provenance\_ner\_model.pt} & 704\,MB & Provenance NER model (OWNER/DATE/COLLECTION, 93.96\% F1) \\
 \hline
@@ -1858,7 +1873,7 @@ LAST  P8189  "990000623390205171"
 
 \begin{itemize}
 \item Three-model NER system integrated into pipeline (person + provenance + contents)
-\item Keyword-based role classification replacing neural classifier
+\item Role-aware person BIO token classification replacing the legacy keyword fallback for bundled models
 \item VIAF API client with caching (implemented)
 \item KIMA place authority matching (implemented)
 \item Authority matching extended to OWNER and WORK\_AUTHOR entities
