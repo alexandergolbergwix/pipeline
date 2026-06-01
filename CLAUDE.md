@@ -305,9 +305,16 @@ The pipeline uses three NER models. Keep these F1 scores current:
 
 | Model | File | F1 | Entity types |
 |---|---|---|---|
-| Person NER | `alexgoldberg/hebrew-manuscript-joint-ner-v2` (HuggingFace) | 85.70% | PERSON (with roles) |
+| Person NER v3 | `alexgoldberg/hebrew-manuscript-joint-ner-v2` (HuggingFace/local `models/hebrew-manuscript-joint-ner-v2`) | 80.4% strict `(name, role)` F1; 86.8% name-only F1; 92.6% role accuracy among matched names | PERSON with roles: AUTHOR, TRANSCRIBER, OWNER, CENSOR, TRANSLATOR, COMMENTATOR |
 | Provenance NER v2 | `ner/provenance_ner_model.pt` (704 MB) | 95.91% (best fold 96.17%) | OWNER, DATE, COLLECTION |
 | Contents NER | `ner/contents_ner_model.pt` (704 MB) | 99.99% | WORK, FOLIO, WORK_AUTHOR |
+
+Person NER v3 numbers come from the representative 100-record benchmark run
+`eval/gemini_benchmark/results/person_ner/20260529T062556Z`: trained
+`TP=88 FP=23 FN=20`, strict F1 `80.4%`; Gemini 0-shot `50.6%`; Gemini
+3-shot `51.9%`. Eval-agent candidate-level "looks right" rates from that run
+are audit signals only, not model F1, because they do not count all missing
+gold entities as false negatives and can accept plausible false positives.
 
 Provenance v2 was trained on 12,100 samples (28.4% multi-entity augmented) with `max_length=128`. The v1 model (93.96% F1, `max_length=64`) is superseded.
 
@@ -2339,3 +2346,114 @@ Tests: `tests/unit/controller/test_approval_store.py` (13),
 `tests/unit/gui/dialogs/test_verdict_approval.py` (10),
 `tests/unit/gui/widgets/test_editor_approval_sync.py` (10);
 eval-agent `tests/test_authority_evaluator.py` (12).
+
+### 55. Gemini benchmark default is `gemini-3.5-flash` (added 2026-05-29)
+
+All Gemini-based model evaluation defaults in this repo use
+`gemini-3.5-flash`. This includes the Gemini benchmark scripts under
+`eval/gemini_benchmark/` and the eval-agent judge defaults documented in
+`.claude/commands/eval-agent.md`, `.codex/commands/eval-agent.md`, and
+`.codex/skills/eval-agent/SKILL.md`.
+
+Do **not** change benchmark or eval-agent defaults back to
+`gemini-2.5-flash`. When a different model is needed for an intentional
+comparison, pass it explicitly with `--gemini-model` or `--judge` and record
+that override in the run metadata/report.
+
+### 56. Person NER benchmark reporting uses strict gold F1 (added 2026-05-29)
+
+When reporting person NER v3 quality, use the strict benchmark report, not the
+eval-agent candidate-level acceptance rate. The canonical representative run is
+`eval/gemini_benchmark/results/person_ner/20260529T062556Z`:
+
+| Method | TP | FP | FN | Strict `(name, role)` F1 |
+|---|---:|---:|---:|---:|
+| trained v3 | 88 | 23 | 20 | 80.4% |
+| Gemini 0-shot | 67 | 90 | 41 | 50.6% |
+| Gemini 3-shot | 68 | 86 | 40 | 51.9% |
+
+The eval-agent verdict rate asks whether each predicted candidate looks
+plausible in context. It is useful for triage, but it is not a gold-set F1
+metric and must not be used to claim Gemini is better than the trained model
+when strict gold matching says otherwise.
+
+### 57. eval-agent LLM orchestrator harness (added 2026-05-30)
+
+The eval-agent now includes a true LLM orchestration loop exposed as
+`python -m eval_agent.cli orchestrate`. This is separate from the
+candidate-level judge. The orchestrator chooses the next evaluation
+operation; Python enforces a hard policy layer and executes only
+allowlisted tools.
+
+Core contract:
+
+1. The MHM Pipeline app still obeys Rule 48: no Python imports from the
+   sibling eval-agent. The app launches the orchestrator by subprocess,
+   passes `--state-dir`, `--pipeline-root`, and `--pipeline-output`, and
+   reads the resulting files.
+2. The GUI uses read-only `--plan-only` mode from the Stage 2 button
+   **"Plan with AI orchestrator"**. This mode can inspect state,
+   reports, benchmark metrics, failed candidates, and feature-list
+   status, but cannot run a new evaluation or mutate pipeline files.
+3. CLI-only `--supervised` and `--autonomous` modes are explicit opt-ins
+   that widen the eval-agent policy to controlled execution/proposal
+   tools such as `run_eval_agent`, `regenerate_report`, and
+   `write_plan_note`.
+4. Every session writes append-only evidence under
+   `state/orchestrator/sessions/<timestamp>/`: `trace.jsonl`,
+   `decisions.jsonl`, and `final_report.md`.
+5. The orchestrator default judge is `gemini-3.5-flash`; do not
+   silently downgrade to Gemini 2.5.
+
+### 58. Web port — Modal Inference Backend for Stage 2 (added 2026-06-01)
+
+The collaborative web port at `/Users/alexandergo/Documents/Doctorat/mhm-pipeline-web`
+has shipped a third extraction backend, **Modal**, after HF Inference
+Providers proved a dead end for our four models on the free serverless
+tier (HF refuses to deploy `trust_remote_code=true` custom-code repos
+for Provenance/Contents, and won't allocate hardware for low-traffic
+standard repos like Person/Genre — both stay `inference: None`
+indefinitely).
+
+The Modal app lives at `mhm-pipeline-web/modal/modal_app.py`. It
+vendors the desktop's `ner/` + `converter/authority/` modules via
+`image.add_local_dir(..., copy=True)`, pre-bakes ~3 GB of weights from
+HF Hub into the image at build time, and exposes one
+`MhmNer.web` ASGI endpoint with `/extract` (POST) + `/health` (GET).
+All four desktop pipelines (`JointNERPipeline`,
+`NERInferencePipeline × 2`, `GenreClassifier`) load in one container
+and share the DictaBERT base.
+
+The web backend's `extraction_backend.ExtractionMode` literal grew a
+`"modal"` value; `build_backend()` lazy-imports
+`extraction_backend_modal.ModalInferenceBackend` which POSTs to
+`MODAL_NER_URL/extract`. Switch with one env:
+
+```bash
+heroku config:set EXTRACTION_MODE=modal MODAL_NER_URL=https://<workspace>--mhm-ner-mhmner-web.modal.run
+```
+
+Desktop invariants preserved: this is a web-only addition. The
+desktop pipeline is unchanged — it still loads the four `.pt` files
+locally and that's exactly the inference code the Modal app vendors
+verbatim. No fork, no drift; the Modal image is just "the desktop
+inference code, on someone else's box, billed per second."
+
+Why Modal vs HF Endpoints (the alternative we considered):
+
+| | Modal | HF Endpoints |
+|---|---|---|
+| Pay-per-call | per-second container time | per-minute warm |
+| Custom code | native | paid tier only |
+| 4 models, 1 container | yes | no — 4× cold starts |
+| Cold start | ~30-60s | ~30-60s |
+| Sporadic-use cost | ~$0 (free credit covers) | $5-15/endpoint/mo |
+
+Web-side rules covering the same surface live at
+`mhm-pipeline-web/CLAUDE.md::Rule W-11` (three backends, one selector),
+`W-12` (shared cross-user inference cache routes every external
+inference call through `inference_cache.cache_lookup_or_call`),
+`W-13` (AI verdicts persist to `AuthorityMatch.payload.ai_verdict`),
+`W-14` (AI verify state_dir per-RUN not per-session — fixes the
+cache-miss bug where every modal open got a fresh empty cache),
+`W-15` (modal/ is a deploy target, never an import).
