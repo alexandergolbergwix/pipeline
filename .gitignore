@@ -178,3 +178,18 @@ eval/gemini_benchmark/results/
 docs/presentations (backup)/
 
 *gemini.env
+
+# ─── Added 2026-06-01 ─────────────────────────────────────────────────
+
+# Personal interview prep — never push (CV/job-search bucket; same
+# rationale as docs/cv/ above).
+docs/interview/
+
+# HuggingFace model snapshots dropped into the repo root for local
+# inference (~700 MB+). Bundled into the .app at build time; never
+# in git.
+models/
+
+# NER training experiment runs (~1.4 GB; regenerable from scripts in
+# ner/train_*.py).
+ner/experiments/
