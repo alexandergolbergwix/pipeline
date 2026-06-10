@@ -294,21 +294,23 @@
 % here; removed it from Slide 12 where it had been duplicated.
 \begin{frame}[t]{MARC becomes Linked Open Data, in three layers}
   \begin{itemize}
-    \item \textbf{HMO graph (RDF).} The full scholarly graph. Manuscript, works, persons, places, copying and ownership events, supporting evidence. Standard RDF file.
+    \item \textbf{HMO graph (RDF).} The full scholarly graph. Manuscript, works, persons, places, copying and ownership events, supporting evidence. Standard RDF file --- now persisted in PostgreSQL, always available.
     \item \textbf{Project Wikibase} (\texttt{mhm-hmo.wikibase.cloud}). Same graph, familiar browse-and-edit interface --- no ontology class is dropped.
     \item \textbf{Public Wikidata.} A projection. After all model improvements, $\sim$87\% of the ontology's classes are reachable via Wikidata, with $\sim$28.1 claims per manuscript on average.
   \end{itemize}
   \vfill
-  {\footnotesize One source, three audiences --- domain experts, cataloguers, and the open web.}
+  {\footnotesize One source, three audiences --- domain experts, cataloguers, and the open web. All three are queryable from the \textbf{Linked Data Explorer} tab.}
 \end{frame}
 \note{\begin{hebrew}
 התרומה השנייה של הפייפליין היא בעצם שלוש בו זמנית: \emph{מאותו צינור עיבוד יוצאים שלושה ייצוגים של נתונים מקושרים פתוחים}, כל אחד מתאים לקהל אחר.
 \par
-\emph{הראשון, גרף ה-HMO.} זה הייצוג המחקרי המלא, מבוסס על האונטולוגיה שלנו לכתבי יד עבריים. הוא שומר מבנה עשיר --- כתב היד, החיבורים שבתוכו, האנשים, המקומות, אירועים של העתקה ובעלות, והראיות שעליהן הטענות נשענות. הוא נשמר כקובץ RDF סטנדרטי.
+\emph{הראשון, גרף ה-HMO.} זה הייצוג המחקרי המלא, מבוסס על האונטולוגיה שלנו לכתבי יד עבריים. הוא שומר מבנה עשיר --- כתב היד, החיבורים שבתוכו, האנשים, המקומות, אירועים של העתקה ובעלות, והראיות שעליהן הטענות נשענות. החידוש: הגרף נשמר עכשיו גם ב-PostgreSQL --- כלומר הוא זמין לאחר כל הפעלה מחדש של השרת, ללא צורך ב-rebuild נוסף.
 \par
 \emph{השני, ויקיבייס פרויקטלי.} אותו גרף HMO נטען לויקיבייס ייעודי בכתובת \texttt{mhm-hmo.wikibase.cloud}, כך שחוקרים וקטלוגנים יכולים לדפדף, לחפש ולערוך את כל הישויות בממשק מוכר --- בלי לאבד אף קלאסה מהמבנה המחקרי.
 \par
 \emph{השלישי, ויקינתונים הציבורי.} כאן מתבצעת הקרנה. אחרי כל שיפורי המודל, כ-87 אחוז ממחלקות האונטולוגיה ניתנות להגעה דרך ויקינתונים, ובממוצע 28.1 טענות לכל כתב יד --- כך שגם מי שמכיר רק את ויקינתונים מקבל תמונה מחקרית עשירה.
+\par
+שלושת השכבות האלה אינן רק פורמטי ייצוא --- הן ניתנות לשאילתה ישירות מ\textbf{לשונית ה-Linked Data Explorer} במערכת, כפי שנראה בשקף הבא.
 \par
 המסר: \emph{הופכים את ה-MARC לנתונים מקושרים פתוחים, ולא מאבדים בדרך לא את העומק המחקרי ולא את הנגישות הציבורית.}
 \end{hebrew}}
@@ -352,7 +354,7 @@
 \end{hebrew}}
 
 % ─── Slide 11 — Research questions enabled ────────────────────
-\begin{frame}[t]{New questions become askable}
+\begin{frame}[t]{New questions become askable --- now with a live interface}
   \begin{itemize}
     \item Which works \emph{travel together} in the same manuscripts? Textual clusters emerge from the corpus itself.
     \item Whose name \emph{reappears across collections}? --- the social network of manuscript production and transmission.
@@ -360,16 +362,18 @@
     \item How did manuscripts move between places and periods?
   \end{itemize}
   \vfill
-  {\footnotesize Infrastructure for research --- not the conclusion of research.}
+  {\footnotesize \textbf{Linked Data Explorer} tab: three-layer SPARQL console (HMO graph / Wikibase / Wikidata) with 8 pre-built scholarly templates. Every entity shown was human-reviewed in Wikidata Studio.}
 \end{frame}
 \note{\begin{hebrew}
 ברגע שהפלט של הפייפליין הוא נתונים מקושרים פתוחים --- ולא רק רשומות MARC --- אפשר לשאול שאלות שקשה מאוד או בלתי-אפשרי לשאול מן הקטלוג המקורי.
 \par
 אפשר לבדוק \emph{אילו חיבורים מופיעים יחד} באותם כתבי יד, ולזהות אשכולות טקסטואליים מתוך הקורפוס עצמו. אפשר \emph{לעקוב אחרי אנשים} --- מעתיקים, בעלים, נמענים --- שמופיעים בכמה אוספים, ולשרטט את הרשת החברתית של ייצור והעברה של כתבי יד. אפשר \emph{לבחון שרשראות בעלות} ולשאול איך כתבי יד עברו בין מקומות, משפחות וספריות לאורך מאות שנים.
 \par
-חשוב להדגיש שמה שעושה את השאלות האלה אפשריות זה לא רק \emph{הפרסום} בשלוש השכבות (HMO / ויקיבייס פרויקטלי / ויקינתונים), אלא גם \emph{האמון} שנוצר ב-Wikidata Studio --- כל ישות שמופיעה בגרף עברה דרך סקירת בני אדם, עם כל הראיות פרושות מולם. חוקר שמריץ שאילתת SPARQL על הפלט שלנו יודע שהקישורים שמאחורי כל מזהה נבחנו, ולא רק נחושו.
+\textbf{חידוש: לשונית ה-Linked Data Explorer.} השאלות האלה כבר לא תיאורטיות בלבד --- ניתן לשאול אותן ישירות מהממשק. הלשונית מציגה קונסולת SPARQL בשלוש שכבות: גרף ה-HMO בתוך המערכת (rdflib), ויקיבייס פרויקטלי (אם מוגדר), וויקינתונים הציבורי. שמונה תבניות שאילתה מוכנות מראש מכסות את השאלות המרכזיות: אשכולות חיבורים, רשת מעתיקים, שרשראות בעלות, ופיזור גיאוגרפי.
 \par
-במובן הזה, הפייפליין הוא לא סוף המחקר --- הוא התשתית שמאפשרת מחקר.
+בראש הלשונית מוצג כותרת המקורות: כמה כתבי יד, חיבורים, אנשים, מקומות וטריפלים בגרף --- ותג אמינות שמאשר שכל הישויות המוצגות עברו סקירת אדם ב-Wikidata Studio. חוקר שמריץ שאילתת SPARQL על הפלט שלנו יודע שהקישורים שמאחורי כל מזהה נבחנו, ולא רק נחושו.
+\par
+במובן הזה, הפייפליין הוא לא סוף המחקר --- הוא התשתית שמאפשרת מחקר. עכשיו, כלי המחקר עצמו מובנה בתוכו.
 \end{hebrew}}
 
 % ─── Slide 12 — Summary: four contributions ────────────────────
@@ -381,8 +385,8 @@
   \begin{enumerate}
     \item \textbf{Authority enrichment as the primary engine.}\\
       13 MARC fields against 4 authorities, with VIAF cluster harvest and Wikidata date back-fill.
-    \item \textbf{LOD publication in three layers.}\\
-      HMO RDF, project Wikibase, Wikidata --- one pipeline, three audiences.
+    \item \textbf{LOD publication in three layers + Linked Data Explorer.}\\
+      HMO RDF (persisted in PostgreSQL), project Wikibase, Wikidata --- one pipeline, three audiences, one live SPARQL console.
     \item \textbf{Wikidata Studio --- a research instrument.}\\
       Three-axis review, biodata comparison, 14 pre-save checks, resumable state.
     \item \textbf{The eval-agent --- extraction, authority audit, and Auto-fix.}\\
@@ -399,7 +403,7 @@
 \par
 \emph{ראשית --- העשרת סמכות כמנוע העיקרי.} זה המהלך שמייצר את רוב הטענות החדשות לכל כתב יד, עם קציר אשכול VIAF והשלמת תאריכים מוויקינתונים.
 \par
-\emph{שנית --- MARC נעשה לנתונים מקושרים פתוחים בשלושה ייצוגים.} גרף HMO מלא לחוקר המומחה, ויקיבייס פרויקטלי לדפדוף ועריכה, וויקינתונים לקהל הציבורי. אותו צינור עיבוד, שלושה ערוצי הפצה.
+\emph{שנית --- MARC נעשה לנתונים מקושרים פתוחים בשלושה ייצוגים, ועכשיו גם ניתן לשאילתה ישירה.} גרף HMO מלא לחוקר המומחה (שמור ב-PostgreSQL ונשאר זמין גם לאחר הפעלה מחדש), ויקיבייס פרויקטלי לדפדוף ועריכה, וויקינתונים לקהל הציבורי. לשונית ה-Linked Data Explorer מספקת קונסולת SPARQL בשלוש שכבות עם שמונה תבניות שאילתה מוכנות מראש, כך שהשאלות המחקריות שהפייפליין מאפשר אינן תיאורטיות --- הן ניתנות לביצוע ישירות מהממשק.
 \par
 \emph{שלישית --- Wikidata Studio הופך את הפייפליין לכלי מחקרי.} סקירה בשלושה צירים, דיאלוג השוואת ביוגרפיה, tooltip של ביטחון, 14 בדיקות לפני שמירה, ומצב סקירה שאפשר לעצור ולחזור אליו. זה מה שמאפשר לחוקר לסמוך על כל טענה שיוצאת מן המערכת.
 \par
