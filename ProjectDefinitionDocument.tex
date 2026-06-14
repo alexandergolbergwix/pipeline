@@ -416,6 +416,8 @@ Subjects & 600, 650, 651 & subjects (term, type, authority) \\
 \hline
 Provenance & 561 & provenance text \\
 \hline
+Provenance events & 541, 583 & provenance\_events (typed, dated, place-bearing custody events: acquisition place from 541 \$b, conservation/exhibition site from 583 \$j; Rule 60) \\
+\hline
 Digital access & 856 & digital\_url \\
 \hline
 External IDs & 001, 035 & external\_ids dict \\
@@ -477,7 +479,11 @@ The parser handles the following MARC fields:
 \hline
 546 & Language Note & Language and script information; NER extraction target \\
 \hline
+541 & Immediate Source of Acquisition & Source (\$a), address (\$b), method (\$c), date (\$d). \$b yields an \emph{acquisition} provenance event geocoded via KIMA/gazetteer in Stage 3 (Rule 60) \\
+\hline
 561 & Ownership/Custody History & Provenance narrative; NER extraction target \\
+\hline
+583 & Action Note & Action (\$a), site (\$j), jurisdiction (\$h), date (\$c). \$j yields a \emph{conservation}/\emph{exhibition} provenance event geocoded via KIMA/gazetteer in Stage 3 (Rule 60) \\
 \hline
 600 & Subject (Person) & Subject persons; routed through Stage 3 authority matcher with \code{role="subject"} (Rule 49) \\
 \hline

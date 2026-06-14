@@ -103,6 +103,10 @@ class ExtractedData:
     acquisition_source: str | None = None
     related_works: list[dict[str, Any]] = None
     related_places: list[str] = None
+    # Typed, dated, place-bearing custody events (acquisition place from
+    # 541 $b; conservation/exhibition site from 583 $j). Production stays
+    # in ``place``; this carries only the non-production movement events.
+    provenance_events: list[dict[str, Any]] = None
     holding_institution: str | None = None
     shelfmark: str | None = None
     iiif_manifest_url: str | None = None
@@ -155,6 +159,8 @@ class ExtractedData:
             self.related_works = []
         if self.related_places is None:
             self.related_places = []
+        if self.provenance_events is None:
+            self.provenance_events = []
 
     def set_certainty(self, field_name: str, level: str, note: str | None = None):
         """Set certainty level for a field.
@@ -997,6 +1003,120 @@ class FieldHandlers:
         return text.strip() or None
 
     @staticmethod
+    def handle_541_structured(field: MarcField) -> dict[str, str | None]:
+        """Structured acquisition data from MARC 541 (source of acquisition).
+
+        Unlike :meth:`handle_541` (which merges subfields into a single note
+        string for the P7535 provenance text), this preserves the subfields
+        that carry geographic + temporal signal for a custody EVENT:
+
+        * ``$a`` source of acquisition (dealer / donor / institution)
+        * ``$b`` address — the only MARC subfield with a dedicated
+          geographic address for a non-production custody event
+        * ``$c`` method of acquisition (purchase / gift / bequest)
+        * ``$d`` date of acquisition
+        """
+        return {
+            "source": field.get_subfield("a"),
+            "address": field.get_subfield("b"),
+            "method": field.get_subfield("c"),
+            "date": field.get_subfield("d"),
+        }
+
+    @staticmethod
+    def handle_583_structured(field: MarcField) -> dict[str, str | None]:
+        """Structured action data from MARC 583 (action note).
+
+        * ``$a`` action (e.g. "conserved", "digitized", "exhibited")
+        * ``$j`` site of action — the physical location where it took place
+        * ``$h`` jurisdiction — institution responsible for the action
+        * ``$c`` time / date of action
+        """
+        return {
+            "action": field.get_subfield("a"),
+            "site": field.get_subfield("j"),
+            "jurisdiction": field.get_subfield("h"),
+            "date": field.get_subfield("c"),
+        }
+
+    # Common country names — when a postal address ends "City, Country" we
+    # prefer the city, which is more useful for geocoding than the country.
+    _ADDRESS_COUNTRIES = frozenset(
+        {
+            "switzerland", "germany", "france", "italy", "spain", "england",
+            "scotland", "ireland", "netherlands", "belgium", "austria",
+            "poland", "hungary", "czech republic", "russia", "ukraine",
+            "united kingdom", "uk", "united states", "usa", "u.s.a.",
+            "israel", "egypt", "morocco", "turkey", "greece", "portugal",
+            "denmark", "sweden", "norway", "romania", "lithuania", "latvia",
+        }
+    )
+
+    @staticmethod
+    def _city_from_address(address: str | None) -> str | None:
+        """Best-effort city from a postal-address string (no NER).
+
+        MARC 541 $b is a free-form postal address ("458 Yonkers Road,
+        Poughkeepsie, NY 12601"). Split on commas, drop street lines
+        (leading house number) and bare state/postal-code tokens, then
+        return the most city-like remaining component — preferring the
+        last, but stepping back one when the last is a country name
+        ("Zurich, Switzerland" → "Zurich"). Returns ``None`` when nothing
+        usable remains; the caller never fabricates a place.
+        """
+        if not address or not isinstance(address, str):
+            return None
+        candidates: list[str] = []
+        for part in (p.strip() for p in address.split(",")):
+            if not part or re.match(r"^\d", part):
+                continue
+            cleaned = re.sub(r"\s+[0-9][0-9A-Za-z\- ]*$", "", part).strip()
+            if not cleaned or cleaned.isdigit():
+                continue
+            if re.fullmatch(r"[A-Z]{2}\d*", cleaned):  # bare state / postal abbr.
+                continue
+            candidates.append(cleaned)
+        if not candidates:
+            return None
+        if len(candidates) >= 2 and candidates[-1].lower() in FieldHandlers._ADDRESS_COUNTRIES:
+            return candidates[-2]
+        return candidates[-1]
+
+    @staticmethod
+    def build_provenance_event(
+        *,
+        event_type: str,
+        place_text: str | None,
+        agent_name: str | None,
+        date_str: str | None,
+        source_field: str,
+    ) -> dict[str, Any] | None:
+        """Assemble one normalised provenance-event dict, or ``None``.
+
+        Reuses :meth:`_parse_date_string` so acquisition dates parse the
+        same way as production dates. Returns ``None`` when there is no
+        usable place text (never emit a placeless movement event).
+        """
+        place = (place_text or "").strip()
+        if not place:
+            return None
+        parsed = FieldHandlers._parse_date_string(date_str) if date_str else {}
+        year = parsed.get("year")
+        return {
+            "type": event_type,
+            "place_text": place,
+            "agent_name": (agent_name or "").strip() or None,
+            "year": year,
+            "year_earliest": year,
+            "year_latest": year,
+            "source_field": source_field,
+            "lat": None,
+            "lon": None,
+            "wikidata_id": None,
+            "certain": year is not None,
+        }
+
+    @staticmethod
     def handle_730(field: MarcField) -> dict[str, Any]:
         """Extract uniform/related title added entry from 730 field."""
         return {
@@ -1623,6 +1743,41 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         note = handlers.handle_583(field)
         if note:
             data.condition_notes.append(note)
+
+    # ── Provenance events (movement map) ──────────────────────────────────────
+    # Typed, dated, place-bearing custody events beyond production:
+    #   * acquisition place from 541 $b (address)
+    #   * conservation / exhibition site from 583 $j (site of action)
+    # Production stays in ``data.place``; this is the additive non-production
+    # channel. Never emit a placeless event (build_provenance_event returns None).
+    prov_events: list[dict[str, Any]] = []
+    if field_541:
+        acq = handlers.handle_541_structured(field_541)
+        place_text = handlers._city_from_address(acq.get("address"))
+        ev = handlers.build_provenance_event(
+            event_type="acquisition",
+            place_text=place_text,
+            agent_name=acq.get("source"),
+            date_str=acq.get("date"),
+            source_field="541",
+        )
+        if ev:
+            prov_events.append(ev)
+    for field in record.get_fields("583"):
+        act = handlers.handle_583_structured(field)
+        action_l = (act.get("action") or "").lower()
+        event_type = "exhibition" if "exhib" in action_l else "conservation"
+        ev = handlers.build_provenance_event(
+            event_type=event_type,
+            place_text=act.get("site"),
+            agent_name=act.get("jurisdiction"),
+            date_str=act.get("date"),
+            source_field="583",
+        )
+        if ev:
+            prov_events.append(ev)
+    if prov_events:
+        data.provenance_events = prov_events
 
     # ── 730: related uniform titles ───────────────────────────────────────────
     for field in record.get_fields("730"):

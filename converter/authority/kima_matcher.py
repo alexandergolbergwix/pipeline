@@ -82,6 +82,18 @@ class KimaMatcher:
             return self._cache[name]
 
         result = self._lookup(name)
+        if not result:
+            # Ashkenazi-community fallback (Rule 60) — only after KIMA misses,
+            # so a KIMA hit is never overridden. Returns a Wikidata URI when
+            # the gazetteer entry carries a verified QID.
+            try:
+                from converter.authority.ashkenazi_gazetteer import (  # noqa: PLC0415
+                    wikidata_uri as _ashk_uri,
+                )
+
+                result = _ashk_uri(name)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Ashkenazi gazetteer fallback failed for %r: %s", name, exc)
         self._cache[name] = result
         if result:
             self._stats["matched"]["count"] += 1

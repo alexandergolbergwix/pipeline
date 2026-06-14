@@ -25,6 +25,10 @@ from ..config.vocabularies import (
 from ..transformer.field_handlers import ExtractedData
 from ..transformer.uri_generator import UriGenerator
 
+# WGS84 geo-positioning predicates for place coordinates (Rule 60).
+_WGS84_LAT = URIRef("http://www.w3.org/2003/01/geo/wgs84_pos#lat")
+_WGS84_LONG = URIRef("http://www.w3.org/2003/01/geo/wgs84_pos#long")
+
 
 class GraphBuilder:
     """Builds RDF graphs from extracted MARC data.
@@ -119,6 +123,9 @@ class GraphBuilder:
             graph.add((acquisition_uri, RDF.type, CIDOC.E8_Acquisition))
             graph.add((acquisition_uri, RDFS.comment, Literal(data.provenance, lang="he")))
             graph.add((ms_uri, HM.has_acquisition_event, acquisition_uri))
+
+        # Typed, dated, geolocated non-production custody events (Rule 60).
+        self._add_provenance_events(graph, ms_uri, data, control_number)
 
         for author in data.authors:
             person_uri = self._add_person(
@@ -564,6 +571,69 @@ class GraphBuilder:
                 graph.add((prod_uri, HM.has_scribe, person_uri))
 
         return prod_uri
+
+    # CIDOC-CRM class per provenance-event type (Rule 60). Ownership uses
+    # E10 Transfer of Custody; acquisition uses E8 Acquisition; conservation
+    # and exhibition are generic E7 Activity.
+    _PROV_EVENT_CRM = {
+        "acquisition":  CIDOC.E8_Acquisition,
+        "ownership":    CIDOC.E10_Transfer_of_Custody,
+        "conservation": CIDOC.E7_Activity,
+        "exhibition":   CIDOC.E7_Activity,
+    }
+
+    def _add_provenance_events(
+        self, graph: Graph, ms_uri: URIRef, data: ExtractedData, control_number: str
+    ) -> None:
+        """Emit typed, dated, place-bearing custody events (Rule 60).
+
+        For each ``data.provenance_events`` entry whose place was resolved
+        to KIMA / gazetteer coordinates, mint a CIDOC event node
+        (``P7_took_place_at`` → an ``E53_Place`` carrying ``wgs84:lat/long``
+        + ``owl:sameAs`` the Wikidata QID, and ``P4_has_time-span`` when
+        dated). The manuscript is linked via ``hm:has_provenance_event`` and
+        to the place via ``hm:mentions_place``. **Gated on coords present —
+        never fabricate a point.**
+        """
+        events = getattr(data, "provenance_events", None) or []
+        for idx, ev in enumerate(events, 1):
+            if not isinstance(ev, dict):
+                continue
+            place_text = str(ev.get("place_text") or "").strip()
+            lat, lon = ev.get("lat"), ev.get("lon")
+            if not place_text or lat is None or lon is None:
+                continue  # only geo-bearing events reach the graph
+
+            etype = str(ev.get("type") or "provenance").lower()
+            crm_class = self._PROV_EVENT_CRM.get(etype, CIDOC.E7_Activity)
+            event_uri = URIRef(f"{HM}ProvenanceEvent_{control_number}_{etype}_{idx:02d}")
+            graph.add((event_uri, RDF.type, crm_class))
+            graph.add((event_uri, RDFS.label,
+                       Literal(f"{etype} of MS {control_number}", lang="en")))
+            graph.add((ms_uri, HM.has_provenance_event, event_uri))
+
+            place_uri = self.uri_gen.place_uri(place_text)
+            graph.add((event_uri, CIDOC.P7_took_place_at, place_uri))
+            graph.add((ms_uri, HM.mentions_place, place_uri))
+            graph.add((place_uri, RDF.type, CIDOC.E53_Place))
+            graph.add((place_uri, RDFS.label, Literal(place_text, lang="en")))
+            graph.add((place_uri, _WGS84_LAT,  Literal(str(lat))))
+            graph.add((place_uri, _WGS84_LONG, Literal(str(lon))))
+            wd = ev.get("wikidata_id")
+            if wd:
+                graph.add((place_uri, OWL.sameAs,
+                           URIRef(f"https://www.wikidata.org/entity/{wd}")))
+
+            year = ev.get("year")
+            if year is not None:
+                time_uri = self.uri_gen.time_span_uri(str(year))
+                graph.add((event_uri, CIDOC.P4_has_time_span, time_uri))
+                graph.add((time_uri, RDF.type, CIDOC["E52_Time-Span"]))
+                graph.add((time_uri, RDFS.label, Literal(str(year), lang="en")))
+
+            agent = ev.get("agent_name")
+            if agent:
+                graph.add((event_uri, RDFS.comment, Literal(str(agent), lang="he")))
 
     @staticmethod
     def _is_http_uri(value: str) -> bool:

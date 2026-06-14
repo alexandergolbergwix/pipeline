@@ -1,0 +1,32 @@
+{
+  "_comment": "Ashkenazi / European Jewish community gazetteer — fallback after KIMA misses (CLAUDE.md Rule 60). KIMA covers MENA/Mediterranean well but is thin on Ashkenazi diaspora toponyms in Hebrew script. Each entry: canonical English label, optional Wikidata QID (null when not verified), WGS84 city-centroid coords, and Hebrew-script variant spellings / acronyms. Seeded from KIMA Hebrew-variants TSV (European rows) + manual curation; extensible. qid is included only where verified; coords are the required signal.",
+  "entries": [
+    {"label_en": "Prague", "qid": "Q1085", "lat": 50.0875, "lon": 14.4213, "variants": ["פראג", "פראגא", "פראגה", "פ\"ק"]},
+    {"label_en": "Worms", "qid": null, "lat": 49.6319, "lon": 8.3653, "variants": ["וורמייזא", "ורמיישא", "וורמיש", "וורמס"]},
+    {"label_en": "Kraków", "qid": "Q31487", "lat": 50.0647, "lon": 19.945, "variants": ["קראקא", "קרקוב", "קראקוב", "קריקא"]},
+    {"label_en": "Vilnius", "qid": "Q216", "lat": 54.6872, "lon": 25.2797, "variants": ["וילנא", "ווילנא", "וילנה", "ווילנה"]},
+    {"label_en": "Frankfurt am Main", "qid": "Q1794", "lat": 50.1109, "lon": 8.6821, "variants": ["פרנקפורט", "פרנקפורט דמיין", "פפד\"מ", "פ\"פ דמיין"]},
+    {"label_en": "Mantua", "qid": null, "lat": 45.1564, "lon": 10.7914, "variants": ["מנטובה", "מנטובא", "מנטואה"]},
+    {"label_en": "Venice", "qid": "Q641", "lat": 45.4408, "lon": 12.3155, "variants": ["ויניציאה", "ויניציה", "וויניציאה", "ונציה"]},
+    {"label_en": "Livorno", "qid": null, "lat": 43.5485, "lon": 10.3106, "variants": ["ליוורנו", "ליגורנו", "ליוורנא"]},
+    {"label_en": "Amsterdam", "qid": "Q727", "lat": 52.3676, "lon": 4.9041, "variants": ["אמשטרדם", "אמסטרדם", "אמשטרדאם", "שטאדט אמשטרדם"]},
+    {"label_en": "Vienna", "qid": "Q1741", "lat": 48.2082, "lon": 16.3738, "variants": ["וינא", "וינה", "ווין"]},
+    {"label_en": "Berlin", "qid": "Q64", "lat": 52.52, "lon": 13.405, "variants": ["ברלין"]},
+    {"label_en": "Lviv", "qid": null, "lat": 49.8397, "lon": 24.0297, "variants": ["למברג", "לבוב", "לעמבערג", "לבוֹב"]},
+    {"label_en": "Warsaw", "qid": "Q270", "lat": 52.2297, "lon": 21.0122, "variants": ["ורשה", "ווארשא", "וארשה", "וורשא"]},
+    {"label_en": "Thessaloniki", "qid": null, "lat": 40.6401, "lon": 22.9444, "variants": ["שאלוניקי", "שלוניקי", "סלוניקי", "שאלוניקא", "סאלוניקי"]},
+    {"label_en": "Istanbul", "qid": "Q406", "lat": 41.0082, "lon": 28.9784, "variants": ["קושטא", "קושטנדינא", "קושטנטינא", "קונסטנטינופול", "אסטמבול"]},
+    {"label_en": "Hamburg", "qid": null, "lat": 53.5511, "lon": 9.9937, "variants": ["המבורג", "האמבורג", "האמבורק"]},
+    {"label_en": "Metz", "qid": null, "lat": 49.1193, "lon": 6.1757, "variants": ["מיץ", "מעץ"]},
+    {"label_en": "Regensburg", "qid": null, "lat": 49.0134, "lon": 12.1016, "variants": ["רעגנשבורג", "רגנשבורג"]},
+    {"label_en": "Nuremberg", "qid": null, "lat": 49.4521, "lon": 11.0767, "variants": ["נירנברג", "נורנברג", "נירנבערג"]},
+    {"label_en": "Mainz", "qid": null, "lat": 49.9929, "lon": 8.2473, "variants": ["מגנצא", "מגנצה", "מיינץ"]},
+    {"label_en": "Speyer", "qid": null, "lat": 49.3172, "lon": 8.4314, "variants": ["שפירא", "שפיירא", "שפייר"]},
+    {"label_en": "Rome", "qid": "Q220", "lat": 41.8931, "lon": 12.4828, "variants": ["רומא", "רומי", "רומה"]},
+    {"label_en": "Padua", "qid": null, "lat": 45.4064, "lon": 11.8768, "variants": ["פדואה", "פאדובה", "פדובה"]},
+    {"label_en": "Ferrara", "qid": null, "lat": 44.8378, "lon": 11.6196, "variants": ["פירארה", "פירארא", "פרארה"]},
+    {"label_en": "Lublin", "qid": null, "lat": 51.2465, "lon": 22.5684, "variants": ["לובלין", "לובלן"]},
+    {"label_en": "Poznań", "qid": null, "lat": 52.4064, "lon": 16.9252, "variants": ["פוזנא", "פוזן", "פוזנן"]},
+    {"label_en": "Bratislava", "qid": null, "lat": 48.1486, "lon": 17.1077, "variants": ["פרשבורג", "פרעשבורג", "פרסבורג"]}
+  ]
+}
