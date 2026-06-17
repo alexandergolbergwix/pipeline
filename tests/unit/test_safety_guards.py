@@ -8222,5 +8222,125 @@ class TestWikidataDateBackfill:
         assert "date_conflict" not in flags
 
 
+class TestWrongPersonAuthorityGuards:
+    """Regression tests for three false-positive person matches from run-48 TTL."""
+
+    def test_onkelos_rejects_modern_homonym_cluster(self) -> None:
+        from converter.authority.stage3_guards import evaluate_match
+
+        v = evaluate_match(
+            marc_name="אונקלוס",
+            role="contributor",
+            ms_year=1650,
+            mazal_id="987012345678901234",
+            viaf_uri="https://viaf.org/viaf/123456789",
+            preferred_name_lat="Unkelos-Shpigel, Naomi",
+            person_birth_year=1980,
+            person_death_year=120,
+        )
+        assert v["confidence"] == "low"
+        assert v["viaf_uri"] is None
+        assert v["wikidata_qid"] is None
+        assert "non_person_heading" in v["guard_flags"]
+
+    def test_ben_asher_biographical_inconsistency(self) -> None:
+        from converter.authority.stage3_guards import (
+            evaluate_biographical_inconsistency,
+            evaluate_match,
+        )
+
+        reason = evaluate_biographical_inconsistency(1000, 960)
+        assert reason is not None
+        assert "960" in reason and "1000" in reason
+
+        v = evaluate_match(
+            marc_name="בן אשר, אהרן בן משה",
+            role="author",
+            ms_year=1500,
+            mazal_id="987098765432109876",
+            viaf_uri="https://viaf.org/viaf/987654321",
+            preferred_name_lat="Ben-Asher, Aaron ben Moses",
+            person_birth_year=1000,
+            person_death_year=960,
+        )
+        assert v["confidence"] == "low"
+        assert "biographical_inconsistency" in v["guard_flags"]
+        assert v["wikidata_qid"] is None
+
+    def test_cohen_modern_cataloguer_rejected(self) -> None:
+        from converter.authority.stage3_guards import (
+            evaluate_modern_person_conflict,
+            evaluate_match,
+        )
+
+        reason = evaluate_modern_person_conflict(1650, 1968)
+        assert reason is not None
+        assert "1968" in reason
+
+        v = evaluate_match(
+            marc_name="Cohen, Daniel J.",
+            role="contributor",
+            ms_year=1650,
+            mazal_id=None,
+            viaf_uri="https://viaf.org/viaf/111222333",
+            preferred_name_lat="Cohen, Daniel J.",
+            person_birth_year=1968,
+            person_death_year=None,
+        )
+        assert v["confidence"] == "low"
+        assert "modern_person" in v["guard_flags"]
+        assert v["viaf_uri"] is None
+
+    def test_modern_person_rejected_when_ms_year_missing(self) -> None:
+        from converter.authority.stage3_guards import evaluate_modern_person_conflict
+
+        reason = evaluate_modern_person_conflict(None, 1980)
+        assert reason is not None
+
+    def test_graph_builder_skips_onkelos_person_node(self) -> None:
+        from converter.rdf.graph_builder import GraphBuilder
+        from rdflib import Graph
+
+        builder = GraphBuilder()
+        graph = Graph()
+        uri = builder._add_person(
+            graph,
+            {
+                "name": "אונקלוס",
+                "preferred_name_lat": "Unkelos-Shpigel, Naomi",
+                "birth_year": 1980,
+                "death_year": 120,
+            },
+            related_uri=None,
+            role="contributor",
+        )
+        assert uri is None
+        assert len(graph) == 0
+
+    def test_graph_builder_drops_inverted_dates(self) -> None:
+        from converter.rdf.graph_builder import GraphBuilder
+        from rdflib import Graph
+
+        builder = GraphBuilder()
+        graph = Graph()
+        uri = builder._add_person(
+            graph,
+            {
+                "name": "בן אשר, אהרן בן משה",
+                "birth_year": 1000,
+                "death_year": 960,
+            },
+            related_uri=None,
+            role="author",
+        )
+        assert uri is not None
+        date_literals = [
+            str(o)
+            for _, p, o in graph
+            if str(p).endswith(("begin_of_the_begin", "end_of_the_end"))
+        ]
+        assert date_literals == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

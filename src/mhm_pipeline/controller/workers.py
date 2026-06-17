@@ -1349,6 +1349,23 @@ class AuthorityWorker(StageWorker):
             # Cluster-derived enrichment is also no longer trustworthy
             for stale in ("gnd_id", "lc_id", "isni", "bnf_id"):
                 match_info.pop(stale, None)
+        from converter.authority.stage3_guards import authority_payload_blocked  # noqa: PLC0415
+
+        if authority_payload_blocked(verdict):
+            for stale in (
+                "birth_year",
+                "death_year",
+                "dates",
+                "preferred_name_lat",
+                "preferred_name_heb",
+                "wikidata_qid",
+                "gnd_id",
+                "lc_id",
+                "isni",
+                "bnf_id",
+                "viaf_id",
+            ):
+                match_info.pop(stale, None)
         # 4-source schema: always surface ``wikidata_qid``; True-only flag
         # ``cross_source_conflict`` is omitted when False per spec.
         match_info["wikidata_qid"] = verdict.get("wikidata_qid")

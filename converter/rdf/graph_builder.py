@@ -782,6 +782,12 @@ class GraphBuilder:
             target_key = "authors" if role == "author" else "contributors"
             people = getattr(data, target_key, None) or []
             matched = False
+            from converter.authority.stage3_guards import (  # noqa: PLC0415
+                authority_payload_blocked,
+            )
+
+            if authority_payload_blocked(match):
+                continue
             for person in people:
                 if names_overlap(str(person.get("name") or ""), entity_text):
                     if match.get("viaf_id") and "viaf_id" not in person:
@@ -922,6 +928,14 @@ class GraphBuilder:
         if not display_name:
             return None
 
+        from converter.authority.stage3_guards import (  # noqa: PLC0415
+            is_non_person_marc_heading,
+            sanitize_person_years,
+        )
+
+        if is_non_person_marc_heading(display_name):
+            return None
+
         person_uri = self.uri_gen.person_uri(display_name)
 
         if infer_person_type(person_data) == "organization":
@@ -937,21 +951,25 @@ class GraphBuilder:
         if pref_heb and pref_heb.casefold() != display_name.casefold():
             graph.add((person_uri, RDFS.label, Literal(pref_heb, lang="he")))
 
-        if "birth_year" in person_data:
+        birth_year, death_year = sanitize_person_years(
+            person_data.get("birth_year") if isinstance(person_data.get("birth_year"), int) else None,
+            person_data.get("death_year") if isinstance(person_data.get("death_year"), int) else None,
+        )
+        if birth_year is not None:
             graph.add(
                 (
                     person_uri,
                     CIDOC.P82a_begin_of_the_begin,
-                    Literal(person_data["birth_year"], datatype=XSD.integer),
+                    Literal(birth_year, datatype=XSD.integer),
                 )
             )
 
-        if "death_year" in person_data:
+        if death_year is not None:
             graph.add(
                 (
                     person_uri,
                     CIDOC.P82b_end_of_the_end,
-                    Literal(person_data["death_year"], datatype=XSD.integer),
+                    Literal(death_year, datatype=XSD.integer),
                 )
             )
 

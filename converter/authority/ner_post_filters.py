@@ -267,6 +267,7 @@ _HEBREW_TOPIC_DENYLIST: frozenset[str] = frozenset({
     "קבלה", "גמרא", "תלמוד", "תורה", "משנה", "הלכה",
     "אוטוגרף", "קולופון", "כריכה", "קלף", "כתב יד",
     "משיח", "גאולה",
+    "אונקלוס", "עונקלוס",
 })
 
 # Hebrew place names and rite designators that surface in MARC subject

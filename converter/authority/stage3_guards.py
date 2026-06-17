@@ -54,6 +54,28 @@ DATE_DEATH_AFTERLIFE_YEARS = 80
 # death year but no birth year on record.
 DATE_DEATH_POSTHUMOUS_YEARS = 120
 
+# Birth years at or above this threshold are treated as modern scholars /
+# cataloguers when the manuscript is premodern (or undated).
+MODERN_BIRTH_CUTOFF_YEAR = 1900
+
+# Classical / targum reference headings that surface in MARC contributor
+# fields but are not real persons (Onkelos = Targum author, not a scribe).
+_CLASSICAL_REFERENCE_NAMES: frozenset[str] = frozenset({
+    "אונקלוס",
+    "עונקלוס",
+    "תרגום אונקלוס",
+    "יונתן בן עוזיאל",
+})
+
+# Guard flags that mean authority enrichment must not reach RDF / Wikidata.
+HARD_REJECT_GUARD_FLAGS: frozenset[str] = frozenset({
+    "placeholder_name",
+    "non_person_heading",
+    "date_conflict",
+    "biographical_inconsistency",
+    "modern_person",
+})
+
 # Roles where the person must have been physically present when the
 # manuscript was made. A scribe / transcriber dying 80+ years before
 # the MS could not have written it.
@@ -119,6 +141,82 @@ def _tokenise(name: str) -> list[str]:
     """Split a person name into whitespace-/comma-delimited tokens."""
     raw = re.split(r"[\s,]+", _clean_name(name))
     return [t for t in raw if t]
+
+
+def _normalize_marc_person_key(name: str) -> str:
+    """Collapse MARC punctuation / whitespace for heading comparisons."""
+    cleaned = name.strip().strip("\"'").rstrip(",;:").strip()
+    return " ".join(cleaned.split())
+
+
+def is_non_person_marc_heading(name: str) -> bool:
+    """True for classical-reference headings that must never be authority-matched.
+
+    Targum Onkelos and similar figures appear as MARC contributors when
+    the catalogue notes the translation tradition, not a living scribe.
+    """
+    key = _normalize_marc_person_key(name)
+    if key in _CLASSICAL_REFERENCE_NAMES:
+        return True
+    tokens = _tokenise(key)
+    if len(tokens) == 1 and tokens[0] in {"אונקלוס", "עונקלוס"}:
+        return True
+    return False
+
+
+def evaluate_biographical_inconsistency(
+    person_birth_year: int | None,
+    person_death_year: int | None,
+) -> str | None:
+    """Reject authority clusters whose own birth/death years contradict."""
+    if (
+        person_birth_year is not None
+        and person_death_year is not None
+        and person_death_year < person_birth_year
+    ):
+        return (
+            f"biographical-inconsistency: died {person_death_year} "
+            f"before born {person_birth_year}"
+        )
+    return None
+
+
+def evaluate_modern_person_conflict(
+    ms_year: int | None,
+    person_birth_year: int | None,
+) -> str | None:
+    """Reject modern scholars/cataloguers on premodern Hebrew manuscripts."""
+    if person_birth_year is None or person_birth_year < MODERN_BIRTH_CUTOFF_YEAR:
+        return None
+    if ms_year is not None and ms_year >= MODERN_BIRTH_CUTOFF_YEAR:
+        return None
+    ms_label = str(ms_year) if ms_year is not None else "premodern/undated"
+    return (
+        f"modern-person: born {person_birth_year}, "
+        f"MS dated {ms_label} (cataloguer noise)"
+    )
+
+
+def sanitize_person_years(
+    birth_year: int | None,
+    death_year: int | None,
+) -> tuple[int | None, int | None]:
+    """Drop internally inconsistent birth/death pairs before RDF emission."""
+    if (
+        birth_year is not None
+        and death_year is not None
+        and death_year < birth_year
+    ):
+        return None, None
+    return birth_year, death_year
+
+
+def authority_payload_blocked(match_info: dict[str, Any]) -> bool:
+    """True when Stage 3 guards forbid attaching authority IDs or dates."""
+    flags = set(match_info.get("guard_flags") or [])
+    if flags & HARD_REJECT_GUARD_FLAGS:
+        return True
+    return bool(match_info.get("rejection_reason"))
 
 
 def _parse_year(value: object) -> int | None:
@@ -302,6 +400,8 @@ def score_confidence(
     has_viaf: bool,
     has_preferred_name_lat: bool,
     date_conflict_reason: str | None,
+    biographical_inconsistency_reason: str | None = None,
+    modern_person_reason: str | None = None,
     short_name_homonym: bool,
     cluster_collapsed: bool = False,
     wikidata_disagrees: bool = False,
@@ -357,7 +457,13 @@ def score_confidence(
         return "low"
 
     # ── Base score from the deterministic guards ─────────────────────
-    if date_conflict_reason or short_name_homonym or cluster_collapsed:
+    if (
+        date_conflict_reason
+        or biographical_inconsistency_reason
+        or modern_person_reason
+        or short_name_homonym
+        or cluster_collapsed
+    ):
         base = "low"
     else:
         sources = sum([has_mazal, has_viaf, has_wikidata])
@@ -462,6 +568,7 @@ def evaluate_match(
     rejection: str | None = None
     out_mazal = mazal_id
     out_viaf = viaf_uri
+    out_wikidata = wikidata_qid
 
     # Guard 4 — placeholder name (hard reject)
     if is_placeholder_name(marc_name):
@@ -469,15 +576,52 @@ def evaluate_match(
         rejection = "placeholder_name"
         out_mazal = None
         out_viaf = None
+        out_wikidata = None
         return {
             "confidence": "low",
             "matched": 0,
             "mazal_id": None,
             "viaf_uri": None,
-            "wikidata_qid": wikidata_qid,
+            "wikidata_qid": None,
             "rejection_reason": rejection,
             "guard_flags": flags,
         }
+
+    # Guard 4b — classical / targum reference headings (hard reject)
+    if is_non_person_marc_heading(marc_name):
+        flags.append("non_person_heading")
+        rejection = "non_person_heading"
+        out_mazal = None
+        out_viaf = None
+        out_wikidata = None
+        return {
+            "confidence": "low",
+            "matched": 0,
+            "mazal_id": None,
+            "viaf_uri": None,
+            "wikidata_qid": None,
+            "rejection_reason": rejection,
+            "guard_flags": flags,
+        }
+
+    bio_reason = evaluate_biographical_inconsistency(
+        person_birth_year,
+        person_death_year,
+    )
+    if bio_reason:
+        flags.append("biographical_inconsistency")
+        rejection = bio_reason
+        out_mazal = None
+        out_viaf = None
+        out_wikidata = None
+
+    modern_reason = evaluate_modern_person_conflict(ms_year, person_birth_year)
+    if modern_reason:
+        flags.append("modern_person")
+        rejection = modern_reason
+        out_mazal = None
+        out_viaf = None
+        out_wikidata = None
 
     # Guard 1 — date conflict (hard reject when dates are present)
     date_reason = evaluate_date_conflict(
@@ -489,9 +633,8 @@ def evaluate_match(
     if date_reason:
         flags.append("date_conflict")
         rejection = date_reason
-        out_viaf = None  # date came from VIAF cluster; clear it
-        # Mazal hit may still be valid (different person) — but to be
-        # conservative we degrade confidence rather than re-attaching it.
+        out_viaf = None
+        out_wikidata = None
 
     # Guard 2 — short-name homonym (soft: degrade to low, keep IDs)
     short_homonym = is_short_name_homonym(
@@ -519,6 +662,8 @@ def evaluate_match(
         has_viaf=bool(out_viaf),
         has_preferred_name_lat=bool(preferred_name_lat),
         date_conflict_reason=date_reason,
+        biographical_inconsistency_reason=bio_reason,
+        modern_person_reason=modern_reason,
         short_name_homonym=short_homonym,
         wikidata_disagrees=wikidata_disagrees,
         wikidata_confirms=wikidata_confirms,
@@ -532,13 +677,19 @@ def evaluate_match(
         # for safety. Keep Mazal (it's per-person authoritative) so the
         # GUI's manual review still has something to anchor on.
         out_viaf = None
+        out_wikidata = None
+
+    if rejection:
+        out_mazal = None
+        out_viaf = None
+        out_wikidata = None
 
     return {
         "confidence": confidence,
         "matched": 1 if confidence == "high" else 0,
         "mazal_id": out_mazal,
         "viaf_uri": out_viaf,
-        "wikidata_qid": wikidata_qid,
+        "wikidata_qid": out_wikidata,
         "rejection_reason": rejection,
         "guard_flags": flags,
     }
