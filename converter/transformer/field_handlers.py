@@ -111,6 +111,14 @@ class ExtractedData:
     shelfmark: str | None = None
     iiif_manifest_url: str | None = None
 
+    # Authority-enriched sidecar fields (Stage 3 → Stage 4)
+    marc_authority_matches: list[dict[str, Any]] = None
+    kima_places: dict[str, str] = None
+    production_place_lat: float | None = None
+    production_place_lon: float | None = None
+    production_place_wikidata_id: str | None = None
+    related_place_coords: dict[str, dict[str, Any]] = None
+
     def __post_init__(self):
         if self.variant_titles is None:
             self.variant_titles = []
@@ -161,6 +169,12 @@ class ExtractedData:
             self.related_places = []
         if self.provenance_events is None:
             self.provenance_events = []
+        if self.marc_authority_matches is None:
+            self.marc_authority_matches = []
+        if self.kima_places is None:
+            self.kima_places = {}
+        if self.related_place_coords is None:
+            self.related_place_coords = {}
 
     def set_certainty(self, field_name: str, level: str, note: str | None = None):
         """Set certainty level for a field.

@@ -24,6 +24,13 @@ from ..config.vocabularies import (
 )
 from ..transformer.field_handlers import ExtractedData
 from ..transformer.uri_generator import UriGenerator
+from .rdf_helpers import (
+    clean_marc_label,
+    infer_person_type,
+    is_plausible_coords,
+    names_overlap,
+    normalize_role,
+)
 
 # WGS84 geo-positioning predicates for place coordinates (Rule 60).
 _WGS84_LAT = URIRef("http://www.w3.org/2003/01/geo/wgs84_pos#lat")
@@ -44,6 +51,7 @@ class GraphBuilder:
         uri_generator: UriGenerator | None = None,
         add_epistemological_status: bool = False,
         add_cataloging_view: bool = False,
+        add_philological_overlay: bool = True,
         visualization_mode: bool = False,
     ):
         """Initialize the graph builder.
@@ -52,15 +60,18 @@ class GraphBuilder:
             uri_generator: Optional custom URI generator
             add_epistemological_status: Whether to add epistemological metadata
             add_cataloging_view: Whether to add cataloging paradigm view
+            add_philological_overlay: TextTradition / Witness / ParadigmBridge stack
             visualization_mode: If True, disable all boilerplate nodes for lean rendering
         """
         self.uri_gen = uri_generator or UriGenerator()
         if visualization_mode:
             self.add_epistemological_status = False
             self.add_cataloging_view = False
+            self.add_philological_overlay = False
         else:
             self.add_epistemological_status = add_epistemological_status
             self.add_cataloging_view = add_cataloging_view
+            self.add_philological_overlay = add_philological_overlay
 
     def build_graph(self, data: ExtractedData, control_number: str) -> Graph:
         """Build complete RDF graph from extracted data.
@@ -81,6 +92,7 @@ class GraphBuilder:
         scribe_entity_uris: list[URIRef] = []
 
         self._add_manuscript(graph, ms_uri, data, control_number)
+        self._materialize_authority_enrichment(data)
 
         work_uri = None
         expression_uri = None
@@ -135,7 +147,7 @@ class GraphBuilder:
                 graph.add((work_uri, HM.has_author, person_uri))
 
         for contributor in data.contributors:
-            role = contributor.get("role", "contributor")
+            role = normalize_role(contributor.get("role", "contributor"))
             person_uri = self._add_person(graph, contributor, ms_uri, role)
             if person_uri:
                 graph.add((person_uri, HM.has_role, Literal(role, datatype=XSD.string)))
@@ -262,7 +274,7 @@ class GraphBuilder:
         if self.add_cataloging_view and work_uri:
             self._add_cataloging_view(graph, ms_uri, work_uri, expression_uri, control_number)
 
-        if work_expression_pairs:
+        if self.add_philological_overlay and work_expression_pairs:
             phil_view_uri = self.add_philological_view(
                 graph, ms_uri, control_number, is_primary=False
             )
@@ -322,7 +334,13 @@ class GraphBuilder:
         if data.related_works:
             self._add_related_works(graph, ms_uri, data.related_works, work_uri)
         if data.related_places:
-            self._add_related_places(graph, ms_uri, data.related_places, prod_uri)
+            self._add_related_places(
+                graph,
+                ms_uri,
+                data.related_places,
+                prod_uri,
+                data.related_place_coords,
+            )
         if data.condition_notes:
             self._add_condition_notes(graph, ms_uri, data.condition_notes, control_number)
         self._add_codicological_hierarchy_from_data(graph, ms_uri, data, control_number)
@@ -499,7 +517,14 @@ class GraphBuilder:
             graph.add((prod_uri, CIDOC.P7_took_place_at, place_uri))
             graph.add((prod_uri, HM.has_production_place, place_uri))
             graph.add((place_uri, RDF.type, CIDOC.E53_Place))
-            graph.add((place_uri, RDFS.label, Literal(data.place, lang="he")))
+            graph.add((place_uri, RDFS.label, Literal(clean_marc_label(data.place), lang="he")))
+            self._emit_place_coords(
+                graph,
+                place_uri,
+                getattr(data, "production_place_lat", None),
+                getattr(data, "production_place_lon", None),
+                getattr(data, "production_place_wikidata_id", None),
+            )
 
         if data.dates:
             time_label = self._format_time_label(data.dates)
@@ -602,6 +627,8 @@ class GraphBuilder:
             place_text = str(ev.get("place_text") or "").strip()
             lat, lon = ev.get("lat"), ev.get("lon")
             if not place_text or lat is None or lon is None:
+                continue
+            if not is_plausible_coords(lat, lon):
                 continue  # only geo-bearing events reach the graph
 
             etype = str(ev.get("type") or "provenance").lower()
@@ -617,8 +644,9 @@ class GraphBuilder:
             graph.add((ms_uri, HM.mentions_place, place_uri))
             graph.add((place_uri, RDF.type, CIDOC.E53_Place))
             graph.add((place_uri, RDFS.label, Literal(place_text, lang="en")))
-            graph.add((place_uri, _WGS84_LAT,  Literal(str(lat))))
-            graph.add((place_uri, _WGS84_LONG, Literal(str(lon))))
+            if is_plausible_coords(lat, lon):
+                graph.add((place_uri, _WGS84_LAT, Literal(str(lat))))
+                graph.add((place_uri, _WGS84_LONG, Literal(str(lon))))
             wd = ev.get("wikidata_id")
             if wd:
                 graph.add((place_uri, OWL.sameAs,
@@ -635,9 +663,114 @@ class GraphBuilder:
             if agent:
                 graph.add((event_uri, RDFS.comment, Literal(str(agent), lang="he")))
 
+    def _materialize_authority_enrichment(self, data: ExtractedData) -> None:
+        """Fold ``marc_authority_matches`` / ``kima_places`` into flat person/place dicts."""
+        from .rdf_helpers import ensure_person_in_list
+
+        for match in data.marc_authority_matches or []:
+            entity_text = clean_marc_label(str(match.get("entity_text") or match.get("name") or ""))
+            if not entity_text:
+                continue
+            payload = match.get("payload") or {}
+            kind = str(match.get("entity_kind") or match.get("match_type") or "person").lower()
+            is_place = kind == "place" or bool(payload.get("kima_id"))
+
+            if is_place:
+                lat = payload.get("kima_lat") or payload.get("lat")
+                lon = payload.get("kima_lon") or payload.get("lon")
+                qid = match.get("wikidata_qid") or payload.get("wikidata_id")
+                for subj in data.subjects:
+                    term = clean_marc_label(str(subj.get("term") or ""))
+                    if names_overlap(term, entity_text):
+                        if lat is not None and "lat" not in subj:
+                            subj["lat"] = lat
+                        if lon is not None and "lon" not in subj:
+                            subj["lon"] = lon
+                        if qid and "wikidata_id" not in subj:
+                            subj["wikidata_id"] = str(qid)
+                prod = clean_marc_label(str(data.place or ""))
+                if prod and names_overlap(prod, entity_text):
+                    if lat is not None and data.production_place_lat is None:
+                        data.production_place_lat = float(lat)
+                    if lon is not None and data.production_place_lon is None:
+                        data.production_place_lon = float(lon)
+                    if qid and not data.production_place_wikidata_id:
+                        data.production_place_wikidata_id = str(qid)
+                continue
+
+            role = normalize_role(str(match.get("role") or "contributor"))
+            target_key = "authors" if role == "author" else "contributors"
+            people = getattr(data, target_key, None) or []
+            matched = False
+            for person in people:
+                if names_overlap(str(person.get("name") or ""), entity_text):
+                    if match.get("viaf_id") and "viaf_id" not in person:
+                        person["viaf_id"] = str(match["viaf_id"])
+                    if match.get("wikidata_qid") and "wikidata_id" not in person:
+                        person["wikidata_id"] = str(match["wikidata_qid"])
+                    if match.get("mazal_id") and "authority_id" not in person:
+                        person["authority_id"] = str(match["mazal_id"])
+                    if payload.get("birth_year") is not None and "birth_year" not in person:
+                        person["birth_year"] = payload["birth_year"]
+                    if payload.get("death_year") is not None and "death_year" not in person:
+                        person["death_year"] = payload["death_year"]
+                    if payload.get("preferred_name_lat") and "preferred_name_lat" not in person:
+                        person["preferred_name_lat"] = payload["preferred_name_lat"]
+                    if payload.get("preferred_name_heb") and "preferred_name_heb" not in person:
+                        person["preferred_name_heb"] = payload["preferred_name_heb"]
+                    if payload.get("viaf_uri") and "viaf_uri" not in person:
+                        person["viaf_uri"] = payload["viaf_uri"]
+                    cluster = payload.get("cluster_ids") or {}
+                    for id_key in ("gnd", "lc", "isni", "bnf", "j9u"):
+                        if cluster.get(id_key) and id_key not in person:
+                            person[id_key] = cluster[id_key]
+                    matched = True
+                    break
+            if not matched:
+                extra: dict[str, Any] = {}
+                if match.get("viaf_id"):
+                    extra["viaf_id"] = str(match["viaf_id"])
+                if match.get("wikidata_qid"):
+                    extra["wikidata_id"] = str(match["wikidata_qid"])
+                if match.get("mazal_id"):
+                    extra["authority_id"] = str(match["mazal_id"])
+                ensure_person_in_list(people, entity_text, role=role, extra=extra)
+                setattr(data, target_key, people)
+
+        for place_name, uri in (data.kima_places or {}).items():
+            if not place_name or not uri:
+                continue
+            qid_match = re.search(r"(Q\d+)", str(uri))
+            if not qid_match:
+                continue
+            qid = qid_match.group(1)
+            for subj in data.subjects:
+                if str(subj.get("type") or "") == "place" and names_overlap(
+                    str(subj.get("term") or ""), place_name,
+                ):
+                    subj.setdefault("wikidata_id", qid)
+
+    @staticmethod
+    def _emit_place_coords(
+        graph: Graph,
+        place_uri: URIRef,
+        lat: float | int | str | None,
+        lon: float | int | str | None,
+        wikidata_id: str | None = None,
+    ) -> None:
+        if is_plausible_coords(lat, lon):
+            graph.add((place_uri, _WGS84_LAT, Literal(str(lat))))
+            graph.add((place_uri, _WGS84_LONG, Literal(str(lon))))
+        if wikidata_id:
+            graph.add((
+                place_uri,
+                OWL.sameAs,
+                URIRef(f"https://www.wikidata.org/entity/{wikidata_id}"),
+            ))
+
     @staticmethod
     def _is_http_uri(value: str) -> bool:
-        return bool(re.match(r"^https?://\\S+$", value.strip(), re.IGNORECASE))
+        return bool(re.match(r"^https?://\S+$", value.strip(), re.IGNORECASE))
 
     def _extract_authority_identifiers(self, raw_values: list[str]) -> dict[str, Any]:
         result: dict[str, Any] = {"same_as_uris": []}
@@ -654,10 +787,10 @@ class GraphBuilder:
                 continue
 
             viaf_uri_match = re.search(
-                r"https?://(?:www\\.)?viaf\\.org/viaf/(\\d+)", value, re.IGNORECASE
+                r"https?://(?:www\.)?viaf\.org/viaf/(\d+)", value, re.IGNORECASE
             )
-            viaf_id_match = re.search(r"\\(VIAF\\)\\s*(\\d+)", value, re.IGNORECASE)
-            viaf_plain_match = re.fullmatch(r"\\d{5,}", value)
+            viaf_id_match = re.search(r"\(VIAF\)\s*(\d+)", value, re.IGNORECASE)
+            viaf_plain_match = re.fullmatch(r"\d{5,}", value)
             if viaf_uri_match:
                 viaf_id = viaf_uri_match.group(1)
                 result["viaf_id"] = viaf_id
@@ -666,17 +799,19 @@ class GraphBuilder:
                 result["viaf_id"] = viaf_id_match.group(1)
             elif viaf_plain_match:
                 result["viaf_id"] = value
+                add_same_as(f"https://viaf.org/viaf/{value}")
 
             wikidata_uri_match = re.search(
-                r"https?://(?:www\\.)?wikidata\\.org/entity/(Q\\d+)", value, re.IGNORECASE
+                r"https?://(?:www\.)?wikidata\.org/entity/(Q\d+)", value, re.IGNORECASE
             )
-            wikidata_id_match = re.fullmatch(r"Q\\d+", value, re.IGNORECASE)
+            wikidata_id_match = re.fullmatch(r"Q\d+", value, re.IGNORECASE)
             if wikidata_uri_match:
                 qid = wikidata_uri_match.group(1).upper()
                 result["wikidata_id"] = qid
                 add_same_as(f"https://www.wikidata.org/entity/{qid}")
             elif wikidata_id_match:
                 result["wikidata_id"] = value.upper()
+                add_same_as(f"https://www.wikidata.org/entity/{value.upper()}")
 
             if self._is_http_uri(value) and "nli.org.il" in value.lower():
                 result["external_uri_nli"] = value
@@ -703,14 +838,24 @@ class GraphBuilder:
         if not person_data.get("name"):
             return None
 
-        person_uri = self.uri_gen.person_uri(person_data["name"])
+        display_name = clean_marc_label(str(person_data["name"]))
+        if not display_name:
+            return None
 
-        if person_data.get("type") == "organization":
+        person_uri = self.uri_gen.person_uri(display_name)
+
+        if infer_person_type(person_data) == "organization":
             graph.add((person_uri, RDF.type, CIDOC.E74_Group))
         else:
             graph.add((person_uri, RDF.type, CIDOC.E21_Person))
 
-        graph.add((person_uri, RDFS.label, Literal(person_data["name"], lang="he")))
+        graph.add((person_uri, RDFS.label, Literal(display_name, lang="he")))
+        pref_lat = clean_marc_label(str(person_data.get("preferred_name_lat") or ""))
+        if pref_lat and pref_lat.casefold() != display_name.casefold():
+            graph.add((person_uri, RDFS.label, Literal(pref_lat, lang="en")))
+        pref_heb = clean_marc_label(str(person_data.get("preferred_name_heb") or ""))
+        if pref_heb and pref_heb.casefold() != display_name.casefold():
+            graph.add((person_uri, RDFS.label, Literal(pref_heb, lang="he")))
 
         if "birth_year" in person_data:
             graph.add(
@@ -740,6 +885,11 @@ class GraphBuilder:
             raw_authority_values.append(str(person_data["viaf_id"]))
         if person_data.get("wikidata_id"):
             raw_authority_values.append(str(person_data["wikidata_id"]))
+        if person_data.get("viaf_uri"):
+            raw_authority_values.append(str(person_data["viaf_uri"]))
+        for id_key in ("gnd", "lc", "isni", "bnf", "j9u"):
+            if person_data.get(id_key):
+                raw_authority_values.append(str(person_data[id_key]))
         raw_authority_values.extend(person_data.get("same_as_uris", []))
 
         auth_data = self._extract_authority_identifiers(raw_authority_values)
@@ -763,7 +913,7 @@ class GraphBuilder:
 
         if related_uri and role == "author" and related_work_title:
             creation_uri = self.uri_gen.work_creation_event_uri(
-                related_work_title, person_data["name"]
+                related_work_title, display_name
             )
             graph.add((creation_uri, RDF.type, LRMOO.F27_Work_Creation))
             graph.add((creation_uri, LRMOO.R16_created, related_uri))
@@ -944,11 +1094,24 @@ class GraphBuilder:
         elif subject_type == "place":
             subject_uri = self.uri_gen.place_uri(subject["term"])
             graph.add((subject_uri, RDF.type, CIDOC.E53_Place))
+            self._emit_place_coords(
+                graph,
+                subject_uri,
+                subject.get("lat"),
+                subject.get("lon"),
+                subject.get("wikidata_id"),
+            )
+            if subject.get("geonames_id"):
+                graph.add((
+                    subject_uri,
+                    OWL.sameAs,
+                    URIRef(f"https://www.geonames.org/{subject['geonames_id']}/"),
+                ))
         else:
             subject_uri = self.uri_gen.subject_uri(subject["term"])
             graph.add((subject_uri, RDF.type, HM.SubjectType))
 
-        graph.add((subject_uri, RDFS.label, Literal(subject["term"], lang="he")))
+        graph.add((subject_uri, RDFS.label, Literal(clean_marc_label(subject["term"]), lang="he")))
 
         if subject.get("authority_id"):
             graph.add(
@@ -1299,13 +1462,28 @@ class GraphBuilder:
             graph.add((target, HM.has_linked_work, rw_uri))
 
     def _add_related_places(
-        self, graph: Graph, ms_uri: URIRef, related_places: list[str], prod_uri: URIRef | None
+        self,
+        graph: Graph,
+        ms_uri: URIRef,
+        related_places: list[str],
+        prod_uri: URIRef | None,
+        related_place_coords: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Emit additional place associations from 751 geographic added entries."""
+        coords_map = related_place_coords or {}
         for place_name in related_places:
             place_uri = self.uri_gen.place_uri(place_name)
             graph.add((place_uri, RDF.type, CIDOC.E53_Place))
-            graph.add((place_uri, RDFS.label, Literal(place_name, lang="he")))
+            graph.add((place_uri, RDFS.label, Literal(clean_marc_label(place_name), lang="he")))
+            coord_entry = coords_map.get(place_name) or coords_map.get(clean_marc_label(place_name))
+            if coord_entry:
+                self._emit_place_coords(
+                    graph,
+                    place_uri,
+                    coord_entry.get("lat"),
+                    coord_entry.get("lon"),
+                    coord_entry.get("wikidata_id"),
+                )
             graph.add((ms_uri, HM.mentions_place, place_uri))
 
     def _add_condition_notes(
