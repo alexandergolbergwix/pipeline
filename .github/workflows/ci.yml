@@ -51,3 +51,12 @@ jobs:
         timeout-minutes: 10
         env:
           QT_QPA_PLATFORM: offscreen
+
+      - name: Ontology coverage ratchet (golden fixture)
+        if: runner.os != 'Windows'
+        run: |
+          PYTHONPATH=src:. uv run python scripts/check_ontology_coverage.py \
+            --fixture data/fixtures/ontology_golden \
+            --baseline data/fixtures/ontology_golden/expected_coverage.json \
+            --fail-on-regression
+        shell: bash

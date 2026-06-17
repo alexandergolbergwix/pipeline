@@ -21,6 +21,9 @@ copy_tree "${PIPELINE_ROOT}/converter/rdf" "rdf"
 copy_tree "${PIPELINE_ROOT}/converter/transformer" "transformer"
 copy_tree "${PIPELINE_ROOT}/converter/config" "config"
 
+mkdir -p "${DEST}/wikidata"
+rsync -a "${PIPELINE_ROOT}/converter/wikidata/projection_coverage.py" "${DEST}/wikidata/"
+
 rsync -a "${PIPELINE_ROOT}/ontology/hebrew-manuscripts.ttl" "${WEB_ROOT}/backend/ontology/"
 rsync -a "${PIPELINE_ROOT}/ontology/shacl-shapes.ttl" "${WEB_ROOT}/backend/ontology/"
 

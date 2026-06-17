@@ -1,0 +1,120 @@
+[
+  {
+    "_control_number": "GOLDEN_ONTOLOGY_001",
+    "ontology_golden_complete": true,
+    "title": "כתב יד לדוגמה — מבחן אונטולוגיה",
+    "subtitle": "חלק א",
+    "part_number": "1",
+    "part_name": "ספר ראשון",
+    "authors": [{"name": "משה בן מימון", "role": "author", "birth_year": 1138, "death_year": 1204}],
+    "contributors": [
+      {"name": "סופר לא ידוע", "role": "scribe"},
+      {"name": "דוד בן גרשום", "role": "former_owner"}
+    ],
+    "dates": {"year": 1650, "century": 17},
+    "place": "אמסטרדם",
+    "extent": 248,
+    "height_mm": 320,
+    "width_mm": 240,
+    "materials": ["parchment"],
+    "languages": ["heb"],
+    "script_type": "Ashkenazi",
+    "script_mode": "Square",
+    "notes": [
+      "בראשית 1:1 — נוסח שונה מכתב יד פריז",
+      "משנה ברכות 1",
+      "הלכות תפילה",
+      "שבת 2a",
+      "עיטורים בראשי פרקים",
+      "סימן מים: עגל"
+    ],
+    "contents": [
+      {"title": "משנה תורה", "folio_range": "1-120"},
+      {"title": "פירוש רש״י", "folio_range": "121-248"}
+    ],
+    "subjects": [
+      {"term": "הלכה", "type": "topic"},
+      {"term": "ירושלים", "type": "place", "lat": 31.7683, "lon": 35.2137, "wikidata_id": "Q1218"}
+    ],
+    "genres": ["Halakhic literature"],
+    "provenance": "נרכש על ידי הספרייה הלאומית",
+    "digital_url": "https://www.nli.org.il/he/discover/manuscripts/viewer/GOLDEN_ONTOLOGY_001",
+    "iiif_manifest_url": "https://example.org/iiif/GOLDEN_ONTOLOGY_001/manifest.json",
+    "colophon_text": "נשלם בשנת תקנ״א",
+    "binding_info": "עור חום, כריכה מודרנית",
+    "is_anthology": true,
+    "is_multi_volume": true,
+    "hierarchy_type": "ComplexHierarchy",
+    "volume_members": [
+      {"control_number": "GOLDEN_ONTOLOGY_001_V1", "title": "כרך א"},
+      {"control_number": "GOLDEN_ONTOLOGY_001_V2", "title": "כרך ב"}
+    ],
+    "volume_info": "2 כרכים",
+    "volume_number": 1,
+    "certainty_levels": {"date": "Probable", "date_note": "from MARC 264"},
+    "attribution_sources": {"date": "CatalogAttribution"},
+    "codicological_units": [
+      {"is_atomic": true, "folio_range": "1-120", "unit_status": "CoreUnit_status"},
+      {"is_atomic": true, "folio_range": "121-248", "unit_status": "LaterAddition_status"}
+    ],
+    "scribal_interventions": [
+      {"type": "Correction_type"},
+      {"type": "Marginal_gloss_type"},
+      {"type": "Later_hand_type"}
+    ],
+    "canonical_references": [
+      {"hierarchy": "Bible", "book": "Genesis", "chapter": "1", "verse": "1"},
+      {"hierarchy": "Mishnah", "tractate": "ברכות", "chapter": "1"},
+      {"hierarchy": "Halacha", "book": "הלכות תפילה"},
+      {"hierarchy": "Talmud_Bavli", "tractate": "שבת", "folio": "2a"}
+    ],
+    "textual_variants": [
+      {
+        "location": "15r",
+        "variant_text": "בראשית",
+        "standard_text": "בראשית",
+        "significance": "Lexical_variant"
+      }
+    ],
+    "summary": "סיכום קטלוגי לדוגמה",
+    "has_decoration": true,
+    "has_watermark": true,
+    "has_vocalization": true,
+    "has_cantillation": true,
+    "has_multiple_hands": true,
+    "condition_notes": ["מצב טוב, קצוות שחוקים קלות"],
+    "rights_statement": "Public domain",
+    "usage_restriction": "לשימוש בקריאת חדר בלבד",
+    "restriction_url": "https://example.org/restrictions",
+    "copyright_notice": "© National Library of Israel",
+    "acquisition_source": "רכישה מספריית פרטית, 1920",
+    "related_works": [{"title": "משנה תורה", "relation": "commentary"}],
+    "related_places": ["אמסטרדם", "ירושלים"],
+    "related_place_coords": {
+      "אמסטרדם": {"lat": 52.3676, "lon": 4.9041, "wikidata_id": "Q727"}
+    },
+    "provenance_events": [
+      {
+        "type": "acquisition",
+        "place_text": "ירושלים",
+        "lat": 31.7683,
+        "lon": 35.2137,
+        "wikidata_id": "Q1218",
+        "year": 1920,
+        "certain": true,
+        "source_field": "541"
+      }
+    ],
+    "holding_institution": "הספרייה הלאומית",
+    "shelfmark": "Heb. Ms. 4° 1234",
+    "ontology_sidecar": {
+      "colophon_folio": "248v",
+      "commentary_target": "משנה תורה",
+      "admin_fields": {
+        "holding_sublibrary": "מחלקת כתבי יד",
+        "digital_access_note": "IIIF manifest available",
+        "related_material_note": "ראה גם MS 5678"
+      }
+    }
+  }
+]

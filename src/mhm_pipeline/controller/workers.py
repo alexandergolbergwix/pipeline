@@ -2011,6 +2011,20 @@ class RdfBuildWorker(StageWorker):
                 ),
                 encoding="utf-8",
             )
+
+            from converter.rdf.ontology_coverage import (
+                build_coverage_report_from_graph,
+                write_coverage_report,
+            )
+
+            ontology_path = Path(__file__).resolve().parents[3] / "ontology" / "hebrew-manuscripts.ttl"
+            coverage_report = build_coverage_report_from_graph(graph, ontology_path)
+            coverage_path = self._output_dir / "ontology_coverage.json"
+            write_coverage_report(coverage_report, coverage_path)
+            self.substep.emit(
+                f"Ontology coverage {coverage_report.classes_covered}/"
+                f"{coverage_report.inventory.class_count} classes"
+            )
             self.progress.emit(100)
             self.finished.emit(output_path)
         except Exception as exc:

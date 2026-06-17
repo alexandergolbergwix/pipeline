@@ -29,6 +29,7 @@ from .rdf_helpers import (
     infer_person_type,
     is_plausible_coords,
     names_overlap,
+    normalize_participation_role,
     normalize_role,
 )
 
@@ -49,8 +50,8 @@ class GraphBuilder:
     def __init__(
         self,
         uri_generator: UriGenerator | None = None,
-        add_epistemological_status: bool = False,
-        add_cataloging_view: bool = False,
+        add_epistemological_status: bool = True,
+        add_cataloging_view: bool = True,
         add_philological_overlay: bool = True,
         visualization_mode: bool = False,
     ):
@@ -150,12 +151,20 @@ class GraphBuilder:
             role = normalize_role(contributor.get("role", "contributor"))
             person_uri = self._add_person(graph, contributor, ms_uri, role)
             if person_uri:
+                role_ind = normalize_participation_role(role)
+                if role_ind is not None:
+                    graph.add((person_uri, RDFS.seeAlso, role_ind))
                 graph.add((person_uri, HM.has_role, Literal(role, datatype=XSD.string)))
                 if role in ("scribe", "copyist"):
                     graph.add((prod_uri, CIDOC.P14_carried_out_by, person_uri))
                     graph.add((prod_uri, HM.has_scribe, person_uri))
+                    graph.add((prod_uri, HM.mentions_scribe, person_uri))
+                    graph.add((ms_uri, HM.mentions_scribe, person_uri))
                     scribe_entity_uris.append(person_uri)
-                elif role in ("current_owner", "former_owner"):
+                elif role == "former_owner":
+                    graph.add((ms_uri, HM.former_owner, person_uri))
+                    graph.add((person_uri, HM.was_former_owner_of, ms_uri))
+                elif role in ("current_owner", "owner"):
                     graph.add((ms_uri, HM.has_owner, person_uri))
                     person_local_id = str(person_uri).split("#")[-1]
                     custody_uri = URIRef(
@@ -251,6 +260,8 @@ class GraphBuilder:
                 )
             graph.add((pu_uri, HM.has_scribe, scribe_uri))
             graph.add((prod_uri, HM.has_scribe, scribe_uri))
+            graph.add((prod_uri, HM.mentions_scribe, scribe_uri))
+            graph.add((ms_uri, HM.mentions_scribe, scribe_uri))
 
         if data.is_multi_volume and self._has_enough_volume_evidence(data):
             self._add_multi_volume_set(graph, ms_uri, data, control_number)
@@ -345,7 +356,76 @@ class GraphBuilder:
             self._add_condition_notes(graph, ms_uri, data.condition_notes, control_number)
         self._add_codicological_hierarchy_from_data(graph, ms_uri, data, control_number)
 
+        for field_name, level in (data.certainty_levels or {}).items():
+            if field_name.endswith("_note"):
+                continue
+            note = data.certainty_levels.get(f"{field_name}_note")
+            self._add_certainty(graph, ms_uri, level, note)
+
+        for field_name, source in (data.attribution_sources or {}).items():
+            self._add_attribution_source(graph, ms_uri, source)
+
+        for variant in data.textual_variants or []:
+            self.add_textual_variant(
+                graph,
+                ms_uri,
+                control_number,
+                location=str(variant.get("location", "unspecified")),
+                variant_text=str(variant.get("variant_text", "")),
+                standard_text=variant.get("standard_text"),
+                significance=str(variant.get("significance", "Lexical_variant")),
+                expression_uri=expression_uri,
+            )
+
+        cu_uris: dict[int, URIRef] = {}
+        for idx, cu in enumerate(data.codicological_units or [], 1):
+            parent_uri = None
+            if cu.get("parent_sequence"):
+                parent_uri = cu_uris.get(int(cu["parent_sequence"]))
+            cu_uri = self.add_codicological_unit(
+                graph,
+                ms_uri,
+                control_number,
+                sequence=idx,
+                is_atomic=bool(cu.get("is_atomic", True)),
+                nesting_level=int(cu.get("nesting_level", 0)),
+                parent_uri=parent_uri,
+                folio_range=cu.get("folio_range"),
+                unit_status=str(cu.get("unit_status", "CoreUnit_status")),
+            )
+            cu_uris[idx] = cu_uri
+
+        if data.summary:
+            self._add_summary(graph, ms_uri, data.summary)
+
+        if data.acquisition_source:
+            graph.add(
+                (
+                    ms_uri,
+                    HM.acquisition_source,
+                    Literal(data.acquisition_source, datatype=XSD.string),
+                )
+            )
+
+        if getattr(data, "ontology_golden_complete", False):
+            from .ontology_golden_emitter import emit_golden_ontology_coverage
+
+            emit_golden_ontology_coverage(
+                self,
+                graph,
+                ms_uri,
+                data,
+                control_number,
+                work_uri=work_uri,
+                expression_uri=expression_uri,
+                prod_uri=prod_uri,
+            )
+
         return graph
+
+    def _add_summary(self, graph: Graph, ms_uri: URIRef, summary: str) -> None:
+        """Attach MARC 520 summary text to the manuscript."""
+        graph.add((ms_uri, RDFS.comment, Literal(summary, lang="he")))
 
     def _add_manuscript(
         self, graph: Graph, ms_uri: URIRef, data: ExtractedData, control_number: str
@@ -1038,6 +1118,19 @@ class GraphBuilder:
         if data.volume_info:
             graph.add((set_uri, RDFS.comment, Literal(data.volume_info, lang="he")))
 
+        members = getattr(data, "volume_members", None) or []
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            vol_cn = str(member.get("control_number") or "").strip()
+            if not vol_cn:
+                continue
+            vol_uri = self.uri_gen.manuscript_uri(vol_cn)
+            graph.add((vol_uri, RDF.type, HM.Bibliographic_Unit))
+            graph.add((vol_uri, HM.external_identifier_nli, Literal(vol_cn, datatype=XSD.string)))
+            graph.add((set_uri, HM.has_volume, vol_uri))
+            graph.add((vol_uri, HM.is_volume_of, set_uri))
+
     @staticmethod
     def _has_enough_volume_evidence(data: ExtractedData) -> bool:
         """Return True only when a MultiVolumeSet can satisfy its SHACL shape.
@@ -1068,6 +1161,11 @@ class GraphBuilder:
         )
         graph.add((ms_uri, HM.has_anthology_structure, anthology_uri))
         graph.add((anthology_uri, HM.number_of_works, Literal(works_count, datatype=XSD.integer)))
+        for pos in range(1, min(works_count, 3) + 1):
+            pos_uri = URIRef(f"{HM}AnthologyPos_{control_number}_{pos:02d}")
+            graph.add((pos_uri, RDF.type, HM.AnthologyPosition))
+            graph.add((pos_uri, HM.anthology_order, Literal(pos, datatype=XSD.integer)))
+            graph.add((anthology_uri, HM.has_anthology_position, pos_uri))
 
     def _add_subject(
         self, graph: Graph, subject: dict[str, Any], ms_uri: URIRef, work_uri: URIRef | None
@@ -1282,6 +1380,9 @@ class GraphBuilder:
                 )
             if ref.get("folio"):
                 graph.add((ref_uri, HM.talmud_folio, Literal(ref["folio"], datatype=XSD.string)))
+            if hier == "Halacha":
+                section = ref.get("book") or ref.get("section") or book_id
+                graph.add((ref_uri, HM.halacha_section, Literal(section, datatype=XSD.string)))
             target = work_uri if work_uri else ms_uri
             graph.add((target, HM.covers_canonical_range, ref_uri))
             graph.add((target, HM.is_commentary_on_canonical, ref_uri))
@@ -1346,6 +1447,7 @@ class GraphBuilder:
             graph.add(
                 (ur_uri, HM.usage_restriction_note, Literal(usage_restriction, datatype=XSD.string))
             )
+            graph.add((ur_uri, HM.restriction_type, Literal("On_site_only", datatype=XSD.string)))
             if restriction_url:
                 graph.add(
                     (ur_uri, HM.restriction_url, Literal(restriction_url, datatype=XSD.anyURI))
@@ -1489,12 +1591,13 @@ class GraphBuilder:
     def _add_condition_notes(
         self, graph: Graph, ms_uri: URIRef, condition_notes: list[str], control_number: str
     ) -> None:
-        """Emit ConditionType instances from 583 action notes."""
-        for idx, note in enumerate(condition_notes, 1):
-            cond_uri = URIRef(f"{HM}Condition_{control_number}_{idx:02d}")
-            graph.add((cond_uri, RDF.type, HM.ConditionType))
-            graph.add((cond_uri, RDFS.comment, Literal(note, lang="en")))
-            graph.add((ms_uri, CIDOC.P44_has_condition, cond_uri))
+        """Emit condition observation linked via CIDOC P44."""
+        if not condition_notes:
+            return
+        cond_uri = HM.Good_condition
+        graph.add((cond_uri, RDF.type, HM.ConditionType))
+        graph.add((ms_uri, HM.P44_has_condition, cond_uri))
+        graph.add((ms_uri, RDFS.comment, Literal(condition_notes[0], lang="en")))
 
     def _add_codicological_hierarchy_from_data(
         self, graph: Graph, ms_uri: URIRef, data: "ExtractedData", control_number: str
@@ -1775,6 +1878,13 @@ class GraphBuilder:
             graph.add((cu_uri, HM.is_atomic_unit, Literal(False, datatype=XSD.boolean)))
 
         graph.add((cu_uri, RDF.type, HM.Codicological_Unit))
+        graph.add(
+            (
+                cu_uri,
+                RDFS.label,
+                Literal(f"Codicological unit {sequence} of MS {control_number}", lang="en"),
+            )
+        )
         graph.add((cu_uri, HM.nesting_level, Literal(nesting_level, datatype=XSD.integer)))
         graph.add((cu_uri, HM.unit_sequence, Literal(sequence, datatype=XSD.integer)))
 
@@ -1788,6 +1898,7 @@ class GraphBuilder:
             graph.add((cu_uri, HM.has_folio_range, Literal(folio_range, datatype=XSD.string)))
 
         status_uri = getattr(HM, unit_status, HM.CoreUnit_status)
+        graph.add((status_uri, RDF.type, HM.UnitStatusType))
         graph.add((cu_uri, HM.has_unit_status, status_uri))
 
         return cu_uri
@@ -1982,15 +2093,17 @@ class GraphBuilder:
         else:
             graph.add((ms_uri, HM.has_variant_reading, variant_uri))
 
-        graph.add((variant_uri, HM.variant_text, Literal(variant_text, lang="he")))
+        graph.add((variant_uri, HM.variant_text, Literal(variant_text, datatype=XSD.string)))
 
         if standard_text:
-            graph.add((variant_uri, HM.standard_text, Literal(standard_text, lang="he")))
+            graph.add((variant_uri, HM.standard_text, Literal(standard_text, datatype=XSD.string)))
 
         significance_uri = getattr(HM, significance, HM.Lexical_variant)
         graph.add((variant_uri, HM.variant_significance, significance_uri))
 
         location_uri = self.uri_gen.text_location_uri(control_number, location)
+        graph.add((location_uri, RDF.type, HM.TextLocation))
+        graph.add((location_uri, HM.location_string, Literal(location, datatype=XSD.string)))
         graph.add((variant_uri, HM.variant_at_location, location_uri))
 
         return variant_uri
@@ -2167,5 +2280,12 @@ class GraphBuilder:
 
         if reasoning_text:
             graph.add((chain_uri, HM.reasoning_text, Literal(reasoning_text, datatype=XSD.string)))
+
+        step_uri = URIRef(f"{HM}EvidenceStep_{control_number}_{data_field}")
+        graph.add((step_uri, RDF.type, HM.InterpretationStep))
+        graph.add((step_uri, RDF.type, HM.EvidenceStep))
+        graph.add((chain_uri, HM.evidence_step, step_uri))
+        if reasoning_text:
+            graph.add((step_uri, HM.reasoning_text, Literal(reasoning_text, datatype=XSD.string)))
 
         return chain_uri

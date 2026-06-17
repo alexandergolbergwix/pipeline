@@ -75,6 +75,9 @@ class ExtractedData:
     is_multi_volume: bool = False
     volume_number: int | None = None
     volume_info: str | None = None
+    volume_members: list[dict[str, Any]] = None
+    part_number: str | None = None
+    part_name: str | None = None
 
     # v1.4 Ontology features: Scribal interventions
     scribal_interventions: list[dict[str, Any]] = None
@@ -118,6 +121,10 @@ class ExtractedData:
     production_place_lon: float | None = None
     production_place_wikidata_id: str | None = None
     related_place_coords: dict[str, dict[str, Any]] = None
+
+    # Golden ontology corpus driver (Phase 0 fixture)
+    ontology_golden_complete: bool = False
+    ontology_sidecar: dict[str, Any] = None
 
     def __post_init__(self):
         if self.variant_titles is None:
@@ -175,6 +182,10 @@ class ExtractedData:
             self.kima_places = {}
         if self.related_place_coords is None:
             self.related_place_coords = {}
+        if self.volume_members is None:
+            self.volume_members = []
+        if self.ontology_sidecar is None:
+            self.ontology_sidecar = {}
 
     def set_certainty(self, field_name: str, level: str, note: str | None = None):
         """Set certainty level for a field.
@@ -448,6 +459,12 @@ class FieldHandlers:
                 result.update(parsed)
             result["dimensions_string"] = dimensions
 
+        volume_number = field.get_subfield("n") or field.get_subfield("p")
+        if volume_number:
+            digits = re.search(r"\d+", volume_number)
+            if digits:
+                result["volume_number"] = int(digits.group(0))
+
         return result
 
     @staticmethod
@@ -518,6 +535,10 @@ class FieldHandlers:
         canonical_refs = FieldHandlers._detect_canonical_references(note)
         if canonical_refs:
             result["canonical_references"] = canonical_refs
+
+        variants = FieldHandlers._detect_textual_variants(note)
+        if variants:
+            result["textual_variants"] = variants
 
         # v1.5: Physical/textual features
         note_lower = note.lower()
@@ -778,7 +799,61 @@ class FieldHandlers:
                     ref_info["folio"] = folio_match.group(1)
                 references.append(ref_info)
 
+        mishnah_tractates = ["ברכות", "שבת", "פאה", "ברכות", "berakhot", "shabbat", "peah"]
+        for tractate in mishnah_tractates:
+            if tractate.lower() in note.lower():
+                chapter_match = re.search(rf"{tractate}\s*(\d+)", note, re.IGNORECASE)
+                ref_info = {"hierarchy": "Mishnah", "tractate": tractate}
+                if chapter_match:
+                    ref_info["chapter"] = chapter_match.group(1)
+                references.append(ref_info)
+
+        halacha_keywords = ["הלכות", "הלכה", "halacha", "halakha", "שולחן ערוך"]
+        for keyword in halacha_keywords:
+            if keyword.lower() in note.lower():
+                references.append({"hierarchy": "Halacha", "book": keyword})
+                break
+
         return references
+
+    @staticmethod
+    def _detect_textual_variants(note: str) -> list[dict[str, Any]]:
+        """Detect collation / variant readings in MARC 500 notes."""
+        keywords = ("variant", "collation", "נוסח", "שונה", "גרסה", "לעומת")
+        if not any(k in note.lower() for k in keywords):
+            return []
+        return [
+            {
+                "location": "unspecified",
+                "variant_text": note[:120],
+                "standard_text": None,
+                "significance": "Lexical_variant",
+            }
+        ]
+
+    @staticmethod
+    def handle_939(field: MarcField) -> dict[str, str]:
+        """Extract usage restrictions from MARC 939."""
+        return {
+            "usage_restriction": field.get_subfield("a") or field.get_subfield("u") or "",
+            "restriction_url": field.get_subfield("u") or "",
+        }
+
+    @staticmethod
+    def handle_490(field: MarcField) -> dict[str, str]:
+        """Extract series statement useful for multi-volume grouping."""
+        return {
+            "series_title": field.get_subfield("a") or "",
+            "volume_number": field.get_subfield("v") or field.get_subfield("n") or "",
+        }
+
+    @staticmethod
+    def handle_773(field: MarcField) -> dict[str, str]:
+        """Extract host item for volume membership."""
+        return {
+            "host_title": field.get_subfield("t") or field.get_subfield("a") or "",
+            "host_control": field.get_subfield("w") or "",
+        }
 
     @staticmethod
     def handle_505(field: MarcField) -> list[dict[str, Any]]:
@@ -1537,6 +1612,8 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         title_info = handlers.handle_245(field_245)
         data.title = title_info.get("title")
         data.subtitle = title_info.get("subtitle")
+        data.part_number = title_info.get("part_number")
+        data.part_name = title_info.get("part_name")
 
     for field in record.get_fields("246"):
         variant = handlers.handle_246(field)
@@ -1565,6 +1642,8 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         data.width_mm = physical.get("width_mm")
         data.is_multi_volume = physical.get("is_multi_volume", False)
         data.volume_info = physical.get("volume_info")
+        if physical.get("volume_number") is not None:
+            data.volume_number = physical.get("volume_number")
         # Physical measurements are factual (v1.4)
         if data.extent:
             data.set_certainty("extent", "Certain")
@@ -1610,6 +1689,9 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
         # v1.4: Extract canonical references
         if note_info.get("canonical_references"):
             data.canonical_references.extend(note_info["canonical_references"])
+
+        if note_info.get("textual_variants"):
+            data.textual_variants.extend(note_info["textual_variants"])
 
         # v1.5: Physical / textual feature flags
         if note_info.get("has_watermark"):
@@ -1733,6 +1815,32 @@ def extract_all_data(record: MarcRecord) -> ExtractedData:
             data.rights_statement = rights["rights_statement"]
         if rights.get("restriction_url") and not data.restriction_url:
             data.restriction_url = rights["restriction_url"]
+
+    for field in record.get_fields("939"):
+        usage = handlers.handle_939(field)
+        if usage.get("usage_restriction") and not data.usage_restriction:
+            data.usage_restriction = usage["usage_restriction"]
+        if usage.get("restriction_url") and not data.restriction_url:
+            data.restriction_url = usage["restriction_url"]
+
+    host_cn: str | None = None
+    for field in record.get_fields("773"):
+        host = handlers.handle_773(field)
+        host_cn = host.get("host_control") or host_cn
+        if host.get("host_title"):
+            data.volume_members.append(
+                {"control_number": host_cn or host["host_title"], "title": host["host_title"]}
+            )
+    for field in record.get_fields("490"):
+        series = handlers.handle_490(field)
+        if series.get("series_title"):
+            data.volume_members.append(
+                {
+                    "control_number": host_cn or series["series_title"],
+                    "title": series["series_title"],
+                    "volume_number": series.get("volume_number"),
+                }
+            )
 
     # ── 541: acquisition source ───────────────────────────────────────────────
     field_541 = record.get_field("541")

@@ -42,6 +42,22 @@ def clean_marc_label(text: str) -> str:
     return cleaned
 
 
+def normalize_participation_role(role: str | None) -> URIRef | None:
+    """Map pipeline role tokens to hm:ParticipationRole individuals."""
+    from ..config.namespaces import HM
+
+    token = normalize_role(role)
+    mapping = {
+        "author": HM.Author_role,
+        "scribe": HM.Scribe_role,
+        "copyist": HM.Scribe_role,
+        "translator": HM.Translator_role,
+        "commentator": HM.Commentator_role,
+        "owner": HM.Owner_role,
+    }
+    return mapping.get(token)
+
+
 def normalize_role(role: str | None) -> str:
     """Map MARC relator strings to canonical pipeline role tokens."""
     if not role:

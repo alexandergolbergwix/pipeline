@@ -1,0 +1,16 @@
+{
+  "description": "Golden ontology corpus — synthetic exemplar records for 100% hm: coverage ratchet",
+  "records_file": "records.json",
+  "hero_categories": [
+    "MultiVolumeSet",
+    "AnthologyStructure",
+    "DigitalAccess",
+    "PhysicalHolding",
+    "CanonicalReference",
+    "ScribalIntervention",
+    "StemmaHypothesis",
+    "TextSpan",
+    "IIIFRegion",
+    "ManuscriptView"
+  ]
+}

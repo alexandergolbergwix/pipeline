@@ -1309,7 +1309,13 @@ The following ontology classes and properties cannot be populated from NLI MARC 
 
 \subsection{Coverage Measurement}
 
-Ontology coverage is measured by running the pipeline over the full \filepath{data/tsvs/17th\_century\_samples.tsv} fixture (897 records) and comparing the set of RDF types and predicates used against the full ontology term set. The \code{/check-coverage} Claude Code skill automates this measurement. The v1.4 baseline was 28/73 classes (38\%) and 66/237 HM properties (28\%). Version 1.5 targets $\geq$85\% of all terms that appear in Table~\ref{tbl:coverage-gaps} and above.
+HMO ontology coverage and Wikidata projection coverage are \textbf{distinct metrics}. The canonical scholarly graph (\filepath{output.ttl}) should exercise every declared \code{hm:} class and property at least once on the committed golden fixture; Wikidata projection coverage measures which HMO classes map to public Q/P statements and which remain \code{hmo\_or\_wikibase\_only} by design.
+
+\textbf{HMO ontology coverage} is measured by \filepath{converter/rdf/ontology\_coverage.py} and ratcheted in CI via \filepath{scripts/check\_ontology\_coverage.py} over \filepath{data/fixtures/ontology\_golden/}. A class is covered when it appears as \code{rdf:type} or is mentioned as subject/object; a property is covered when it appears as predicate. Desktop Stage~4 and the web RDF build both write \filepath{ontology\_coverage.json} beside the TTL.
+
+\textbf{Wikidata projection coverage} is measured by \filepath{converter/wikidata/projection\_coverage.py} and written as \filepath{rdf\_projection\_coverage.json}. Scholar-only classes (stemma, philological views, vocabulary individuals) intentionally remain \code{hmo\_or\_wikibase\_only}; they must not be promoted to Wikidata items.
+
+The legacy \filepath{data/tsvs/17th\_century\_samples.tsv} corpus (897 records, gitignored) remains useful for spot checks but is not the CI ratchet. The \code{/check-coverage} skill invokes the golden-fixture script. Baseline target: 73/73 classes and all declared \code{hm:} properties on the golden build; production corpora will vary.
 
 \subsection{Wikidata Property Coverage (v1.8)}
 

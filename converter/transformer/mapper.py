@@ -211,6 +211,11 @@ class MarcToRdfMapper:
 
         return combined_graph
 
+    def map_json_record(self, rec: dict) -> Graph:
+        """Map a single authority-enriched JSON record to RDF."""
+        combined = self.map_json_records([rec])
+        return combined
+
     def map_records(self, records: Iterator[MarcRecord]) -> Graph:
         """Map multiple MARC records to a single RDF graph.
 

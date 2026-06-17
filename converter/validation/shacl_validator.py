@@ -331,7 +331,12 @@ class ShaclValidator:
         return self._shapes_graph
 
     def validate(
-        self, data_graph: Graph, inference: str = "none", abort_on_first: bool = False
+        self,
+        data_graph: Graph,
+        inference: str = "none",
+        abort_on_first: bool = False,
+        *,
+        ontology_path: Path | None = None,
     ) -> ValidationResult:
         """Validate data graph against SHACL shapes.
 
@@ -339,20 +344,40 @@ class ShaclValidator:
             data_graph: RDF graph to validate
             inference: Inference mode ('none', 'rdfs', 'owlrl')
             abort_on_first: Stop after first violation
+            ontology_path: Optional ontology TTL for RDFS inference. When
+                ``inference`` is ``rdfs``/``owlrl``, namespace bindings must
+                be present on every graph passed to pyshacl.
 
         Returns:
             ValidationResult with conformance status and violations
         """
+        from converter.config.namespaces import bind_namespaces
+
+        bind_namespaces(data_graph)
+        bind_namespaces(self.shapes_graph)
+
+        ont_graph = Graph()
+        resolved_ont = ontology_path or (self.shapes_path.parent / "hebrew-manuscripts.ttl")
+        if resolved_ont.exists():
+            ont_graph.parse(str(resolved_ont), format="turtle")
+            bind_namespaces(ont_graph)
+
+        validate_kwargs: dict[str, object] = {
+            "shacl_graph": self.shapes_graph,
+            "inference": inference,
+            "abort_on_first": abort_on_first,
+            "meta_shacl": False,
+            "advanced": True,
+            "js": False,
+            "debug": False,
+        }
+        if len(ont_graph) and inference in {"rdfs", "owlrl", "both"}:
+            validate_kwargs["ont_graph"] = ont_graph
+
         try:
             conforms, results_graph, results_text = pyshacl.validate(
                 data_graph,
-                shacl_graph=self.shapes_graph,
-                inference=inference,
-                abort_on_first=abort_on_first,
-                meta_shacl=False,
-                advanced=True,
-                js=False,
-                debug=False,
+                **validate_kwargs,
             )
 
             violations = self._parse_results(results_graph) if not conforms else []
