@@ -69,21 +69,86 @@ Project-specific slash commands are stored in `.claude/commands/`. Use them with
 | `/launch-app` | Launch the PyQt6 GUI (opens a new Terminal window) |
 | `/update-docs` | Check and update `SystemDesignDocument.tex` / `ProjectDefinitionDocument.tex` |
 | `/generate-presentation-audio` | Generate Hebrew TTS audio from the Bar-Ilan speaker notes with Gemini or local macOS speech |
+| `/update-pptx` | Rebuild the Bar-Ilan deck and Hebrew speaker notes from `docs/presentations/build_pptx_deck.py` |
 
 ## Presentation Audio / Gemini TTS Rule
 
 When asked to create text-to-speech audio for the Bar-Ilan presentation, use
 `docs/presentations/generate_hebrew_speaker_audio.py` instead of writing a new
 TTS script. The script extracts the Hebrew speaker notes from
-`docs/presentations/bar-ilan-phd-pipeline-speaker-notes-he.tex`, keeps one
-Gemini request per slide, supports parallel generation with `--parallel`, and
-combines the resulting WAV files in slide order.
+`docs/presentations/bar-ilan-phd-pipeline-deck.pptx`, keeps one Gemini request
+per slide, supports parallel generation with `--parallel`, and combines the
+resulting WAV files in slide order. The generated
+`docs/presentations/audio/bar-ilan-phd-pipeline-speaker-notes-he.txt` file is a
+derived transcript, not the source of truth.
+
+Hard rule: the saved PPTX is the only valid source for Bar-Ilan speaker-note
+audio. Never generate Bar-Ilan audio directly from a transcript, QA notes,
+Markdown, copied speaker notes, `bar-ilan-phd-pipeline-speaker-notes-he.txt`,
+`bar-ilan-phd-pipeline-speaker-notes-he-br-pauses.txt`, or any other formatted
+text file. If the user edited a text file and asks for new audio, first move
+the intended wording into the PPTX speaker notes with the light
+`edit_pptx_deck.py` workflow, verify the saved PPTX, and only then run the TTS
+script.
 
 Never print or store API keys. Prefer the script's hidden prompt for the Gemini
 API key; only use `API_KEY` if it is already set in the shell. Start Gemini TTS
 with `--parallel 4` unless the user asks for a different concurrency. If Gemini
 fails because Hebrew is unsupported or rate-limited, explain that limitation and
 offer the local macOS `Carmit` fallback.
+
+## Presentation Deck Workflow
+
+Use `docs/presentations/bar-ilan-phd-pipeline-deck.pptx` as the source of truth
+for the Bar-Ilan presentation deck and its Hebrew speaker notes.
+
+- Treat visible PPTX slide text as the source for slide copy.
+- Treat embedded PPTX speaker notes as the source for Hebrew notes.
+- Treat `docs/presentations/audio/bar-ilan-phd-pipeline-speaker-notes-he.txt`
+  as a generated transcript, not source text.
+- Treat formatted speaker-note text files, QA notes, and line-break copies as
+  reading aids only, never as audio-generation sources. For audio, update the
+  embedded PPTX notes first and run the TTS script against the PPTX.
+- **ALWAYS read the current slide text and speaker notes straight from the
+  saved PPTX at the start of the turn, before changing a single word — even for
+  a one-sentence fix.** Never edit, quote, or rewrite from memory, from earlier
+  in the chat, from `slide_specs()`, or from the generated transcript; the PPTX
+  on disk may have been hand-edited in PowerPoint since you last saw it, so any
+  remembered text is potentially stale.
+- **Modify in place by default; do not recreate.** Two scripts, two purposes:
+  - **Light path (DEFAULT) — `docs/presentations/edit_pptx_deck.py`.** For all
+    text and speaker-note edits, including one-sentence fixes. It edits the
+    existing PPTX in place, saves the same file, and refreshes the transcript —
+    no redraw, so the visual design, manual PowerPoint tweaks, and every
+    untouched slide stay byte-for-byte intact. Example:
+    ```bash
+    .venv/bin/python docs/presentations/edit_pptx_deck.py --show 2
+    .venv/bin/python docs/presentations/edit_pptx_deck.py \
+        --slide 2 --where notes --replace "old sentence" "new sentence"
+    ```
+    `--where text` targets slide copy, `--append-note "..."` adds a new RTL
+    note paragraph, `--regen-transcript` refreshes only the transcript.
+  - **Heavy path — `docs/presentations/build_pptx_deck.py`.** Use ONLY when the
+    visual design, layout, slide count/order, or `slide_specs()` defaults
+    change. It rebuilds the whole deck from the Python design functions.
+- Manual PowerPoint edits are intentional input for the next AI/LLM pass.
+- Edit `slide_specs()` in `docs/presentations/build_pptx_deck.py` only for
+  first-draft defaults, layout structure, or new slide slots. Do not treat
+  `slide_specs()` as the current notes state when a PPTX exists.
+- Keep visible slide text short, clean, and in English.
+- Keep speaker notes in Hebrew and aligned with the slide timing.
+- Design visible slides as cue canvases for the speaker: use concise labels,
+  fragments, numbers, and visual anchors that remind Alexander what to say,
+  while leaving the full explanation in the Hebrew speaker notes.
+- Keep system/process slides GIF-ready: reserve a stable region for an MHM web
+  UI GIF/video/screenshot that demonstrates the workflow being discussed. If the
+  asset is not available yet, keep a clear media placeholder instead of filling
+  that area with extra text.
+- Verify after either path: manual text edits were preserved, the PPTX has
+  embedded notes, the transcript matches the deck, and no duplicate helper text
+  appears on the visible slide canvas.
+- If the talk framing, research story, or claims change, sync `AGENTS.md`,
+  this file, and the relevant LaTeX sources before finishing.
 
 ## Code Standards
 
@@ -2490,3 +2555,53 @@ Test surface: `mhm-pipeline-web/frontend/e2e/extraction-review.spec.ts`
 is a 29-scenario Playwright suite covering every user-flow listed
 above, mocking the backend deterministically (Rule W-19). E2E is the
 canonical regression layer for the curator UI.
+
+### 60. Non-production provenance-event places (added 2026-06-14)
+
+The corpus-movement and single-manuscript provenance maps drew only the
+**production** place (MARC 260/264 + KIMA) → NLI. Other custody events
+(acquisition, conservation, exhibition, institutional ownership) were
+dropped or, for owners, approximated by a *biographical* Wikidata
+residence. Deep research (MMM, Schoenberg DB, Footprints) settled the
+field consensus: model custody as **typed, dated, place-bearing events**
+(CIDOC-CRM E10 *Transfer of Custody* + P7 *took place at*; Wikidata flat
+form P276 + P580/P582), resolve places through an authority stack, and
+record place even when the date is uncertain.
+
+**Normalized channel.** Each record gains an additive
+`record["provenance_events"]` list — `{type, place_text, agent_name,
+year, year_earliest, year_latest, source_field, lat, lon, wikidata_id,
+certain}`. Production stays in `record["place"]`; this carries only the
+new event types, so the proven production→NLI flow never regresses. The
+shape is designed so a future 561-NER pass (deferred — no ML in this
+rule) slots into the same list.
+
+**Pipeline (web is the consumer; desktop mirrors extraction + RDF):**
+
+| Phase | Change | Files |
+|---|---|---|
+| 1 Extract | `FieldHandlers.handle_541_structured` ($a/$b/$c/$d), `handle_583_structured` ($a/$j/$h/$c), `_city_from_address` (no-NER), `build_provenance_event`; `extract_all_data` populates `provenance_events`. Web: `marc_ingest._extract_provenance_events` reuses the same helpers so the `.mrc` (desktop `extract_all_data`) and TSV/JSON collapsed-key paths emit byte-identical events. | `converter/transformer/field_handlers.py` (desktop **and** web-vendored copy), `mhm-pipeline-web/backend/app/pipeline/marc_ingest.py` |
+| 2 KIMA | `extract_named_entities` yields one place entity per event with role `f"{type}_place"`; `authority.is_place` accepts any `*_place` role. | `marc_ingest.py`, `app/pipeline/authority.py` |
+| 3 RDF | `_merge_authority_ids` writes KIMA coords back onto the matching event (fill-only-if-absent). `GraphBuilder._add_provenance_events` emits an `E8/E10/E7` event node + `P7_took_place_at` → `E53_Place` with `wgs84:lat/long` (+ `owl:sameAs` QID) + `P4_has_time-span`, linked via new `hm:has_provenance_event` and `hm:mentions_place` (so `query_geography` surfaces it). **Gated on coords present — never fabricated.** | `app/pipeline/rdf_build.py`, `converter/rdf/graph_builder.py` (desktop **and** web), `ontology/hebrew-manuscripts.ttl` (both copies — added `hm:has_provenance_event`) |
+| 4 Owner→place | `research_geo_enrich.institution_place(qid)` — two-hop seat lookup P159 → P276 → P131 → P625 for collections/libraries (Braginsky→Zurich); abstains on humans (that is `owner_place`'s job). Router chains `owner_place` → `institution_place`; owner loops accept `organization` kind. | `app/pipeline/research_geo_enrich.py`, `app/routers/research_provenance.py`, `app/pipeline/research_provenance_map.py`, `app/pipeline/corpus_movement.py` |
+| 5 Gazetteer | Ashkenazi-community fallback consulted **only after KIMA misses** (Prague/Worms/Kraków/Vilna/Frankfurt …). Coord-bearing place matches survive the no-id drop. Desktop: `KimaMatcher.match_place` falls back to `ashkenazi_gazetteer.wikidata_uri`. | `app/pipeline/ashkenazi_gazetteer.py` + `data/ashkenazi_communities.json` (web), `converter/authority/ashkenazi_gazetteer.py` + `data/ashkenazi_communities.json` (desktop), `converter/authority/kima_matcher.py` |
+| Map | `build_provenance_map` emits typed+dated `acquisition`/`conservation`/`exhibition` stops (coords from the matched authority place or the event's merged lat/lon); `_extract_corpus_item` adds `event_places` + folds event places into the corpus place facet. Frontend `KIND_COLOR`/`KIND_LABEL`/`Legend` + `MapStopKind` gained the three kinds. | `research_provenance_map.py`, `corpus_movement.py`, `frontend/.../ProvenanceMapPanel.tsx`, `frontend/src/api/research.ts` |
+
+**Integrity guards preserved:** never fabricate coordinates (every emit
+is gated on real KIMA / gazetteer / merged coords); an undated event
+still places but renders `certain=False` (Footprints rule); the KIMA →
+Ashkenazi-gazetteer order means a real KIMA hit is never overridden;
+`institution_place` reuses `owner_place`'s coord-sanity + abstain-on-
+conflict (Rule 40) guards. Existing runs must **rebuild RDF** to pick up
+the new event places in the Geography tab; the DB-sourced movement maps
+benefit without a rebuild.
+
+**561 free-text NER is explicitly deferred** (a separate multi-week ML
+effort). MARC 561 still flows to P7535 provenance text only.
+
+**Tests:** desktop `tests/unit/test_provenance_events.py` (18 — handlers,
+city extraction, event build, `extract_all_data`, gazetteer, RDF
+emission). Web `tests/test_provenance_events_ingest.py` (10),
+`test_provenance_events_rdf.py` (5), `test_institution_place.py` (9),
+`test_ashkenazi_gazetteer.py` (9), plus Rule-60 additions to
+`test_provenance_map_guards.py` (3) and `test_corpus_movement.py` (1).

@@ -1,0 +1,94 @@
+\DocumentMetadata{
+  lang=he-IL,
+  pdfversion=1.7,
+  testphase={phase-III,title,firstaid}
+}
+\documentclass[10pt,a4paper]{article}
+\usepackage[a4paper,margin=1.75cm]{geometry}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setdefaultlanguage{hebrew}
+\setotherlanguage{english}
+\newfontfamily\hebrewfont[Script=Hebrew,BoldFont={Arial Bold}]{Arial}
+\newfontfamily\englishfont{Times New Roman}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\setlength{\emergencystretch}{3em}
+\setlist[itemize]{leftmargin=*,itemsep=1pt,topsep=1pt}
+\definecolor{Accent}{HTML}{0E6F78}
+\titleformat{\section}{\large\bfseries\color{Accent}}{}{0pt}{}
+\titlespacing*{\section}{0pt}{4pt}{1pt}
+\newcommand{\fieldlabel}[1]{\textbf{\color{Accent}#1}}
+\newenvironment{englishrefs}{%
+  \begin{LTR}\begin{minipage}{\linewidth}\begin{english}\raggedright
+}{%
+  \end{english}\end{minipage}\end{LTR}
+}
+
+\begin{document}
+
+\pdfbookmark[1]{תקציר מחקר}{summary-title}
+\begin{center}
+{\LARGE\bfseries תקציר מחקר}\\[2pt]
+{\Large\bfseries מיפוי כתבי-יד עבריים}\\[-1pt]
+{\large\bfseries \textenglish{MHM}}
+\end{center}
+
+\section*{פרטי המועמד}
+\pdfbookmark[2]{פרטי המועמד}{candidate-details}
+\fieldlabel{שם:} אלכסנדר גולדברג \quad
+\fieldlabel{דוא"ל:} \textenglish{shvedbook@gmail.com} \quad
+\fieldlabel{טלפון:} \textenglish{+972 52-583-9197}
+
+\fieldlabel{מחלקה:} המחלקה למדעי המידע ויישומי בינה מלאכותית, אוניברסיטת בר-אילן
+
+\fieldlabel{מנחים:} פרופ' גילה פריבור וד"ר אבשלום אלמלח
+
+\fieldlabel{שלב המחקר הנוכחי:} הצעת המחקר אושרה; המחקר נמצא בשלב פיתוח, הערכה ופרסום של פייפליין מחקרי מקצה לקצה להמרת רשומות \textenglish{MARC} של כתבי יד עבריים לנתונים מקושרים פתוחים.
+
+\section*{נושא המחקר}
+\pdfbookmark[2]{נושא המחקר}{research-topic}
+המחקר, שכותרתו הרשמית היא \textenglish{Mapping Hebrew Manuscripts (MHM)}, בוחן כיצד להפוך רשומות \textenglish{MARC} של כתבי יד עבריים מקטלוג הספרייה הלאומית למערך נתונים מקושר, עשיר סמנטית ובר-מחקר. הקטלוג מכיל מידע ביבליוגרפי, קודיקולוגי ופילולוגי רחב, אך חלק ניכר ממנו מפוזר בין שדות מובנים, שדות מובנים-למחצה ושדות טקסט חופשי כגון הערות. פיצול זה מקשה על איתור מידע, על חיבור בין ישויות, ועל שאלות מחקריות הנוגעות לאנשים, מקומות, חיבורים, בעלויות, שרשראות העתקה ותנועת כתבי יד בין אוספים וקהילות.
+
+\section*{מטרות המחקר}
+\pdfbookmark[2]{מטרות המחקר}{research-goals}
+מטרת המחקר היא לפתח תשתית חישובית אמינה שמאחדת, מנקה וממירה רשומות \textenglish{MARC} ל-\textenglish{RDF}, מעשירה אותן מול מאגרי סמכות, ומפרסמת אותן במסגרת \textenglish{Linked Open Data}. בהתאם להצעת המחקר, העבודה מתמקדת בארבעה צירים: ניצול מודלי שפה ולמידת מכונה להעשרת מטאדאטה מתוך שדות לא מובנים; זיהוי רכיבי המידע החיוניים לתיאור כתבי יד עבריים ב-\textenglish{Wikidata}; פיתוח מנגנוני אימות לדיוק המידע המופק אוטומטית; ושימוש בנתונים מקושרים, ויזואליזציות וממשקים אינטראקטיביים כדי לחשוף דפוסים היסטוריים ותרבותיים.
+
+\section*{מתודולוגיית המחקר}
+\pdfbookmark[2]{מתודולוגיית המחקר}{methodology}
+המתודולוגיה משלבת מדעי מידע, למידת מכונה, אונטולוגיות וסקירת מומחים. הפייפליין כולל שישה שלבים: קריאת רשומות \textenglish{MARC}; חילוץ ישויות משדות טקסט חופשי באמצעות מודלי \textenglish{NER} עבריים שאומנו בהשגחה מרחוק מתוך מבנה הקטלוג; התאמה למאגרי סמכות כגון \textenglish{Mazal/NLI}, \textenglish{VIAF}, \textenglish{Wikidata} ו-\textenglish{KIMA}; בניית גרף \textenglish{RDF} לפי \textenglish{Hebrew Manuscripts Ontology}; ולידציה באמצעות \textenglish{SHACL}; והקרנה מבוקרת ל-\textenglish{Wikidata}. לצד האוטומציה פותחה סביבת עבודה, \textenglish{Wikidata Studio}, שבה חוקר או קטלוגן סוקר התאמות סמכות וטענות לפני פרסום, עם ראיות, ציוני ביטחון ובדיקות בטיחות.
+
+\section*{פרסומים ותפוקות מחקריות}
+\pdfbookmark[2]{פרסומים ותפוקות מחקריות}{research-outputs}
+\begingroup
+\footnotesize
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026). Multi-entity extraction and role classification for Hebrew manuscripts using distant supervision. Journal of Web Semantics. Manuscript under review.
+\end{englishrefs}
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026). Ontology-driven linked data for Hebrew manuscripts. Semantic Web Journal. Manuscript under review.
+\end{englishrefs}
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026). Using supervised machine learning models and codicological features for dating medieval Hebrew manuscripts. Digital Humanities Quarterly. Manuscript submitted.
+\end{englishrefs}
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026). Mapping Hebrew Manuscripts (MHM) [Short paper]. DCMI 2026. Accepted.
+\end{englishrefs}
+
+\textbf{גולדברג, א', פריבור, ג', ואלמלח, א' (2025).} גישות למידת מכונה לתיארוך כתבי יד עבריים מימי הביניים באמצעות ניתוח קודיקולוגי.\\
+\begin{englishrefs}
+JSIJ -- Jewish Studies, an Internet Journal, 25.
+\end{englishrefs}
+\endgroup
+
+\section*{תרומת המחקר והחדשנות}
+\pdfbookmark[2]{תרומת המחקר והחדשנות}{contribution}
+החדשנות המרכזית היא חיבור בין פייפליין \textenglish{AI} אוטומטי, אונטולוגיית תחום ובקרת מומחים, כך שקטלוג ספרני היסטורי הופך לגרף ידע מחקרי שהמידע בו נבדק ומתועד. המחקר תורם בארבעה רבדים: \textenglish{Hebrew Manuscripts Ontology (HMO)}, אונטולוגיה ייעודית לכתבי יד עבריים, הממירה תיאור רשומתי למודל ישויות-אירועים המיושר עם \textenglish{CIDOC CRM} ו-\textenglish{LRMoo}, ומייצגת גרנולריות קודיקולוגית, מסורות טקסט, עדי מסירה, בעלויות והעברות, לצד תיעוד מקור וסטטוס מחקרי; שיטת \textenglish{distant supervision} שבה ערכים משדות \textenglish{MARC} מובנים, כגון שמות אנשים, תפקידים וחיבורים, משמשים ליצירת תוויות אימון אוטומטיות עבור הופעותיהם בשדות הערה חופשיים, וכך מאפשרים לאמן מודלי \textenglish{NER} ללא תיוג ידני רחב; מודל פרסום תלת-שכבתי שבו \textenglish{HMO RDF} משמר את העומק המחקרי, \textenglish{Wikibase} פרויקטלי מאפשר עריכה וסקירה, ו-\textenglish{Wikidata} מספק גילוי ציבורי רחב; ומסגרת הערכה שמודדת כיסוי, אובדן מידע, תרומת מאגרי סמכות, ותקינות ההמרה.
+
+הפייפליין מעבד את קטלוג כתבי היד העבריים בקנה מידה גדול ומאפשר שאלות מחקר שקשה לשאול מתוך \textenglish{MARC} המקורי: אילו חיבורים מופיעים יחד באותם כתבי יד, אילו מעתיקים ובעלים מקשרים בין אוספים, ואיך כתבי יד עברו בין מקומות וספריות לאורך זמן. בכך המחקר מציע תרומה ישירה למדעי המידע, לבינה מלאכותית יישומית, למדעי הרוח הדיגיטליים ולתשתיות \textenglish{Linked Open Data} של מורשת תרבותית יהודית.
+
+\end{document}

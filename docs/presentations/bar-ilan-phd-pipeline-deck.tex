@@ -13,6 +13,14 @@
 % Audit comments below each slide (% AUDIT:) record the dedupe /
 % staleness fixes made when consolidating from the original HTML
 % deck + bar-ilan-phd-pipeline-speaker-notes-he.tex.
+%
+% 2026-06-10: restructured from 12 slides into a three-act arc
+% (10 slides). Distant supervision promoted to the Act-I hook;
+% old "authority engine" (5) + "layers ranked" (7) merged into one
+% slide; old data slide (3) folded into the numbers slide (now 6).
+% FACT FIXES: design corpus "~50,000" had no source -> uses the
+% verified 123,621 NLI count; ontology coverage "25% -> 87%" had no
+% source for the 25% baseline -> now states "-> 87%" only.
 
 \documentclass[aspectratio=169,12pt]{beamer}
 
@@ -53,6 +61,13 @@
 
 \begin{document}
 
+% ================================================================
+% ACT I — THE PROBLEM & THE IDEA  (slides 1–3)
+% ================================================================
+% Narrative spine: a catalog full of knowledge, locked in a format
+% built for shelving — and one idea (the catalog can supervise its
+% own transformation) that unlocks it at scale.
+
 % ─── Slide 1 — Title ────────────────────────────────────────────
 \begin{frame}[t]{Mapping Hebrew Manuscripts}
   \vspace{0.4em}
@@ -79,250 +94,146 @@
   {\footnotesize PhD Students Conference 2026 \quad\textbar\quad Bar-Ilan University}
 \end{frame}
 \note{\begin{hebrew}
-שלום, אני אלכס גולדברג, מהמחלקה למדעי המידע ויישומי בינה מלאכותית. המחקר שלנו, בהנחיית פרופ' גילה פריבור וד"ר אבשלום אלמליח, עוסק בשאלה איך הופכים את הקטלוג של כתבי היד העבריים בספרייה הלאומית של ישראל לנתונים מקושרים פתוחים --- ועושים את זה כך שחוקרים וקטלוגנים יוכלו באמת לעבוד עם התוצאה.
+שלום, אני אלכס גולדברג, מהמחלקה למדעי המידע ויישומי בינה מלאכותית, בהנחיית פרופ' גילה פריבור וד"ר אבשלום אלמליח.
 \par
-נקודת המוצא שלנו פשוטה: בספרייה הלאומית של ישראל כבר קיים מידע עשיר מאוד על כתבי יד עבריים, וחלק גדול ממנו יושב בתוך רשומות MARC. MARC הוא פורמט ספרני ותיק, שנועד לתיאור קטלוגי --- מצוין לעבודה ספרנית, אבל פחות מתאים לשאלות מחקר חישוביות על אנשים, מקומות, חיבורים, בעלות ותנועה של כתבי יד.
+אני רוצה להתחיל בתמונה אחת. בספרייה הלאומית של ישראל יש מאות אלפי רשומות קטלוג של כתבי יד עבריים, ובתוכן מאות שנים של ידע --- מי כתב, מי העתיק, מי החזיק, ומאיפה הגיע כל כתב יד. אבל הידע הזה כלוא בפורמט שנבנה כדי לסדר ספרים על מדף, לא כדי לשאול עליו שאלות מחקר.
 \par
-בהרצאה הזאת אציג שלוש תרומות שמשתלבות זו בזו: \emph{ראשית}, העשרה של 13 שדות MARC מול ארבעה מאגרי סמכות --- שזה המנוע העיקרי של תוספת המידע; \emph{שנית}, הפיכת ה-MARC לנתונים מקושרים פתוחים בשלושה ייצוגים (HMO, ויקיבייס פרויקטלי, וויקינתונים); ו\emph{שלישית}, סביבת עבודה גרפית עשירה שמאפשרת לחוקרים ולקטלוגנים לסקור, לערוך ולאשר כל טענה לפני שהיא נשלחת החוצה.
+ההרצאה הזאת היא סיפור של שחרור הידע הזה --- איך הופכים קטלוג ספרני לנתונים מקושרים פתוחים שאפשר באמת לחקור, ואיך עושים את זה כך שהחוקר נשאר במרכז. שלושת המספרים שעל השקף --- שלוש-עשרה שדות MARC, ארבעה מאגרי סמכות, שלושה ערוצי נתונים מקושרים --- הם תמצית המסע, ונחזור אליהם בסוף.
 \end{hebrew}}
 
-% ─── Slide 2 — Rich catalog, limited structure ─────────────────
-% AUDIT: removed mention of "מצוין לעבודה ספרנית" recap (already on Slide 1);
-% kept the structural-gap framing only.
-\begin{frame}[t]{Rich catalog. Limited structure.}
+% ─── Slide 2 — The locked catalog (the problem) ────────────────
+\begin{frame}[t]{A catalog full of knowledge --- locked}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{0.48\textwidth}
       \textbf{What's in there}
       \begin{itemize}
+        \item 123{,}621 NLI Hebrew-manuscript MARC records
         \item Authors, scribes, owners, collections
         \item Dates, places, works, genres
       \end{itemize}
-      \vspace{0.8em}
-      \textbf{How it's stored}
-      \begin{itemize}
-        \item Local strings --- names as written, no stable authority ID
-        \item Some content also in free-text notes
-      \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}
-      \textbf{The gap}
+      \textbf{Why it stays locked}
       \begin{itemize}
-        \item MARC is stable cataloguer markup, not directly queryable
-        \item Even the structured fields lack external links
-        \item Decades of cataloguing $\Rightarrow$ drift in phrasing
+        \item Names are local strings --- no stable authority ID
+        \item Structured fields carry no external links
+        \item Much of the story sits in free-text notes
       \end{itemize}
     \end{column}
   \end{columns}
   \vfill
-  {\footnotesize $\rightarrow$ The catalog has to be turned into linked, queryable knowledge.}
+  {\footnotesize MARC is stable cataloguer markup, built for shelving --- not for questions. $\rightarrow$ How do we unlock it, at scale, without armies of annotators?}
 \end{frame}
 \note{\begin{hebrew}
-הבעיה המרכזית היא הפער בין העושר של הקטלוג לבין המבנה שלו.
+נתחיל מהבעיה. הפער המרכזי אינו שהמידע חסר --- הוא עשיר מאוד. הבעיה היא שהוא כלוא.
 \par
-בקטלוג של הספרייה הלאומית יש מידע עשיר על כותבים, מעתיקים, בעלים, אוספים, תאריכים, מקומות, חיבורים וז'אנרים. הפער המרכזי אינו שהמידע חסר --- הוא שגם בשדות המבְנים עצמם, ערכים כמו שמות אנשים ומקומות הם בעיקר מחרוזות מקומיות, בלי קישור אל מזהה יציב במאגרי סמכות בינלאומיים. חלק מן המידע גם יושב בהערות חופשיות, בעברית, בארמית או בניסוח שהשתנה במשך עשרות שנות קטלוג --- אבל הצוואר הצר העיקרי הוא חוסר הקישוריות החיצונית של השדות עצמם.
+בקטלוג של הספרייה הלאומית יש מאה עשרים ושלושה אלף שש מאות עשרים ואחת רשומות MARC של כתבי יד עבריים, ובהן מידע על כותבים, מעתיקים, בעלים, אוספים, תאריכים, מקומות, חיבורים וז'אנרים. אבל גם בשדות המבְנים עצמם, ערכים כמו שמות אנשים ומקומות הם בעיקר מחרוזות מקומיות --- בלי קישור אל מזהה יציב במאגרי סמכות בינלאומיים. חלק גדול מן הסיפור גם יושב בהערות חופשיות, בעברית, בארמית, ובניסוח שהשתנה לאורך עשרות שנות קטלוג.
 \par
-כדי לעשות ממידע כזה משהו שאפשר לחקור ולשתף, צריך להפוך אותו לידע מובנה --- וזה בדיוק מה שהפייפליין שלנו עושה.
+\textenglish{MARC} הוא פורמט מצוין לעבודה ספרנית, אבל הוא נבנה כדי לסדר ספרים על מדף --- לא כדי לשאול עליו שאלות. וכאן עולה השאלה שמניעה את כל המחקר: איך משחררים את הידע הזה, בקנה מידה גדול, \emph{בלי} צבא של אנשים שמתייגים רשומות ידנית?
 \end{hebrew}}
 
-% ─── Slide 3 — Research data behind the pipeline ───────────────
-\begin{frame}[t]{Two circles of data}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{0.48\textwidth}
-      \textbf{Design corpus}\\[0.4em]
-      {\Large $\sim$50{,}000} NLI Hebrew-manuscript MARC records.\\[0.4em]
-      Used to understand the catalog's shape --- which fields exist, where the free-text lives, what's missing or scattered.
-    \end{column}
-    \begin{column}{0.48\textwidth}
-      \textbf{Evaluation set}\\[0.4em]
-      {\Large 68} records.\\[0.4em]
-      Mostly a 17th-century sample plus a handful of special cases. Small enough to inspect by hand, varied enough to be honest.
-    \end{column}
-  \end{columns}
+% ─── Slide 3 — The insight: the catalog supervises itself ──────
+% AUDIT: promoted distant supervision from a mid-talk aside to the
+% Act-I hook. It is the single most interesting idea; it now opens
+% the methodology rather than interrupting it.
+\begin{frame}[t]{The idea: let the catalog teach the machine}
+  \textbf{The catalog already annotated itself.}
+  \vspace{0.6em}
+  \begin{enumerate}
+    \item A name sits in a \emph{structured} field --- \texttt{100}, \texttt{700}, \texttt{505}.
+    \item The \emph{same} name reappears inside a \emph{free-text} note --- \texttt{500}, \texttt{561}.
+    \item Structured value = the label; the note = the context. Together: one labelled training example.
+  \end{enumerate}
   \vfill
-  {\footnotesize All quantitative numbers in this talk cite the 68-record evaluation set.}
+  {\footnotesize \emph{Distant supervision} --- no manual annotation. Reusable: any MARC catalog with structured + free-text fields can train its own models.}
 \end{frame}
 \note{\begin{hebrew}
-המחקר נשען על שני מעגלים של נתונים.
+התשובה מתחילה ברעיון אחד, והוא לדעתי החלק הכי יפה במחקר: הקטלוג כבר תייג את עצמו.
 \par
-המעגל הרחב הוא קורפוס המחקר: עשרות אלפי רשומות MARC של כתבי יד עבריים מן הספרייה הלאומית. השתמשנו בו כדי להבין איך הקטלוג בנוי, איפה נמצא טקסט חופשי, ואילו סוגי מידע חסרים או מפוזרים בין שדות שונים.
+שימו לב למבנה הכפול של רשומת \textenglish{MARC}. שם של אדם יושב בשדה מובְנה --- למשל 100, 700, או 505. ואותו שם בדיוק מופיע שוב, הפעם בתוך הערה חופשית --- 500 או 561. הערך המובְנה נותן לנו את התווית; ההערה החופשית נותנת את ההקשר. יחד, השניים יוצרים דוגמת אימון מתויגת --- בלי שאף אדם תייג דבר. השיטה הזאת נקראת \textenglish{distant supervision}.
 \par
-המעגל השני הוא מערך הערכה קבוע של 68 רשומות. רובו מגיע ממדגם של כתבי יד מן המאה ה-17, ונוספו אליו כמה רשומות עם מקרי בוחן מיוחדים. המטרה הייתה ליצור מערך קטן שאפשר לבדוק לעומק, ושעדיין כולל מגוון רחב של מצבים קטלוגיים.
-\par
-כשאנחנו מציגים תוצאות כמותיות, אנחנו מתייחסים למערך ההערכה הזה. כך אפשר לחזור לאותן רשומות ולהבין מאיפה כל מספר הגיע.
+זאת לא רק טכניקה נוחה, זאת תרומה מתודולוגית עצמאית: כל קטלוג \textenglish{MARC} בעולם שיש בו שדות מובְנים לצד שדות חופשיים יכול לאמן על עצמו מודלים, גם בלי תקציב לתיוג ידני. הרעיון הזה --- לתת לקטלוג ללמד את המכונה --- הוא שמניע את כל הפייפליין שנראה עכשיו.
 \end{hebrew}}
+
+% ================================================================
+% ACT II — THE SYSTEM  (slides 4–6)
+% ================================================================
+% Narrative spine: the four-phase pipeline; where the value actually
+% comes from (authority, honestly ranked); and the evidence.
 
 % ─── Slide 4 — The pipeline: read · enrich · review · publish ──
-% AUDIT: dropped "Stage 1/2/3/4" labels in slide title row per Rule 53;
-% kept the four named phases as the only visible labels.
 \begin{frame}[t]{Read \textbullet{} Enrich \textbullet{} Review \textbullet{} Publish}
   \begin{itemize}
     \item \textbf{Read.} MARC coded fields \emph{and} free-text notes --- neither dropped.
-    \item \textbf{Enrich.} People, places, works linked against Mazal, VIAF, Wikidata, KIMA. This is where most new claims are made. NER and classifiers feed reliable entities into this phase; they don't replace it.
-    \item \textbf{Review.} The researcher sees every claim in a workbench. See it, compare it to the evidence, edit it, approve it.
+    \item \textbf{Enrich.} People, places, works linked against Mazal, VIAF, Wikidata, KIMA. This is where most new claims are made; the trained models feed reliable entities into this phase.
+    \item \textbf{Review.} The researcher meets every claim in a workbench --- sees it, compares it to the evidence, edits it, approves it.
     \item \textbf{Publish.} Three linked representations: full HMO RDF graph, a project Wikibase, and public Wikidata --- one consistent source.
   \end{itemize}
   \vfill
-  {\footnotesize Between every phase: a JSON the researcher can edit before the next phase runs.}
+  {\footnotesize Between every phase: an editable JSON the researcher can correct before the next phase runs. Next: let's open up \emph{Enrich}.}
 \end{frame}
 \note{\begin{hebrew}
-הפייפליין בנוי מארבעה מהלכים שכותרתם משקפת את התרומה האמיתית של המערכת.
+הרעיון הזה הופך לפייפליין של ארבעה מהלכים, וכל אחד מהם מקרב אותנו מהקטלוג הנעול אל נתונים מקושרים שאפשר לשאול עליהם.
 \par
-\emph{קריאה.} המערכת קוראת את שדות ה-MARC המובְנים ואת ההערות החופשיות גם יחד --- בלי לאבד את האחד או את השני.
+\emph{קריאה.} המערכת קוראת את שדות ה-\textenglish{MARC} המובְנים ואת ההערות החופשיות גם יחד --- בלי לאבד את האחד או את השני.
 \par
-\emph{העשרה.} כאן יושב הלב של התרומה. הפייפליין מקשר אנשים, מקומות וחיבורים מול ארבעה מאגרי סמכות --- Mazal של הספרייה הלאומית, VIAF, ויקינתונים ו-KIMA. \emph{זהו המהלך שמייצר את רוב הטענות החדשות לכל כתב יד}, כפי שנראה בשקף המספרים. הכלים החישוביים, כולל מודלי NER, משמשים בעיקר כדי לחלץ ישויות אמינות אל תוך המהלך הזה, ולא כדי להחליף אותו.
+\emph{העשרה.} כאן יושב הלב של התרומה. הפייפליין מקשר אנשים, מקומות וחיבורים מול ארבעה מאגרי סמכות --- \textenglish{Mazal} של הספרייה הלאומית, \textenglish{VIAF}, ויקינתונים ו-\textenglish{KIMA}. זהו המהלך שמייצר את רוב הטענות החדשות, והמודלים שאימנו ב-\textenglish{distant supervision} מזינים אליו ישויות אמינות.
 \par
-\emph{סקירה.} הקטלוגנים והחוקרים פוגשים את כל הטענות בסביבת עבודה גרפית. כל טענה אפשר לראות, לבדוק מול הראיה, לערוך ולאשר. זאת בדיוק הסיבה שהפרויקט נבנה לחוקר, ולא רק לסקריפט.
+\emph{סקירה.} הקטלוגנים והחוקרים פוגשים את כל הטענות בסביבת עבודה גרפית: רואים, בודקים מול הראיה, עורכים, ומאשרים. זאת הסיבה שהפרויקט נבנה לחוקר, ולא רק כסקריפט.
 \par
-\emph{פרסום.} הנתונים מתפרסמים בשלושה ייצוגים מקושרים --- גרף ה-HMO המלא, ויקיבייס פרויקטלי, וויקינתונים הציבורי --- שכל אחד מהם נשמר כעקבי ומבוקר.
+\emph{פרסום.} הנתונים יוצאים בשלושה ייצוגים מקושרים --- גרף ה-\textenglish{HMO} המלא, ויקיבייס פרויקטלי, וויקינתונים הציבורי.
 \par
-לכן הפייפליין איננו רק כלי טכני. הוא מתודולוגיה שלמה להפיכת ידע ספרני לנתונים מקושרים פתוחים, כאשר האדם נשאר במרכז התהליך.
+בין כל שני מהלכים יושב קובץ \textenglish{JSON} שהחוקר יכול לתקן לפני שהמהלך הבא רץ. עכשיו בואו נפתח את מהלך ההעשרה --- כי שם, באופן מפתיע, נולד רוב הידע החדש.
 \end{hebrew}}
 
-% ─── Slide 5 — Authority enrichment is the primary engine ──────
-% AUDIT: kept the canonical "13 MARC tags" listing here ONLY; Slide 8
-% used to repeat the same tag list verbatim — now points back to this
-% slide rather than re-listing.
-\begin{frame}[t]{Authority enrichment carries the work}
-  \begin{itemize}
-    \item \textbf{13 MARC fields $\rightarrow$ 4 authorities.}\\
-      \texttt{100, 110, 111, 600, 610, 651, 700, 710, 711, 752, 800, 810, 811}\\
-      Cross-checked against Mazal (NLI), VIAF, Wikidata, KIMA.
-    \item \textbf{VIAF cluster harvest.} One match $\rightarrow$ 2.3$\times$ extra IDs (GND, LCCN, ISNI, BnF).
-    \item \textbf{Date back-fill from Wikidata.} SPARQL on P569/P570 closes biographical gaps the catalog leaves open.
-  \end{itemize}
+% ─── Slide 5 — Authority engine + honest ranking (MERGE) ───────
+% AUDIT: merged the old "Authority carries the work" (Slide 5) and
+% "Layers in order of contribution" (Slide 7) into ONE slide. The
+% "NER is secondary" point is now made exactly ONCE — on the right.
+\begin{frame}[t]{Where the value comes from --- honestly}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{0.50\textwidth}
+      \textbf{The engine: authority enrichment}
+      \begin{itemize}
+        \item \textbf{13 MARC fields $\rightarrow$ 4 authorities}\\
+          {\footnotesize\texttt{100 110 111 600 610 651 700 710 711 752 800 810 811}}\\
+          {\footnotesize Mazal (NLI) \textbullet{} VIAF \textbullet{} Wikidata \textbullet{} KIMA}
+        \item \textbf{VIAF cluster harvest} --- one match $\rightarrow$ 2.3$\times$ extra IDs (GND, LCCN, ISNI, BnF)
+        \item \textbf{Wikidata date back-fill} --- SPARQL on P569/P570
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \textbf{Ranked by measured contribution}
+      \begin{tabular}{@{}p{0.05\textwidth}p{0.80\textwidth}@{}}
+        \toprule
+        1 & \textbf{Authorities} --- new-claim engine \\
+        2 & \textbf{Rules} --- Hebrew dates, structure \\
+        3 & \textbf{Classifiers} --- genre, routing \\
+        4 & \textbf{NER} --- strong, net-new small \\
+        \bottomrule
+      \end{tabular}
+    \end{column}
+  \end{columns}
   \vfill
-  {\footnotesize Most new claims per manuscript come from this phase --- not from text extraction.}
+  {\footnotesize Order set by measurement, not by what looks impressive. The trained models are a safety net for the long tail --- not the primary engine.}
 \end{frame}
 \note{\begin{hebrew}
-זה השקף שמסביר \emph{מאיפה באמת מגיעה התוספת}. רוב הטענות החדשות שכל כתב יד מקבל אינן מגיעות ממודלים סטטיסטיים שמחלצים טקסט --- אלא מהעשרת הסמכות.
+זה השקף שמסביר מאיפה באמת מגיעה התוספת --- ואני רוצה להיות כן לגביו, כי התשובה אינטואיטיבית פחות ממה שמצפים.
 \par
-הפייפליין מזין כיום \emph{שלוש-עשרה תגיות MARC} אל מאגרי הסמכות: לא רק 100/110/111 ו-700/710/711 שהיו במקור, אלא גם 600/610 (אנשים וארגונים כנושאים), 651 ו-752 (מקומות גיאוגרפיים ושמות מקום היררכיים), ו-800/810/811 (כניסות סדרה). כל שדה נשלח כדי לזהות את הישות באופן יציב מול ארבעה מאגרים שמשלימים זה את זה: Mazal (NLI), VIAF, ויקינתונים ו-KIMA.
+מצד שמאל, \emph{המנוע}: העשרת סמכות. הפייפליין מזין שלוש-עשרה תגיות \textenglish{MARC} אל מאגרי הסמכות --- לא רק 100/700 הקלאסיים, אלא גם 600/610 לנושאים, 651 ו-752 למקומות, ו-800/810/811 לכניסות סדרה --- ומזהה כל ישות מול ארבעה מאגרים משלימים: \textenglish{Mazal}, \textenglish{VIAF}, ויקינתונים, ו-\textenglish{KIMA}. שני שיפורים מכפילים את הערך: \emph{קציר אשכול \textenglish{VIAF}}, שבו התאמה אחת מביאה איתה פי 2.3 מזהים בינלאומיים נוספים --- \textenglish{GND, LCCN, ISNI, BnF}; ו\emph{השלמת תאריכים מוויקינתונים} דרך \textenglish{P569/P570}, כשהמקורות האחרים שותקים.
 \par
-מעבר לזיהוי עצמו, יש כאן שני שיפורים שמכפילים את הערך. הראשון הוא \emph{קציר אשכול VIAF}: התאמה אחת ל-VIAF מביאה איתה 2--4 מזהים נוספים --- GND, LCCN, ISNI ו-BnF --- שמחברים את הישות לגרפי הידע של ספריות לאומיות אחרות. השני הוא \emph{השלמת תאריכים מוויקינתונים}: כשנמצא QID לאדם בלי תאריכי לידה ופטירה במקורות אחרים, המערכת שולפת אותם דרך P569/P570 כדי שמשמר התאריכים יעבוד גם על מועמדים שזוהו רק דרך SPARQL.
+מצד ימין, הדירוג הכן של ארבע השכבות --- לפי מה שהמדידות הראו, ולא לפי מה שמרשים על הנייר. ראשונה הסמכות; שנייה החוקים, שחזקים במיוחד במקום שבו המבנה יציב, כמו תאריכים; שלישית המסווגים, שמשלימים שדות חסרים; ורק רביעית --- מודלי ה-\textenglish{NER}.
 \par
-כך, ההעשרה הופכת רשומה ביבליוגרפית קצרה לישות עשירה ומקושרת לרשת הסמנטית --- וזו התרומה הראשונה, והעיקרית, של הפייפליין.
+וכאן הנקודה הכנה, ואומר אותה פעם אחת בבירור: מודלי ה-\textenglish{NER} שלנו \emph{טובים} במשימת החילוץ, אבל אחרי שלב הסמכות והחוקים, תוספת הטענות הנקייה שלהם בקורפוס הזה קטנה. הם רשת ביטחון לזנב הארוך --- לרשומות שבהן הישות חיה רק בהערה חופשית --- ולא המנוע המרכזי. בשקף הבא נראה את המספרים המדויקים שמאחורי כל זה.
 \end{hebrew}}
 
-% ─── Slide 6 — Distant supervision ─────────────────────────────
-\begin{frame}[t]{Catalog $\rightarrow$ training data, no manual labels}
-  \textbf{Distant supervision in three steps}
-  \begin{enumerate}
-    \item \textbf{Structured MARC.} Names, genres, contents cues from coded fields.
-    \item \textbf{Match in free text.} Find the same value inside the catalog's free-text notes.
-    \item \textbf{Training pair.} The aligned span becomes a labelled example.
-  \end{enumerate}
-  \vfill
-  {\footnotesize A reusable technique --- any MARC catalog with structured + free-text fields can train its own models.}
-\end{frame}
-\note{\begin{hebrew}
-לפני שנמשיך לסוקר את שאר השכבות, מילה אחת על הצד החישובי. שאלה נפוצה היא איך בכלל מאמנים מודלים כאלה בלי לתייג ידנית אלפי רשומות.
-\par
-הפתרון הוא להשתמש בקטלוג של הספרייה הלאומית עצמו כמקור לנתוני אימון. בחלק מהרשומות יש מידע מובנה יחסית --- שמות ותפקידים, סימוני תוכן, ז'אנרים, או הערות בעלות --- והוא משמש כעוגן. אחר כך מחפשים את אותו מידע בתוך הטקסט החופשי. אם שם שמופיע בשדה מובנה מופיע גם בהערה חופשית, אפשר ליצור ממנו דוגמת אימון. השיטה הזאת נקראת \textenglish{distant supervision}.
-\par
-זאת תרומה מתודולוגית עצמאית: כל קטלוג MARC שבו יש שדות מובְנים לצד שדות חופשיים יכול לאמן בו את אותם מודלים, גם בלי לתייג ידנית. \emph{בשקף הבא נראה איפה הם נופלים בסדר התרומה האמיתי.}
-\end{hebrew}}
-
-% ─── Slide 7 — Layers, in order of actual contribution ─────────
-% AUDIT: removed duplicate "Person v3 80.4% F1" phrasing from speaker
-% note here — that headline lives on Slide 10 ("by the numbers").
-% Speaker note now frames the ordering only, not the numbers.
-\begin{frame}[t]{Layers, in order of actual contribution}
-  \begin{tabular}{@{}p{0.04\textwidth}p{0.55\textwidth}p{0.30\textwidth}@{}}
-    \toprule
-    \# & \textbf{Layer} & \textbf{Role} \\
-    \midrule
-    1 & \textbf{Authorities} --- Mazal, VIAF, Wikidata, KIMA & primary new-claim engine \\
-    2 & \textbf{Rules} --- Hebrew dates, physical description & high recall, structural \\
-    3 & \textbf{Classifiers} --- genre completion, routing & targeted \\
-    4 & \textbf{NER + classifiers} \emph{(strict benchmark + audit)} & methodological \\
-    \bottomrule
-  \end{tabular}
-  \vfill
-  {\footnotesize Order set by measurement, not by what looks impressive on paper.}
-\end{frame}
-\note{\begin{hebrew}
-זה שקף שמסדר את הרכיבים לפי כמה הם באמת תורמים --- לפי מה שהמדידות האחרונות שלנו הראו, ולא לפי מה שמרשים יותר על הנייר.
-\par
-\emph{ראשון, סמכות.} מאגרי הסמכות הם מנוע הטענות החדשות. הם מחברים שמות וקבוצות למזהים יציבים מ-Mazal, VIAF, ויקינתונים ו-KIMA --- ובדרך מביאים איתם תאריכים ביוגרפיים, וריאנטים בשמות, ושכבת מזהים בינלאומית שלמה.
-\par
-\emph{שני, חוקים.} למידע שיש לו מבנה יציב יחסית, חוקים בקוד יעילים יותר ממודלים. הדוגמה הטובה ביותר היא תאריכים: כיסוי תאריך היצירה עולה משמעותית, וזה מגיע כמעט כולו מחוקים שמפענחים תאריכים מקודדים, ניסוחים של מאות בעברית, ותאריכים חלקיים. את המספרים המדויקים נראה בהמשך.
-\par
-\emph{שלישי, מסווגים.} כשצריך להחליט על סוג המשפט או על סוג החיבור --- למשל להשלים ז'אנר חסר --- מסווג ייעודי הוא הכלי המתאים.
-\par
-\emph{רביעי, NER ומסווגים --- כלים שמדדנו ושאנחנו כנים לגביהם.} אימנו שלושה מודלי NER (אנשים, פרובננס, תוכן) ומסווג ז'אנר באמצעות \textenglish{distant supervision}. הם משלימים פערים בקצוות הקורפוס, אבל סוכן ההערכה שלנו אישר שתרומתם הנקייה של המודלים האלה לטענות חדשות, אחרי שלב הסמכות והחוקים, היא קטנה. הם נשארים בפייפליין כתרומה מתודולוגית --- בשקף המספרים נראה את הביצועים המדויקים שלהם.
-\end{hebrew}}
-
-% ─── Slide 8 — Wikidata Studio + the eval-agent ────────────────
-% AUDIT: removed verbatim repeat of the 13 MARC tags here (lived on Slide 5);
-% removed restatement of the four authority sources (also Slide 5).
-% Speaker note now focuses on what the *workbench* adds, not the tag list.
-\begin{frame}[t]{Wikidata Studio + the eval-agent}
-  \textbf{The workbench}
-  \begin{itemize}
-    \item Three-axis review: \emph{source} (which MARC field or model), \emph{entity type}, \emph{role} --- the cataloguer's own vocabulary.
-    \item Biodata-comparison dialog --- dates, places, name variants, occupations side by side from MARC, Mazal, VIAF, KIMA.
-    \item Confidence tooltip --- which sources matched, which guards fired, which biographical years were pulled.
-    \item 14 pre-save checks, resumable review state, paging at 25/50/100 rows.
-  \end{itemize}
-  \textbf{The eval-agent}
-  \begin{itemize}
-    \item A Gemini-based judge audits \emph{both} entity extraction \emph{and} authority matches.
-    \item One shared approval across every editor --- approve once, reflected everywhere.
-    \item \textbf{Auto-fix} suggestions for NER entities: when Gemini proposes a high-confidence correction (e.g.\ a missing patronymic), an Auto-fix button appears inline --- text is updated but approval stays human.
-  \end{itemize}
-  \vfill
-  {\footnotesize Studio reviews per claim; the eval-agent audits the corpus and may propose a fix. The agent suggests --- the human decides.}
-\end{frame}
-\note{\begin{hebrew}
-זה השקף שלוקח את הפייפליין מהיותו סקריפט להיותו כלי מחקר ממשי. לא מספיק לחלץ ולהעשיר --- צריך לאפשר לחוקרים ולקטלוגנים לראות, לערוך ולאשר כל טענה. \emph{Wikidata Studio} היא סביבת העבודה שעושה את זה.
-\par
-\emph{חידוש: Auto-fix.} כשהסוכן מאמת ישות NER ומוצא שהיא נכונה חלקית --- למשל שם אדם שמפסיד פטרונים שנוכח בבירור בשדה ה-MARC --- הוא יכול כעת להציע תיקון טקסטואלי. תיקון כזה, ברמת ביטחון \textenglish{high} בלבד, מופיע כלחצן \textbf{Auto-fix} בצד השורה הרלוונטית ובמגירת הפרטים. לחיצה שולחת PATCH שמעדכן את הטקסט בלבד, מבלי לאשר את הישות --- ההחלטה להאשר נשארת בידי האדם.
-\par
-\emph{סקירה בשלושה צירים.} כל שורה היא ישות שראויה לסקירה: כל ערך MARC שעבר העשרה, כל ישות שזיהה מודל NER, כל מקום שזיהה KIMA. אפשר לסנן לפי \textbf{מקור} (איזה שדה MARC או איזה מודל), \textbf{סוג ישות}, ו\textbf{תפקיד} --- שלושה צירים שהם בעצם השפה של הקטלוגנית.
-\par
-\emph{דיאלוג השוואת ביוגרפיה.} ההחלטה אם להאמין להתאמת סמכות לא נופלת על שם בלבד; היא נופלת על תאריכים, מקומות, וריאנטים בשמות, ועיסוקים. לחיצה על הסמל פותחת מסך שמראה את כל הנתונים האלה זה לצד זה --- מ-MARC, מ-Mazal, מ-VIAF ומ-KIMA --- עם הבלטה צבעונית של מה תואם, מה שונה, ומה קיים רק במקור אחד. מנרמלים את הטקסט, מסירים תוויות עבריות כמו ``בן''/``בת'' ולטיניות כמו ``de'' / ``ibn'', כדי לא להישבר על דמיון רדוד.
-\par
-\emph{Tooltip של ציון הביטחון.} ציון HIGH או LOW אינו תווית סתומה. ריחוף עכבר על העמודה מציג מי תאם, אילו שומרי בקרה ירו (קונפליקט תאריכים, הומונים, התמזגות אשכול VIAF, וכדומה), אילו שנים ביוגרפיות נשלפו, ואיזה זיהויים מן ה-cluster של VIAF הגיעו עם הזיהוי. הקטלוגנית רואה את כל ההיגיון שמאחורי הציון.
-\par
-\emph{תהליך עבודה אמיתי.} 14 בדיקות לפני העלאה חוסמות פריטים פגומים מלהיכלל ב``אישור''. מצב הסקירה נשמר ל-JSON, כך שאפשר לסגור את היישום ולחזור בדיוק לנקודה שעצרנו. דפדוף של 25/50/100 שורות שומר על תגובה מהירה גם בקורפוסים גדולים.
-\par
-\emph{סוכן הערכה אוטומטי (\textenglish{eval-agent}).} בנוסף לסקירה הידנית, סוכן הערכה מבוסס \textenglish{Gemini} בודק את הפלט בשתי נקודות: \emph{את חילוץ הישויות (מודלי ה-NER ומסווג הז'אנר) ואת התאמות הסמכות} --- האם זו אכן הרשומה הנכונה ב-Mazal, ב-VIAF, בויקינתונים או ב-KIMA. מקרים שצריכים תשומת לב מסומנים, והקטלוגנית רואה אותם בתוך אותה סביבת סקירה עם אישור משותף --- אישור פעם אחת בכל מסך תקף בכולם. הסוכן מציע; האדם מכריע.
-\end{hebrew}}
-
-% ─── Slide 9 — MARC → LOD in three layers ──────────────────────
-% AUDIT: kept ontology-coverage headline (87% reachable, 28.1 claims/MS)
-% here; removed it from Slide 12 where it had been duplicated.
-\begin{frame}[t]{MARC becomes Linked Open Data, in three layers}
-  \begin{itemize}
-    \item \textbf{HMO graph (RDF).} The full scholarly graph. Manuscript, works, persons, places, copying and ownership events, supporting evidence. Standard RDF file --- now persisted in PostgreSQL, always available.
-    \item \textbf{Project Wikibase} (\texttt{mhm-hmo.wikibase.cloud}). Same graph, familiar browse-and-edit interface --- no ontology class is dropped.
-    \item \textbf{Public Wikidata.} A projection. After all model improvements, $\sim$87\% of the ontology's classes are reachable via Wikidata, with $\sim$28.1 claims per manuscript on average.
-  \end{itemize}
-  \vfill
-  {\footnotesize One source, three audiences --- domain experts, cataloguers, and the open web. All three are queryable from the \textbf{Linked Data Explorer} tab.}
-\end{frame}
-\note{\begin{hebrew}
-התרומה השנייה של הפייפליין היא בעצם שלוש בו זמנית: \emph{מאותו צינור עיבוד יוצאים שלושה ייצוגים של נתונים מקושרים פתוחים}, כל אחד מתאים לקהל אחר.
-\par
-\emph{הראשון, גרף ה-HMO.} זה הייצוג המחקרי המלא, מבוסס על האונטולוגיה שלנו לכתבי יד עבריים. הוא שומר מבנה עשיר --- כתב היד, החיבורים שבתוכו, האנשים, המקומות, אירועים של העתקה ובעלות, והראיות שעליהן הטענות נשענות. החידוש: הגרף נשמר עכשיו גם ב-PostgreSQL --- כלומר הוא זמין לאחר כל הפעלה מחדש של השרת, ללא צורך ב-rebuild נוסף.
-\par
-\emph{השני, ויקיבייס פרויקטלי.} אותו גרף HMO נטען לויקיבייס ייעודי בכתובת \texttt{mhm-hmo.wikibase.cloud}, כך שחוקרים וקטלוגנים יכולים לדפדף, לחפש ולערוך את כל הישויות בממשק מוכר --- בלי לאבד אף קלאסה מהמבנה המחקרי.
-\par
-\emph{השלישי, ויקינתונים הציבורי.} כאן מתבצעת הקרנה. אחרי כל שיפורי המודל, כ-87 אחוז ממחלקות האונטולוגיה ניתנות להגעה דרך ויקינתונים, ובממוצע 28.1 טענות לכל כתב יד --- כך שגם מי שמכיר רק את ויקינתונים מקבל תמונה מחקרית עשירה.
-\par
-שלושת השכבות האלה אינן רק פורמטי ייצוא --- הן ניתנות לשאילתה ישירות מ\textbf{לשונית ה-Linked Data Explorer} במערכת, כפי שנראה בשקף הבא.
-\par
-המסר: \emph{הופכים את ה-MARC לנתונים מקושרים פתוחים, ולא מאבדים בדרך לא את העומק המחקרי ולא את הנגישות הציבורית.}
-\end{hebrew}}
-
-% ─── Slide 10 — What each layer contributes (numbers) ──────────
-% AUDIT: standardised Person NER v3 line to "80.4% strict / 86.8% name-only /
-% 92.6% role accuracy" per CLAUDE.md Rules 17 + 56. Previous drafts loosely
-% said "~85%" — corrected.
-% AUDIT: removed the rules headline number from speaker note here; it's
-% already in the slide table. Speaker note now adds context only.
-\begin{frame}[t]{What each layer contributes}
-  \begin{tabular}{@{}p{0.30\textwidth}p{0.20\textwidth}p{0.45\textwidth}@{}}
+% ─── Slide 6 — The numbers (evidence) ──────────────────────────
+% AUDIT: the 68-record evaluation set (was its own Slide 3) is now
+% folded in here as the measurement context for the numbers.
+% AUDIT: FACT FIX — "25% → 87%" had no source for the 25% baseline;
+% changed to "→ 87%" (the 87% is verified; the baseline is not).
+\begin{frame}[t]{What each layer contributes --- in numbers}
+  \begin{tabular}{@{}p{0.28\textwidth}p{0.22\textwidth}p{0.44\textwidth}@{}}
     \toprule
     \textbf{Layer} & \textbf{Headline} & \textbf{What it means} \\
     \midrule
@@ -331,56 +242,105 @@
     Rules & 22\% $\rightarrow$ 97\% & manuscripts with a parsed creation date \\
     Classifiers & 28 $\rightarrow$ 39 & records with a genre (of 68) \\
     NER + cls. & 80.4\% F1 strict & person v3 (name+role); net new small \\
-    LOD bridge & 25\% $\rightarrow$ 87\% & HMO classes reachable via Wikidata; 28.1 claims/MS \\
+    LOD bridge & $\rightarrow$ 87\% & HMO classes reachable via Wikidata; 28.1 claims/MS \\
     \bottomrule
   \end{tabular}
   \vfill
-  {\footnotesize 68-record evaluation set. Person v3: 80.4\% strict (name+role) / 86.8\% name-only / 92.6\% role accuracy. Provenance NER 95.91\%; Contents NER 99.99\% on the two records where MARC 505 appears.}
+  {\footnotesize Measured on a 68-record evaluation set (mostly a 17th-century sample). Baseline $\rightarrow$ full pipeline: 8.0 $\rightarrow$ 28.1 claims/MS ($3.5\times$). Person v3: 80.4\% strict / 86.8\% name-only / 92.6\% role acc. Provenance NER 95.91\%; Contents NER 99.99\% on the 2 records where MARC 505 appears.}
 \end{frame}
 \note{\begin{hebrew}
-המספרים בשקף הזה הם החלק החשוב להיות בו כנים, ולכן אני אומר אותם בסדר של תרומה אמיתית.
+לפני המספרים, מילה על מה שמדדנו: מערך הערכה קבוע של 68 רשומות, רובן מדגם של כתבי יד מן המאה ה-17. מערך קטן מספיק כדי לבדוק כל רשומה ביד, ומגוון מספיק כדי להיות כן. כל מספר שאני אומר עכשיו חוזר למערך הזה.
 \par
-\emph{קו הבסיס.} המרה ישירה של MARC, בלי שום שכבה נוספת, נותנת בערך שמונה טענות לכל כתב יד.
+\emph{קו הבסיס.} המרה ישירה של \textenglish{MARC}, בלי שום שכבה נוספת, נותנת בערך שמונה טענות לכתב יד. הפייפליין המלא מגיע ל-28.1 --- שיפור של פי 3.5.
 \par
-\emph{סמכות --- המנוע העיקרי.} כל אדם שמתאים ל-VIAF מקבל בממוצע פי 2.3 יותר מזהים בינלאומיים מן ה-cluster (GND, LCCN, ISNI, BnF). כל מקום מתחבר ל-KIMA ול-Q של ויקינתונים. \emph{זאת השכבה שמייצרת את הרוב של הטענות החדשות --- כולל ההפיכה של כל ישות מ``מחרוזת'' ל``יישות מקושרת''.}
+\emph{סמכות --- המנוע.} כל אדם שמתאים ל-\textenglish{VIAF} מקבל פי 2.3 מזהים בינלאומיים מן האשכול. זאת השכבה שהופכת כל ישות ממחרוזת לישות מקושרת.
 \par
-\emph{חוקים בקוד.} כיסוי תאריך היצירה עולה מ-22 אחוז ל-97 אחוז. תרומה גדולה במקום שבו המבנה יציב.
+\emph{חוקים.} כיסוי תאריך היצירה עולה מ-22 אחוז ל-97 אחוז --- כמעט כולו מחוקים שמפענחים תאריכים מקודדים וניסוחי מאות בעברית.
 \par
-\emph{מסווגים.} משלימים שדות חסרים. כיסוי הז'אנרים עולה מ-28 מתוך 68 רשומות ל-39 מתוך 68.
+\emph{מסווגים.} כיסוי הז'אנרים עולה מ-28 מתוך 68 רשומות ל-39 מתוך 68.
 \par
-\emph{NER ומסווגים --- תרומה משנית, מדודה ושקופה.} כאן חשוב להפריד בין שני סוגי מדידה. מול תוויות הזהב, מודל האנשים החדש מגיע ל-80.4 אחוז F1 בהתאמה קפדנית של שם ותפקיד, 86.8 אחוז בחילוץ שם בלבד, ו-92.6 אחוז דיוק תפקיד כאשר השם זוהה. אבל אחרי שלב הסמכות והחוקים, תוספת הטענות הנקייה של מודלי ה-NER בקורפוס הזה נשארת קטנה. לכן אני מציג את שני הדברים יחד: המודל טוב במשימת החילוץ, אבל עיקר התרומה של הפייפליין כולו עדיין מגיע מהסמכות, מהחוקים, ומהסקירה האנושית.
+\emph{NER --- מדוד ושקוף.} מול תוויות הזהב, מודל האנשים מגיע ל-80.4 אחוז \textenglish{F1} בהתאמה קפדנית של שם ותפקיד, 86.8 אחוז בשם בלבד, ו-92.6 אחוז דיוק תפקיד. הפרובננס מגיע ל-95.91 אחוז, והתוכן ל-99.99 אחוז --- אבל שימו לב, רק בשתי רשומות מתוך 68 בכלל יש שדה 505. המודלים טובים; פשוט עיקר התרומה כבר נתפס על ידי הסמכות והחוקים.
 \par
-\emph{הגשר.} כל השכבות האלה מזינות את ההקרנה לוויקינתונים שראינו בשקף הקודם --- שמעלה את כיסוי המחלקות מ-25 אחוז ל-87 אחוז, ומגיעה ל-28.1 טענות בממוצע לכתב יד.
+\emph{הגשר.} כל השכבות מזינות את ההקרנה לוויקינתונים, שמגיעה לכ-87 אחוז ממחלקות האונטולוגיה ו-28.1 טענות בממוצע לכתב יד --- ואת זה נראה בשקף הבא.
 \end{hebrew}}
 
-% ─── Slide 11 — Research questions enabled ────────────────────
-\begin{frame}[t]{New questions become askable --- now with a live interface}
+% ================================================================
+% ACT III — THE HUMAN & THE PAYOFF  (slides 7–10)
+% ================================================================
+% Narrative spine: trust comes from the human in the loop; the output
+% is three layers of LOD; the payoff is new research questions; close
+% on the four contributions.
+
+% ─── Slide 7 — Wikidata Studio + the eval-agent ────────────────
+\begin{frame}[t]{Why you can trust the numbers: the human in the loop}
+  \textbf{Wikidata Studio --- the workbench}
   \begin{itemize}
-    \item Which works \emph{travel together} in the same manuscripts? Textual clusters emerge from the corpus itself.
-    \item Whose name \emph{reappears across collections}? --- the social network of manuscript production and transmission.
-    \item Whose \emph{ownership chain} crosses which libraries, families, places, across centuries?
-    \item How did manuscripts move between places and periods?
+    \item Three-axis review: \emph{source} (which MARC field or model), \emph{entity type}, \emph{role}.
+    \item Biodata-comparison dialog --- dates, places, name variants, occupations side by side from MARC, Mazal, VIAF, KIMA.
+    \item Confidence tooltip --- which sources matched, which guards fired, which years were pulled.
+    \item 14 pre-save checks, resumable review state, paging at 25/50/100 rows.
+  \end{itemize}
+  \textbf{The eval-agent}
+  \begin{itemize}
+    \item A Gemini-based judge audits \emph{both} entity extraction \emph{and} authority matches.
+    \item One shared approval across every editor --- approve once, reflected everywhere.
+    \item \textbf{Auto-fix}: a high-confidence correction appears inline --- text is updated, but approval stays human.
   \end{itemize}
   \vfill
-  {\footnotesize \textbf{Linked Data Explorer} tab: three-layer SPARQL console (HMO graph / Wikibase / Wikidata) with 8 pre-built scholarly templates. Every entity shown was human-reviewed in Wikidata Studio.}
+  {\footnotesize The agent suggests; the human decides. Every number on the previous slide passed through this.}
 \end{frame}
 \note{\begin{hebrew}
-ברגע שהפלט של הפייפליין הוא נתונים מקושרים פתוחים --- ולא רק רשומות MARC --- אפשר לשאול שאלות שקשה מאוד או בלתי-אפשרי לשאול מן הקטלוג המקורי.
+ועכשיו, הצד שהופך את כל המספרים האלה לאמינים. כי אפשר לחלץ ולהעשיר כמה שרוצים --- אם אף אדם לא בדק את התוצאה, חוקר לא יוכל לסמוך עליה. \textenglish{Wikidata Studio} היא סביבת העבודה שמחזירה את האדם למרכז.
 \par
-אפשר לבדוק \emph{אילו חיבורים מופיעים יחד} באותם כתבי יד, ולזהות אשכולות טקסטואליים מתוך הקורפוס עצמו. אפשר \emph{לעקוב אחרי אנשים} --- מעתיקים, בעלים, נמענים --- שמופיעים בכמה אוספים, ולשרטט את הרשת החברתית של ייצור והעברה של כתבי יד. אפשר \emph{לבחון שרשראות בעלות} ולשאול איך כתבי יד עברו בין מקומות, משפחות וספריות לאורך מאות שנים.
+\emph{סקירה בשלושה צירים.} כל שורה היא ישות שראויה לסקירה: כל ערך \textenglish{MARC} שעבר העשרה, כל ישות שזיהה מודל \textenglish{NER}, כל מקום שזיהה \textenglish{KIMA}. אפשר לסנן לפי \textbf{מקור} --- איזה שדה או איזה מודל --- לפי \textbf{סוג ישות}, ולפי \textbf{תפקיד}. שלושה צירים שהם בעצם השפה של הקטלוגנית.
 \par
-\textbf{חידוש: לשונית ה-Linked Data Explorer.} השאלות האלה כבר לא תיאורטיות בלבד --- ניתן לשאול אותן ישירות מהממשק. הלשונית מציגה קונסולת SPARQL בשלוש שכבות: גרף ה-HMO בתוך המערכת (rdflib), ויקיבייס פרויקטלי (אם מוגדר), וויקינתונים הציבורי. שמונה תבניות שאילתה מוכנות מראש מכסות את השאלות המרכזיות: אשכולות חיבורים, רשת מעתיקים, שרשראות בעלות, ופיזור גיאוגרפי.
+\emph{דיאלוג השוואת ביוגרפיה.} ההחלטה אם להאמין להתאמת סמכות אינה נופלת על שם בלבד, אלא על תאריכים, מקומות, וריאנטים בשמות, ועיסוקים. לחיצה פותחת מסך שמראה את כולם זה לצד זה --- מ-\textenglish{MARC}, \textenglish{Mazal}, \textenglish{VIAF}, ו-\textenglish{KIMA} --- עם הבלטה צבעונית של מה תואם ומה שונה. מנרמלים את הטקסט ומסירים תוויות כמו ``בן'' או ``\textenglish{de}'', כדי לא להישבר על דמיון שטחי.
 \par
-בראש הלשונית מוצג כותרת המקורות: כמה כתבי יד, חיבורים, אנשים, מקומות וטריפלים בגרף --- ותג אמינות שמאשר שכל הישויות המוצגות עברו סקירת אדם ב-Wikidata Studio. חוקר שמריץ שאילתת SPARQL על הפלט שלנו יודע שהקישורים שמאחורי כל מזהה נבחנו, ולא רק נחושו.
+\emph{\textenglish{Tooltip} של ביטחון.} ציון \textenglish{HIGH} או \textenglish{LOW} אינו תווית סתומה: ריחוף עכבר מראה מי תאם, אילו שומרי בקרה ירו, ואילו שנים ביוגרפיות נשלפו. ו-14 בדיקות לפני שמירה חוסמות פריטים פגומים. מצב הסקירה נשמר, אפשר לעצור ולחזור, ודפדוף של 25/50/100 שורות שומר על מהירות גם בקורפוסים גדולים.
 \par
-במובן הזה, הפייפליין הוא לא סוף המחקר --- הוא התשתית שמאפשרת מחקר. עכשיו, כלי המחקר עצמו מובנה בתוכו.
+\emph{סוכן ההערכה.} מעל הסקירה הידנית, סוכן מבוסס \textenglish{Gemini} מבקר את הפלט בשתי נקודות --- \emph{גם את חילוץ הישויות וגם את התאמות הסמכות} --- עם אישור משותף בכל המסכים: אישור פעם אחת תקף בכולם. וכשהסוכן מזהה ישות נכונה חלקית, למשל שם שחסר בו פטרונים, הוא מציע \textbf{תיקון אוטומטי} ברמת ביטחון גבוהה --- הלחצן מעדכן את הטקסט בלבד, וההחלטה לאשר נשארת בידי האדם. הסוכן מציע; האדם מכריע. כל מספר שראינו בשקף הקודם עבר דרך התהליך הזה.
 \end{hebrew}}
 
-% ─── Slide 12 — Summary: four contributions ────────────────────
-% AUDIT: removed restatement of "13 MARC fields → 4 authorities" details
-% (lived on Slide 5) and ontology-coverage % (lived on Slide 9). Speaker
-% note now names the four contributions and closes the talk; numeric
-% headlines deferred to the slides where they already live.
+% ─── Slide 8 — MARC → LOD in three layers ──────────────────────
+\begin{frame}[t]{The output: Linked Open Data, in three layers}
+  \begin{itemize}
+    \item \textbf{HMO graph (RDF).} The full scholarly graph --- manuscripts, works, persons, places, copying and ownership events, supporting evidence. Now persisted in PostgreSQL, always available.
+    \item \textbf{Project Wikibase} (\texttt{mhm-hmo.wikibase.cloud}). The same graph in a familiar browse-and-edit interface --- no ontology class dropped.
+    \item \textbf{Public Wikidata.} A projection: after all model improvements, $\sim$87\% of the ontology's classes are reachable via Wikidata, $\sim$28.1 claims per manuscript.
+  \end{itemize}
+  \vfill
+  {\footnotesize One source, three audiences --- domain experts, cataloguers, the open web. All three are queryable from the \textbf{Linked Data Explorer} tab.}
+\end{frame}
+\note{\begin{hebrew}
+עכשיו שכל טענה נבדקה, אפשר לפרסם --- והפרסום עצמו הוא תרומה. מאותו צינור עיבוד יוצאים \emph{שלושה} ייצוגים של נתונים מקושרים, כל אחד לקהל אחר.
+\par
+\emph{הראשון, גרף ה-\textenglish{HMO}.} הייצוג המחקרי המלא, מבוסס על האונטולוגיה שלנו לכתבי יד עבריים: כתב היד, החיבורים, האנשים, המקומות, אירועי העתקה ובעלות, והראיות שעליהן הטענות נשענות. החידוש: הגרף נשמר עכשיו ב-\textenglish{PostgreSQL}, כך שהוא זמין לאחר כל הפעלה מחדש של השרת, בלי \textenglish{rebuild}.
+\par
+\emph{השני, ויקיבייס פרויקטלי.} אותו גרף נטען לויקיבייס ייעודי בכתובת \texttt{mhm-hmo.wikibase.cloud}, כך שאפשר לדפדף, לחפש ולערוך את כל הישויות בממשק מוכר --- בלי לאבד אף קלאסה מן המבנה המחקרי.
+\par
+\emph{השלישי, ויקינתונים הציבורי.} כאן מתבצעת הקרנה. אחרי כל שיפורי המודל, כ-87 אחוז ממחלקות האונטולוגיה ניתנות להגעה דרך ויקינתונים, ובממוצע 28.1 טענות לכתב יד. הופכים את ה-\textenglish{MARC} לנתונים מקושרים פתוחים --- בלי לאבד לא את העומק המחקרי ולא את הנגישות הציבורית. ושלושת הייצוגים האלה ניתנים לשאילתה ישירה, כפי שנראה עכשיו.
+\end{hebrew}}
+
+% ─── Slide 9 — New questions + Linked Data Explorer (payoff) ───
+\begin{frame}[t]{The payoff: questions you couldn't ask before}
+  \begin{itemize}
+    \item Which works \emph{travel together} in the same manuscripts? --- textual clusters from the corpus itself.
+    \item Whose name \emph{reappears across collections}? --- the social network of manuscript production and transmission.
+    \item Whose \emph{ownership chain} crosses which libraries, families, and places, across centuries?
+    \item How did manuscripts \emph{move} between places and periods?
+  \end{itemize}
+  \vfill
+  {\footnotesize \textbf{Linked Data Explorer} tab: a three-layer SPARQL console (HMO graph / Wikibase / Wikidata) with 8 pre-built scholarly templates. A provenance header confirms every entity shown was human-reviewed in Wikidata Studio.}
+\end{frame}
+\note{\begin{hebrew}
+וזה הרגע שבשבילו עשינו את כל הדרך. ברגע שהפלט הוא נתונים מקושרים פתוחים --- ולא רק רשומות \textenglish{MARC} --- אפשר לשאול שאלות שכמעט בלתי-אפשרי לשאול מן הקטלוג המקורי.
+\par
+אילו \emph{חיבורים מופיעים יחד} באותם כתבי יד, וכך לזהות אשכולות טקסטואליים מן הקורפוס עצמו. אילו \emph{אנשים} --- מעתיקים, בעלים, נמענים --- חוזרים על פני כמה אוספים, וכך לשרטט את הרשת החברתית של ייצור והעברה. אילו \emph{שרשראות בעלות} חוצות ספריות, משפחות ומקומות לאורך מאות שנים. ואיך כתבי יד \emph{נעו} בין מקומות ותקופות.
+\par
+\textbf{וכל זה לא תיאורטי.} לשונית ה-\textenglish{Linked Data Explorer} מציגה קונסולת \textenglish{SPARQL} בשלוש שכבות --- גרף ה-\textenglish{HMO} בתוך המערכת, ויקיבייס פרויקטלי, וויקינתונים הציבורי --- עם שמונה תבניות שאילתה מוכנות מראש לאשכולות חיבורים, רשת מעתיקים, שרשראות בעלות, ופיזור גיאוגרפי. בראש הלשונית יושב כותר מקורות עם תג אמינות, שמאשר שכל ישות שמוצגת עברה סקירת אדם ב-\textenglish{Wikidata Studio}. חוקר שמריץ שאילתה יודע שהקישורים מאחורי כל מזהה נבחנו --- ולא נוחשו. הפייפליין איננו סוף המחקר; הוא התשתית שמאפשרת מחקר, וכלי המחקר מובנה בתוכו.
+\end{hebrew}}
+
+% ─── Slide 10 — Close: four contributions ──────────────────────
 \begin{frame}[t]{Four contributions, one pipeline}
   \begin{enumerate}
     \item \textbf{Authority enrichment as the primary engine.}\\
@@ -390,7 +350,7 @@
     \item \textbf{Wikidata Studio --- a research instrument.}\\
       Three-axis review, biodata comparison, 14 pre-save checks, resumable state.
     \item \textbf{The eval-agent --- extraction, authority audit, and Auto-fix.}\\
-      An agentic judge over whole corpora; high-confidence NER fixes surfaced inline as Auto-fix buttons; one shared approval across every editor.
+      An agentic judge over whole corpora; high-confidence NER fixes surfaced inline; one shared approval across every editor.
   \end{enumerate}
   \vfill
   \begin{center}
@@ -399,21 +359,17 @@
   \end{center}
 \end{frame}
 \note{\begin{hebrew}
-אסכם בארבע תרומות שמשתלבות לכדי גשר אחד בין קטלוג כתבי יד, בינה מלאכותית, ונתונים מקושרים פתוחים.
+אסכם, ואחזור לשלושת המספרים מן ההתחלה. ארבע תרומות, פייפליין אחד.
 \par
-\emph{ראשית --- העשרת סמכות כמנוע העיקרי.} זה המהלך שמייצר את רוב הטענות החדשות לכל כתב יד, עם קציר אשכול VIAF והשלמת תאריכים מוויקינתונים.
+\emph{ראשית --- העשרת סמכות כמנוע העיקרי.} שלוש-עשרה שדות \textenglish{MARC} מול ארבעה מאגרים, עם קציר אשכול \textenglish{VIAF} והשלמת תאריכים מוויקינתונים. זה מה שמייצר את רוב הטענות החדשות.
 \par
-\emph{שנית --- MARC נעשה לנתונים מקושרים פתוחים בשלושה ייצוגים, ועכשיו גם ניתן לשאילתה ישירה.} גרף HMO מלא לחוקר המומחה (שמור ב-PostgreSQL ונשאר זמין גם לאחר הפעלה מחדש), ויקיבייס פרויקטלי לדפדוף ועריכה, וויקינתונים לקהל הציבורי. לשונית ה-Linked Data Explorer מספקת קונסולת SPARQL בשלוש שכבות עם שמונה תבניות שאילתה מוכנות מראש, כך שהשאלות המחקריות שהפייפליין מאפשר אינן תיאורטיות --- הן ניתנות לביצוע ישירות מהממשק.
+\emph{שנית --- פרסום בשלושה ייצוגים, ועכשיו גם ניתן לשאילתה ישירה.} גרף \textenglish{HMO} מלא לחוקר (שמור ב-\textenglish{PostgreSQL}), ויקיבייס לדפדוף ועריכה, וויקינתונים לציבור --- ולשונית ה-\textenglish{Linked Data Explorer} שהופכת את השאלות המחקריות מתיאוריה למשהו שמריצים.
 \par
-\emph{שלישית --- Wikidata Studio הופך את הפייפליין לכלי מחקרי.} סקירה בשלושה צירים, דיאלוג השוואת ביוגרפיה, tooltip של ביטחון, 14 בדיקות לפני שמירה, ומצב סקירה שאפשר לעצור ולחזור אליו. זה מה שמאפשר לחוקר לסמוך על כל טענה שיוצאת מן המערכת.
+\emph{שלישית --- \textenglish{Wikidata Studio} ככלי מחקר.} סקירה בשלושה צירים, השוואת ביוגרפיה, 14 בדיקות, ומצב סקירה שאפשר לעצור ולחזור אליו --- מה שמאפשר לחוקר לסמוך על כל טענה.
 \par
-\emph{רביעית --- סוכן ההערכה (\textenglish{eval-agent}).} שכבת ביקורת אגנטית שבודקת \emph{גם את חילוץ הישויות וגם את התאמות הסמכות} על קורפוסים שלמים, עם אישור משותף בכל המסכים. חידוש עכשוי: כשסוכן ה-NER מזהה שישות נכונה חלקית, הוא יכול להציע \textbf{תיקון אוטומטי (Auto-fix)} ברמת ביטחון גבוהה --- הלחצן מופיע ישירות בשורת הישות ובמגירת הפרטים, ולחיצה עליו מעדכנת את הטקסט מבלי לאשר את הישות. מודלי ה-NER והמסווגים נשארים בפייפליין כתרומה מתודולוגית --- \textenglish{distant supervision} על קטלוג MARC, ניתן ליישום בכל קטלוג דומה --- ותרומתם הנקייה נמדדה כאן במפורש.
+\emph{רביעית --- סוכן ההערכה.} שכבת ביקורת אגנטית על חילוץ \emph{ועל} סמכות, עם תיקון אוטומטי בביטחון גבוה ואישור משותף. מודלי ה-\textenglish{NER} נשארים כתרומה מתודולוגית --- \textenglish{distant supervision} שניתן ליישום בכל קטלוג דומה --- ותרומתם נמדדה כאן במפורש.
 \par
-מבחינתנו, השאלה אינה רק איך מעבירים נתונים מפורמט אחד לפורמט אחר. השאלה היא איך הופכים ידע קטלוגי, שנבנה במשך שנים על ידי מומחים, לתשתית מחקרית שאפשר לשאול עליה שאלות חדשות --- בצורה שקופה, זהירה, ואחראית, כשהאדם נשאר במרכז התהליך.
-\par
-כלי העבודה הגרפי שתיארתי פועל היום כסביבה מבוססת ענן בכתובת \textenglish{mhm-pipeline.org}, ומאפשר לצוות חוקרים לסקור, לערוך ולאשר ישויות ביחד --- כל קטלוגן רואה את אותו מצב עדכני, כל אישור נרשם לצמיתות, וניתן לייצא את הנתונים בפורמטים שונים.
-\par
-תודה רבה.
+מבחינתנו, השאלה אינה רק איך מעבירים נתונים מפורמט אחד לאחר. השאלה היא איך הופכים ידע קטלוגי, שנבנה במשך שנים על ידי מומחים, לתשתית מחקרית שאפשר לשאול עליה שאלות חדשות --- בצורה שקופה, זהירה, ואחראית, כשהאדם נשאר במרכז. הכלי פועל היום כסביבת ענן ב-\textenglish{mhm-pipeline.org}, ומאפשר לצוות לסקור, לערוך ולאשר ישויות ביחד. תודה רבה.
 \end{hebrew}}
 
 \end{document}

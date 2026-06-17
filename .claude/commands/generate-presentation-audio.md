@@ -2,6 +2,18 @@ Generate Hebrew text-to-speech audio for the Bar-Ilan PhD pipeline presentation.
 
 Use the existing script; do not rewrite the TTS workflow.
 
+For the Bar-Ilan deck, the script reads the embedded speaker notes from
+`docs/presentations/bar-ilan-phd-pipeline-deck.pptx`. The generated
+`docs/presentations/audio/bar-ilan-phd-pipeline-speaker-notes-he.txt` file is a
+derived transcript, not the source of truth.
+
+Hard boundary: for Bar-Ilan speaker-note audio, the saved PPTX is the only
+source. Never generate audio directly from the transcript, QA notes, Markdown,
+copied speaker notes, `bar-ilan-phd-pipeline-speaker-notes-he-br-pauses.txt`,
+or any other text file. If text-file wording changed, first apply the intended
+changes to the PPTX speaker notes with `edit_pptx_deck.py`, verify the PPTX,
+then run this audio command.
+
 ## Gemini TTS
 
 Run from the repo root:
@@ -46,5 +58,6 @@ ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers
   docs/presentations/audio/bar-ilan-phd-pipeline-speaker-notes-he-gemini.wav
 ```
 
-The script should report `Slides: 16`. If it reports many more chunks, the slide
-splitting logic regressed.
+The script should report the same slide count as the current PPTX. If it
+reports many more chunks, or a count that does not match the saved deck, the
+PPTX notes extraction or chunking logic regressed.

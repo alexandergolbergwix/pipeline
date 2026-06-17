@@ -80,10 +80,21 @@ Project-specific skills:
 
 When generating text-to-speech audio for the Bar-Ilan presentation, use
 `docs/presentations/generate_hebrew_speaker_audio.py` rather than creating a new
-script. It extracts Hebrew speaker notes from
-`docs/presentations/bar-ilan-phd-pipeline-speaker-notes-he.tex`, sends one Gemini
-TTS request per slide, supports `--parallel`, and combines the slide WAV files
-in the correct order.
+script. It extracts Hebrew speaker notes from the saved
+`docs/presentations/bar-ilan-phd-pipeline-deck.pptx`, sends one Gemini TTS
+request per slide, supports `--parallel`, and combines the slide WAV files in
+the correct order. The generated
+`docs/presentations/audio/bar-ilan-phd-pipeline-speaker-notes-he.txt` file is
+derived output, not the source of truth.
+
+Hard rule: the saved PPTX is the only valid source for Bar-Ilan speaker-note
+audio. Never generate Bar-Ilan audio directly from a transcript, QA notes,
+Markdown, copied speaker notes, `bar-ilan-phd-pipeline-speaker-notes-he.txt`,
+`bar-ilan-phd-pipeline-speaker-notes-he-br-pauses.txt`, or any other formatted
+text file. If the user edited a text file and asks for new audio, first move
+the intended wording into the PPTX speaker notes with the light
+`edit_pptx_deck.py` workflow, verify the saved PPTX, and only then run the TTS
+script.
 
 Do not print, echo, commit, or store API keys. If `API_KEY` is not set, let the
 script ask for it via hidden terminal input. Start with `--parallel 4`; reduce
@@ -156,6 +167,40 @@ PYTHONPATH=src:. .venv/bin/python -m mhm_pipeline.app
     `--plan-only` mode from the Stage 2 "Plan with AI orchestrator" button.
     Do not import eval-agent Python modules into the pipeline app; read
     orchestrator evidence from `state/orchestrator/sessions/<ts>/`.
+20. For PhD presentation materials, frame the full research as transforming
+    fragmented Hebrew-manuscript MARC metadata into validated, semantically rich
+    Linked Open Data for historical/cultural research, but keep the talk focused
+    on the pipeline as the working core. The current system should be presented
+    as web-based and collaborative, not only as a desktop application.
+21. For the Bar-Ilan presentation deck, use `.codex/skills/pptx-speaker-notes/SKILL.md`
+    and `.codex/commands/update-pptx.md` as the reusable workflow. Treat the
+    current `docs/presentations/bar-ilan-phd-pipeline-deck.pptx` as the source
+    of truth for both visible slide text and embedded Hebrew speaker notes.
+    ALWAYS read the current slide text and speaker notes straight from the
+    saved PPTX at the start of the turn, before changing a single word — even
+    for a one-sentence fix. Never edit, quote, or rewrite from memory, from
+    earlier in the chat, from `slide_specs()`, or from the generated
+    transcript; the PPTX on disk may have been hand-edited in PowerPoint since
+    you last saw it. Modify in place by default; do not recreate. For all text
+    and speaker-note edits (including one-sentence fixes) use the light path
+    `docs/presentations/edit_pptx_deck.py`, which edits the existing PPTX in
+    place and refreshes the transcript without redrawing — design, manual
+    PowerPoint tweaks, and untouched slides stay byte-for-byte intact
+    (`--show N` to re-extract, `--slide N --where notes|text|any --replace OLD
+    NEW`, `--append-note`, `--regen-transcript`). Use the heavy path
+    `docs/presentations/build_pptx_deck.py` ONLY when the visual design, layout,
+    slide structure, or `slide_specs()` defaults change. Manual PPTX edits are
+    intentional input for the next AI/LLM pass. Treat
+    `docs/presentations/audio/bar-ilan-phd-pipeline-speaker-notes-he.txt` as a
+    generated transcript, not as source text, and treat `slide_specs()` as
+    fallback/default text only. Design each slide as a cue canvas for the
+    speaker: concise visible labels, fragments, numbers, and visual anchors
+    should remind Alexander what to say without becoming a script on the slide.
+    For system/process slides, keep the layout GIF-ready by reserving a stable
+    media region for an MHM web UI GIF/video/screenshot that demonstrates the
+    workflow being discussed; arrange labels around that region, and if the
+    media asset is not available yet, leave a clear placeholder rather than
+    filling the space with more text.
 
 ## Paper-Claim Verification (`paper/verification/`)
 

@@ -112,6 +112,8 @@ The Library of Congress BIBFRAME initiative~\cite{mcallister2017bibframe} define
 
 The Digital Scriptorium\footnote{\url{https://digital-scriptorium.org/}} has pioneered manuscript description on Wikidata using the WikiProject Manuscripts data model, but their workflow requires substantial manual curation. Our system automates this process while maintaining compliance with the same data model.
 
+A practitioner alternative to dedicated conversion pipelines is the widely used MarcEdit~+~OpenRefine workflow: MarcEdit provides record-level batch editing and a Linked Data Framework that embeds reconciled URIs in MARC \texttt{\$0} subfields~\cite{marcedit}, while OpenRefine reconciles tabular values against external authorities and can push statements to Wikidata through its Wikibase extension~\cite{openrefine-recon,openrefine-wikibase}. Both tools, however, operate at the record and cell level: OpenRefine's reconciliation ``happens by default through string searching''~\cite{openrefine-recon} and acts on one cell value at a time, and its Wikibase upload performs no duplicate or conflict detection against existing items~\cite{openrefine-wikibase}---precisely the failure mode our four-source cross-identifier verification and pre-upload guards are engineered against (\S\ref{sec:discussion}). Neither tool extracts entities from free-text note fields, represents typed relationships or provenance chains, or models attribution uncertainty---and the FRBRisation literature shows that entity--relationship structure can be recovered from MARC only when it is already explicitly and consistently encoded~\cite{aalberg2013}, which is rarely the case for legacy manuscript cataloging. The workflow therefore yields cleaner \emph{records}, not a queryable entity \emph{graph}: a question such as ``which manuscripts passed through the same owners' hands, and which works do they share?'' cannot be posed to a cleaned MARC file or an OpenRefine project at all, while it is a single SPARQL query over the HMO graph our pipeline produces.
+
 \subsection{NER for Cultural Heritage}
 
 Named Entity Recognition for historical documents has advanced significantly~\cite{ehrmann2023named}, with systems like HIPE~\cite{ehrmann2022extended} establishing benchmarks for multilingual historical NER. However, these focus on newspaper text rather than bibliographic descriptions, and none target Hebrew manuscript catalogs.
@@ -1014,6 +1016,26 @@ Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., and Cao, Y.
 Feitosa, D., Dermaku, G., and Ioannidis, L.
 \newblock Wikidata for Digital Libraries: A Systematic Literature Review.
 \newblock \emph{Journal of Documentation}, 79(7):1--25, 2023.
+
+\bibitem{marcedit}
+Reese, T.
+\newblock MarcEdit: Your Complete Free MARC Editing Utility --- Features.
+\newblock \url{https://marcedit.reeset.net/features}, 2024.
+
+\bibitem{openrefine-recon}
+OpenRefine.
+\newblock Reconciling --- OpenRefine User Manual.
+\newblock \url{https://openrefine.org/docs/manual/reconciling}, 2024.
+
+\bibitem{openrefine-wikibase}
+OpenRefine.
+\newblock Overview of Wikibase Support --- OpenRefine User Manual.
+\newblock \url{https://openrefine.org/docs/manual/wikibase/overview}, 2024.
+
+\bibitem{aalberg2013}
+Aalberg, T. and \v{Z}umer, M.
+\newblock The Value of MARC Data, or, Challenges of Frbrisation.
+\newblock \emph{Journal of Documentation}, 69(6):851--872, 2013.
 
 \bibitem{taatiknet}
 Alper, M.

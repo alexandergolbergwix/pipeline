@@ -154,6 +154,19 @@ class WikidataItem:
     local_id: str = ""
 
 
+# ── Quote stripping ──────────────────────────────────────────────────
+
+# ASCII straight quotes + Unicode smart/typographic quotes found in
+# MARC catalog exports (left/right single and double, angle brackets).
+_QUOTE_CHARS = '"\'"\u201c\u201d\u2018\u2019\u00ab\u00bb\u2039\u203a'
+
+
+def _strip_name_quotes(s: str) -> str:
+    """Strip surrounding quote characters (ASCII and Unicode typographic)
+    and trailing MARC ISBD punctuation from a person or place name."""
+    return s.strip().strip(_QUOTE_CHARS).strip().rstrip(",;:.")
+
+
 # ── Person deduplication key ─────────────────────────────────────────
 
 
@@ -976,7 +989,7 @@ class WikidataItemBuilder:
             item.statements.append(
                 WikidataStatement(
                     property_id=P_FIRST_LINE,
-                    value=str(incipit).strip().strip('"'),
+                    value=str(incipit).strip().strip(_QUOTE_CHARS),
                     value_type="monolingualtext",
                     language="he",
                     references=ref,
@@ -989,7 +1002,7 @@ class WikidataItemBuilder:
             item.statements.append(
                 WikidataStatement(
                     property_id=P_LAST_LINE,
-                    value=str(explicit).strip().strip('"'),
+                    value=str(explicit).strip().strip(_QUOTE_CHARS),
                     value_type="monolingualtext",
                     language="he",
                     references=ref,
@@ -1298,7 +1311,7 @@ class WikidataItemBuilder:
         # ── Related works → P1574 via work items ────────────────
         for rw in record.get("related_works") or []:
             rw_title = rw.get("title", "") if isinstance(rw, dict) else str(rw)
-            rw_title = rw_title.strip().strip('".')
+            rw_title = rw_title.strip().strip(_QUOTE_CHARS + ".")
             if not rw_title:
                 continue
             rw_qid = KNOWN_WORK_QIDS.get(rw_title)
@@ -1585,7 +1598,7 @@ class WikidataItemBuilder:
         folios = [e for e in cont_entities if e.get("type") == "FOLIO"]
 
         for work in works:
-            work_title = str(work.get("text", "")).strip().strip('".')
+            work_title = str(work.get("text", "")).strip().strip(_QUOTE_CHARS + ".")
             if not work_title or work_title in seen_works:
                 continue
             seen_works.add(work_title)
@@ -1752,7 +1765,7 @@ class WikidataItemBuilder:
         # Build date qualifiers from DATE entities (P580/P582 per WikiProject Data Model)
         date_qualifiers: list[dict[str, object]] = []
         for date_ent in dates:
-            date_text = str(date_ent.get("text", "")).strip().strip('".:')
+            date_text = str(date_ent.get("text", "")).strip().strip(_QUOTE_CHARS + ".:")
             if not date_text:
                 continue
             # Try to parse as Gregorian year
@@ -1769,7 +1782,7 @@ class WikidataItemBuilder:
 
         seen_owners: set[str] = set()
         for owner in owners:
-            owner_name = str(owner.get("text", "")).strip().strip('".')
+            owner_name = str(owner.get("text", "")).strip().strip(_QUOTE_CHARS + ".")
             if not owner_name or owner_name in seen_owners:
                 continue
             seen_owners.add(owner_name)
@@ -1819,7 +1832,7 @@ class WikidataItemBuilder:
 
         seen_colls: set[str] = set()
         for coll in collections:
-            coll_name = str(coll.get("text", "")).strip().strip('".')
+            coll_name = str(coll.get("text", "")).strip().strip(_QUOTE_CHARS + ".")
             if not coll_name or coll_name in seen_colls:
                 continue
             seen_colls.add(coll_name)
@@ -1886,7 +1899,7 @@ class WikidataItemBuilder:
             # name-as-qualifier plus P5102=hypothesis. This makes the
             # assertion "this manuscript has an author, identity unknown"
             # machine-readable rather than silent.
-            clean_name_anon = name.strip().strip('"\'').strip().rstrip(",;:.")
+            clean_name_anon = _strip_name_quotes(name)
             if pid == P_AUTHOR and _is_anonymous_name(clean_name_anon):
                 item.statements.append(
                     WikidataStatement(
@@ -2030,10 +2043,11 @@ class WikidataItemBuilder:
 
         person = WikidataItem(entity_type="person", local_id=key)
 
-        # Clean name: strip surrounding quotes and trailing MARC ISBD punctuation.
-        # The full set ",;:." matches the validator's TRAILING_PUNCTUATION rule —
-        # missing the period here let "בחיי בן יוסף אבן פקודה." through unfiltered.
-        clean_name = name.strip().strip('"\'').strip().rstrip(",;:.")
+        # Clean name: strip surrounding quotes (ASCII + Unicode typographic)
+        # and trailing MARC ISBD punctuation.  The full set ",;:." matches the
+        # validator's TRAILING_PUNCTUATION rule — missing the period here let
+        # "בחיי בן יוסף אבן פקודה." through unfiltered.
+        clean_name = _strip_name_quotes(name)
         if not clean_name or len(clean_name) < 2:
             # Stub, but do NOT add to _person_items — see _skipped_person_keys
             self._skipped_person_keys.add(key)
@@ -2062,9 +2076,9 @@ class WikidataItemBuilder:
 
         # Fix 2026-04-15 third audit Fix #4: Wikidata:Notability requires person
         # items to have at least one external identifier (VIAF, NLI J9U, LCCN,
-        # GND, ISNI, BnF). Creating items with only a name and no identifiers
-        # invites mass deletion requests from the community. Skip the item and
-        # let callers fall back to P2093 (author name string) for the statement.
+        # GND, ISNI, BnF, or Wikidata QID). Creating items with only a name and
+        # no identifiers invites mass deletion requests from the community. Skip
+        # the item and let callers fall back to P2093 (author name string).
         match_info: dict[str, object] = {}
         for m in source_record.get("marc_authority_matches") or []:
             mid = str(m.get("mazal_id", ""))
@@ -2072,6 +2086,16 @@ class WikidataItemBuilder:
             if (mazal_id and mid == mazal_id) or (viaf_uri and vid == viaf_uri):
                 match_info = m  # type: ignore[assignment]
                 break
+        # Fallback: when no authority-ID match was found (neither viaf_uri nor
+        # mazal_id set), search by name prefix — catches persons resolved via
+        # direct Wikidata QID lookup rather than VIAF/Mazal.
+        if not match_info:
+            name_prefix = clean_name[:6] if len(clean_name) >= 6 else clean_name
+            for m in source_record.get("marc_authority_matches") or []:
+                entry_name = str(m.get("name", "") or "")
+                if entry_name and entry_name[:len(name_prefix)] == name_prefix:
+                    match_info = m  # type: ignore[assignment]
+                    break
         has_identifier = any(
             [
                 viaf_uri,
@@ -2080,6 +2104,9 @@ class WikidataItemBuilder:
                 match_info.get("lc_id"),
                 match_info.get("isni"),
                 match_info.get("bnf_id"),
+                # A known Wikidata QID is the strongest possible notability
+                # signal — the person already exists in Wikidata.
+                match_info.get("wikidata_qid"),
             ]
         )
         if not has_identifier:
@@ -2095,6 +2122,14 @@ class WikidataItemBuilder:
             self._skipped_person_keys.add(key)
             self._skipped_person_stubs[key] = person
             return person
+
+        # When a Wikidata QID is known from authority matching (direct QID
+        # lookup, not via VIAF/Mazal), pre-seed existing_qid so the manuscript
+        # claim uses the real Q-number and the person item gets UPDATE semantics
+        # in QuickStatements (not CREATE).
+        pre_known_qid = str(match_info.get("wikidata_qid") or "")
+        if pre_known_qid and not person.existing_qid:
+            person.existing_qid = pre_known_qid
 
         # Label-based deduplication: search Wikidata for an existing human with
         # the same Hebrew/Latin label before creating a new item.  This catches

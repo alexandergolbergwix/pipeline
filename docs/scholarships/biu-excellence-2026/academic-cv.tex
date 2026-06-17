@@ -1,0 +1,136 @@
+\DocumentMetadata{
+  lang=he-IL,
+  pdfversion=1.7,
+  testphase={phase-III,title,firstaid}
+}
+\documentclass[10pt,a4paper]{article}
+\usepackage[a4paper,margin=1.65cm]{geometry}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setdefaultlanguage{hebrew}
+\setotherlanguage{english}
+\newfontfamily\hebrewfont[Script=Hebrew,BoldFont={Arial Bold}]{Arial}
+\newfontfamily\englishfont{Times New Roman}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+\setlength{\emergencystretch}{3em}
+\setlist[itemize]{leftmargin=*,itemsep=1pt,topsep=2pt}
+\definecolor{Accent}{HTML}{0E6F78}
+\titleformat{\section}{\large\bfseries\color{Accent}}{}{0pt}{}
+\titlespacing*{\section}{0pt}{7pt}{2pt}
+\newcommand{\cvsection}[1]{%
+  \phantomsection%
+  \section*{#1}%
+  \addcontentsline{toc}{section}{#1}%
+  {\color{Accent}\rule{\linewidth}{0.5pt}}\vspace{2pt}%
+}
+\newcommand{\entryspace}{\vspace{3pt}}
+\newenvironment{englishrefs}{%
+  \begin{LTR}\begin{minipage}{\linewidth}\begin{english}\raggedright
+}{%
+  \end{english}\end{minipage}\end{LTR}
+}
+
+\begin{document}
+
+\pdfbookmark[1]{אלכסנדר גולדברג}{cv-title}
+{\LARGE\bfseries אלכסנדר גולדברג}\\[2pt]
+דוקטורנט, המחלקה למדעי המידע ויישומי בינה מלאכותית, אוניברסיטת בר-אילן\\
+\textenglish{shvedbook@gmail.com} \quad
+\textenglish{alexander.goldberg@biu.ac.il} \quad
+\textenglish{ORCID: 0009-0004-5967-9377}\\
+רמת גן, ישראל \quad \textenglish{+972 52-583-9197}
+
+\cvsection{פרופיל מחקרי}
+דוקטורנט במדעי המידע ויישומי בינה מלאכותית, העוסק בלמידת מכונה יישומית, מטאדאטה של מורשת תרבותית, אונטולוגיות ונתונים מקושרים פתוחים. עבודת הדוקטורט מפתחת את פייפליין \textenglish{MHM}: תשתית מחקרית לחילוץ ולארגון מידע מרשומות קטלוג של כתבי יד עבריים, להמרתו לגרף ידע, ולפרסום מבוקר שלו בוויקינתונים.
+
+\cvsection{השכלה}
+\textbf{אוניברסיטת בר-אילן}, המחלקה למדעי המידע ויישומי בינה מלאכותית\\
+דוקטורנט, 2022--2027 (צפוי)\\
+מנחים: פרופ' גילה פריבור וד"ר אבשלום אלמלח.\\
+תחום המחקר: חילוץ מטאדאטה בסיוע בינה מלאכותית, קישור למאגרי סמכות, מידול אונטולוגי ונתונים מקושרים פתוחים עבור קטלוגים של כתבי יד עבריים.
+
+\vspace{2pt}
+\textbf{אוניברסיטת בר-אילן}, המחלקה למדעי המידע ויישומי בינה מלאכותית\\
+תואר שני, 2020--2022, בהצטיינות\\
+עבודת גמר: שיטות למידת מכונה לחיזוי תאריכי הפקה של כתבי יד עבריים מימי הביניים.
+
+\vspace{2pt}
+\textbf{המכון הטכנולוגי חולון}\\
+תואר ראשון, טכנולוגיות למידה, 2017--2020.
+
+\cvsection{פרסומים וכתבי יד}
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026).\\
+Multi-entity extraction and role classification for Hebrew manuscripts using distant supervision.\\
+Journal of Web Semantics. Manuscript under review.
+\end{englishrefs}
+\entryspace
+
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026).\\
+Ontology-driven linked data for Hebrew manuscripts.\\
+Semantic Web Journal. Manuscript under review.
+\end{englishrefs}
+\entryspace
+
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026).\\
+Using supervised machine learning models and codicological features for dating medieval Hebrew manuscripts.\\
+Digital Humanities Quarterly. Manuscript submitted.
+\end{englishrefs}
+\entryspace
+
+\begin{englishrefs}
+Goldberg, A., Prebor, G., \& Elmalech, A. (2026).\\
+Mapping Hebrew Manuscripts (MHM) [Short paper].\\
+DCMI 2026. Accepted.
+\end{englishrefs}
+\entryspace
+
+גולדברג, א', פריבור, ג', ואלמלח, א' (2025). גישות למידת מכונה לתיארוך כתבי יד עבריים מימי הביניים באמצעות ניתוח קודיקולוגי.\\
+\begin{englishrefs}
+JSIJ -- Jewish Studies, an Internet Journal, 25.
+\end{englishrefs}
+
+\cvsection{הרצאות בכנסים}
+פריבור, ג', אלמלח, א', וגולדברג, א' (9/2022). תיארוך של כתבי-יד עבריים בהתבססות על מאפיינים קודיקולוגיים באמצעות למידת מכונה מונחית. הקונגרס העולמי ה-18 למדעי היהדות, ירושלים.
+\entryspace
+
+פריבור, ג', אלמלח, א', וגולדברג, א' (21.5.2024). תיארוך של כתבי-יד עבריים בהתבססות על מאפיינים קודיקולוגיים באמצעות למידת מכונה מונחית. כנס מדעי הרוח והחברה הדיגיטליים בישראל, אוניברסיטת תל-אביב, ישראל.
+\entryspace
+
+גולדברג, א' (24 ביוני 2026). מיפוי כתבי יד עבריים: מרשומות קטלוג לנתונים מקושרים [הרצאה]. הכנס השנתי של המחלקה למדעי המידע ויישומי בינה מלאכותית, אוניברסיטת בר-אילן, רמת גן, ישראל.
+\entryspace
+
+גולדברג, א', פריבור, ג', ואלמלח, א' (2026). מאמר קצר התקבל לכנס \textenglish{DCMI 2026}.
+
+\cvsection{פרויקט המחקר הנוכחי}
+\textbf{פייפליין מיפוי כתבי-יד עבריים (\textenglish{MHM})}
+
+פיתוח פייפליין מחקרי הממיר רשומות \textenglish{MARC} של כתבי יד עבריים לגרפי \textenglish{RDF} המיושרים עם \textenglish{Hebrew Manuscripts Ontology}, \textenglish{CIDOC CRM} ו-\textenglish{LRMoo}.
+
+שילוב קריאת \textenglish{MARC}, מודלי \textenglish{NER} מבוססי \textenglish{DictaBERT}, התאמה למאגרי סמכות, בניית \textenglish{RDF}, ולידציית \textenglish{SHACL} ופרסום מבוקר ל-\textenglish{Wikidata}.
+
+פיתוח והערכה של מודלי \textenglish{NER} לאנשים ותפקידים, בעלות ומוצא, תוכן כתבי יד וסיווג ז'אנרי, תוך שימוש בהשגחה מרחוק מתוך רשומות הקטלוג.
+
+עיצוב \textenglish{Wikidata Studio}, סביבת סקירה לחוקרים וקטלוגנים לפני פרסום ציבורי של גרף הידע.
+
+\cvsection{מיומנויות מחקר וטכנולוגיה}
+למידת מכונה יישומית; \textenglish{NER}; השגחה מרחוק; עיבוד שפה עברית; \textenglish{DictaBERT}; \textenglish{RDF}; \textenglish{SHACL}; אונטולוגיות; \textenglish{Wikidata}; \textenglish{Wikibase}; קישור למאגרי סמכות; \textenglish{MARC21}; \textenglish{Python}; \textenglish{PyQt6}; \textenglish{FastAPI}; \textenglish{TypeScript}; \textenglish{SQLite}; הערכה ושחזור מחקרי.
+
+\cvsection{ניסיון מקצועי}
+\textbf{\textenglish{Wix.com}}, מהנדס תוכנה ושגריר בינה מלאכותית, צוות \textenglish{Mobile DevEx}, מאי 2024--היום\\
+פיתוח כלי חוויית מפתח, תהליכי בדיקות ושחרור, וכלים הנדסיים בסיוע בינה מלאכותית עבור סביבת \textenglish{React Native} רחבת היקף.
+
+\textbf{\textenglish{Wix.com}}, מהנדס אוטומציה, דצמבר 2021--מאי 2024\\
+פיתוח תשתיות אוטומציה, מסווגים לניתוב משימות וכלי אוטומציה לתהליכי \textenglish{Jira} ו-\textenglish{Slack}.
+
+\cvsection{שפות}
+עברית; אנגלית; רוסית.
+
+\end{document}
