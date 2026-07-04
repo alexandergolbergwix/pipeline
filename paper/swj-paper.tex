@@ -181,7 +181,8 @@ The pipeline maps to 37 Wikidata properties following the WikiProject Manuscript
 \caption{Wikidata properties for manuscript entities (pinned 68-record subset, 2026-07 build). P50 (author) is intentionally absent: the community constraint on Property:P50 requires the exemplar chain manuscript $\to$ P1574 $\to$ work $\to$ P50, so authorship is asserted on work items, never directly on manuscripts.}
 \label{tab:manuscript-props}
 \centering
-\small
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{llll}
 \toprule
 \textbf{Property} & \textbf{Label} & \textbf{Source} & \textbf{Coverage} \\
@@ -668,12 +669,13 @@ Table~\ref{tab:ner-results} reports current model performance. All models use Di
 \caption{Model performance. Person NER is strict exact span+role on the representative held-out benchmark sample; provenance, contents, and genre report their validation protocols.}
 \label{tab:ner-results}
 \centering
-\small
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{lrrrl}
 \toprule
 \textbf{Model} & \textbf{P} & \textbf{R} & \textbf{F1} & \textbf{Training} \\
 \midrule
-Person NER       & 79.3 & 81.5 & 80.4  & v3 role-aware held-out  \\
+Person NER       & 79.3 & 81.5 & 80.4  & v3 held-out  \\
 Provenance NER   & 94.0 & 96.0 & 95.9  & 40min (M4 Pro)  \\
 Contents NER     & 100  & 100  & 99.99 & 15min (M4 Pro)  \\
 Genre classifier & —    & —    & \textbf{0.918} $\pm$ 0.003  & $\sim$2h (M4 Pro) \\
@@ -735,10 +737,11 @@ NOTA (abstention)          & 0.753 & 0.879 & 0.811 \\
 Table~\ref{tab:coverage} reports property-level coverage on the pinned 68-record verification subset.
 
 \begin{table}[t]
-\caption{Property-level coverage comparison.}
+\caption{Property-level coverage comparison. P1574 (exemplar of) links each manuscript to its work items, which carry P50 authorship.}
 \label{tab:coverage}
 \centering
-\small
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{lrrl}
 \toprule
 \textbf{Property} & \textbf{Rule} & \textbf{MHM} & \textbf{Strategy} \\
@@ -748,7 +751,7 @@ P1476 (title)    & 100\% & 100\%        & Rule \\
 P17 (country)    & 0\%   & 100\%        & Hardcoded \\
 P131 (located)   & 0\%   & 100\%        & Hardcoded \\
 P571 (date)      & 22\%  & \textbf{97\%}& Hebrew parsing \\
-P1574 (exemplar of, carries P50 via work) & 0\% & \textbf{21\%}& Contents NER + work items \\
+P1574 (exemplar of) & 0\% & \textbf{21\%}& Work items \\
 P136 (genre)     & 0\%   & \textbf{57\%}& QID mapping + ML \\
 P2635 (parts)    & 0\%   & \textbf{3\%}& CU count \\
 P921 (subject)   & 0\%   & \textbf{76\%}& Canonical+LCSH \\
