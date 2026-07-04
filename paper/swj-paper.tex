@@ -46,9 +46,9 @@
 \begin{abstract}
 Transforming library catalogs into Linked Open Data is essential for connecting isolated cultural heritage collections to the Semantic Web, yet automated conversion from MARC~21 records to Wikidata remains a largely unsolved problem---particularly for non-Latin-script collections where existing tools achieve low field coverage. We present the MHM (Mapping Hebrew Manuscripts) Pipeline, a multi-strategy system that turns Hebrew manuscript MARC records into reviewed, published Linked Open Data through three complementary contributions: \emph{authority enrichment as the primary engine of new information}, \emph{publication in three Linked-Open-Data layers}, and \emph{a curator-facing workbench that keeps researchers in the loop}.
 
-The authority layer feeds \emph{thirteen MARC tags} (100/110/111, 600/610, 651, 700/710/711, 752, 800/810/811) into four complementary authority sources---Mazal/NLI, VIAF, Wikidata, and KIMA---and amplifies each match through \emph{VIAF cluster harvesting}, which turns a single VIAF hit into 2--4 additional international identifiers (GND, LCCN, ISNI, BnF), and \emph{Wikidata date back-fill}, which retrieves P569/P570 for SPARQL-only matches so the date guardian can vet them. The publication layer emits the same data in three forms: the full HMO research graph as RDF, a project Wikibase (\texttt{mhm-hmo.wikibase.cloud}) for browsing and editing, and a public Wikidata projection that reaches 87\% of HMO classes and averages 28.1 statements per manuscript. The workbench layer, \emph{Wikidata Studio}, surfaces every authority match, NER entity and KIMA place under a Source~$\times$~Type~$\times$~Role filter, opens a biographic-comparison dialog that aligns MARC, Mazal, VIAF and KIMA biodata side-by-side, exposes a confidence tooltip that explains why each match scored as it did, runs 14 pre-upload guards, and saves resumable review state---so every published statement is one a human approved with the evidence in view.
+The authority layer feeds \emph{thirteen MARC tags} (100/110/111, 600/610, 651, 700/710/711, 752, 800/810/811) into four complementary authority sources---Mazal/NLI, VIAF, Wikidata, and KIMA---and amplifies each match through \emph{VIAF cluster harvesting}, which turns a single VIAF hit into 2--4 additional international identifiers (GND, LCCN, ISNI, BnF), and \emph{Wikidata date back-fill}, which retrieves P569/P570 for SPARQL-only matches so the date guardian can vet them. The publication layer emits the same data in three forms: the full HMO research graph as RDF, a project Wikibase (\texttt{mhm-hmo.wikibase.cloud}) for browsing and editing, and a public Wikidata projection that reaches 87\% of HMO classes and averages 30.7 statements per manuscript. The workbench layer, \emph{Wikidata Studio}, surfaces every authority match, NER entity and KIMA place under a Source~$\times$~Type~$\times$~Role filter, opens a biographic-comparison dialog that aligns MARC, Mazal, VIAF and KIMA biodata side-by-side, exposes a confidence tooltip that explains why each match scored as it did, runs 14 pre-upload guards, and saves resumable review state---so every published statement is one a human approved with the evidence in view.
 
-End-to-end evaluation on a pinned 68-record verification subset shows 97\% date coverage, 57\% genre coverage, 28.1 Wikidata statements per manuscript on average, and a $2.3\times$ increase in international identifiers per person via VIAF cluster harvesting. The three domain-specific NER models (person, provenance, contents) reach 80.4\% strict span+role F1 for role-aware person NER on a representative held-out sample, 95.9\% F1 for provenance NER, and 99.99\% F1 for contents NER; the person model also reaches 86.8\% name-only F1 and 92.6\% role accuracy when the name span is matched. The latest end-to-end evaluation finds the models' \emph{marginal} contribution beyond authority and rules to be near zero on the structured majority of records; we retain them as a safety net for the long tail of records whose entities live only in free-text notes. A distant-supervision genre classifier reaches micro-F1 0.918 ($\pm$0.003, 5-fold CV) on 8 genre classes, trained on 25{,}421 quality-filtered records with DictaBERT warm-started from the NER checkpoint and a NOTA abstention class.
+End-to-end evaluation on a pinned 68-record verification subset shows 97\% date coverage, 57\% genre coverage, 30.7 Wikidata statements per manuscript on average, and a $1.7\times$ increase in international identifiers per person via VIAF cluster harvesting. The three domain-specific NER models (person, provenance, contents) reach 80.4\% strict span+role F1 for role-aware person NER on a representative held-out sample, 95.9\% F1 for provenance NER, and 99.99\% F1 for contents NER; the person model also reaches 86.8\% name-only F1 and 92.6\% role accuracy when the name span is matched. The latest end-to-end evaluation finds the models' \emph{marginal} contribution beyond authority and rules to be near zero on the structured majority of records; we retain them as a safety net for the long tail of records whose entities live only in free-text notes. A distant-supervision genre classifier reaches micro-F1 0.918 ($\pm$0.003, 5-fold CV) on 8 genre classes, trained on 25{,}421 quality-filtered records with DictaBERT warm-started from the NER checkpoint and a NOTA abstention class.
 
 The verification subset is generated deterministically by \texttt{scripts/build\_test\_subset.py}, pinned by SHA256, and used by the paper-verification harness so reported coverage and contribution numbers are reproducible. All code, models, training-data generation scripts and the Wikidata Studio application are open-source.
 
@@ -92,8 +92,8 @@ This paper makes seven contributions, organised around the three pillars announc
 
 \begin{enumerate}[leftmargin=*]
 \item \textbf{Authority enrichment across thirteen MARC tags as the primary engine of new information.} The pipeline feeds 100/110/111, 600/610, 651, 700/710/711, 752 and 800/810/811 into four complementary authority sources (Mazal/NLI, VIAF, Wikidata, KIMA). On the pinned evaluation subset this is the layer that accounts for the majority of new statements per manuscript and converts every matched entity from an opaque string into a linked, internationally-identified item.
-\item A \textbf{VIAF cluster harvesting} technique that turns a single VIAF match into 2--4 additional international authority identifiers (GND, LCCN, ISNI, BnF), yielding a $2.3\times$ increase in international identifiers per matched person and---combined with Wikidata date back-fill via P569/P570---making the date guardian effective on SPARQL-only candidates.
-\item \textbf{MARC-to-LOD publication in three coordinated layers.} The same pipeline emits the full HMO research graph as RDF, loads it into a project Wikibase at \texttt{mhm-hmo.wikibase.cloud} for browsing and curator editing, and projects a public-facing view onto Wikidata that reaches 87\% of HMO classes and averages 28.1 statements per manuscript. To our knowledge this is the first time the NLI Hebrew manuscript catalog has been linked, end-to-end, to the public Semantic Web.
+\item A \textbf{VIAF cluster harvesting} technique that turns a single VIAF match into 2--4 additional international authority identifiers (GND, LCCN, ISNI, BnF), yielding a $1.7\times$ increase in international identifiers per matched person and---combined with Wikidata date back-fill via P569/P570---making the date guardian effective on SPARQL-only candidates.
+\item \textbf{MARC-to-LOD publication in three coordinated layers.} The same pipeline emits the full HMO research graph as RDF, loads it into a project Wikibase at \texttt{mhm-hmo.wikibase.cloud} for browsing and curator editing, and projects a public-facing view onto Wikidata that reaches 87\% of HMO classes and averages 30.7 statements per manuscript. To our knowledge this is the first time the NLI Hebrew manuscript catalog has been linked, end-to-end, to the public Semantic Web.
 \item \textbf{Wikidata Studio: a curator-facing workbench that puts the researcher in control.} The workbench ships in both a cross-platform PyQt6 desktop application and a collaborative browser-based port (\texttt{mhm-pipeline-web}). Both surfaces expose every authority match, NER entity and KIMA place under a Source~$\times$~Type~$\times$~Role filter; a biographic-comparison dialog aligns MARC, Mazal, VIAF and KIMA biodata side-by-side (with Unicode NFKC normalisation, particle stripping, and side-aware highlighting); per-item override dialogs for Wikidata labels, descriptions, aliases and statements; a confidence tooltip explains which guardians fired and which cluster identifiers came along with the match; 14 pre-upload guards block malformed items; and review state is persisted so curators can pause and resume. The browser port adds shared multi-curator approval, a persistent versioning log, and encrypted per-user API keys. When the eval-agent produces a high-confidence suggested fix for a NER entity, an \textbf{Auto-fix} button appears on the relevant table row and in the detail drawer, letting the curator apply the correction in one click without pre-approving the entity. This is what makes every published statement a human-approved one and is what turns the pipeline into a research tool rather than a script.
 \item A \textbf{distant-supervision methodology} that exploits the dual structure of MARC records---using structured fields as automatic labels for the same information in free-text notes---and yields three domain-specific NER models for Hebrew manuscript descriptions. The current role-aware person model reaches 80.4\% strict span+role F1 on a representative held-out benchmark sample (86.8\% name-only F1; 92.6\% role accuracy when the name span is matched), while provenance and contents NER reach 95.9\% and 99.99\% F1 respectively. The end-to-end evaluation (\S\ref{sec:evaluation}) shows their \emph{marginal} contribution beyond authority and rules is near zero on the structured majority of records; they remain in the pipeline as a safety net for the long tail in which entities only ever appear in free-text notes.
 \item The first \textbf{end-to-end quantitative evaluation} of MARC-to-Wikidata conversion that measures both coverage (statements per entity) and data loss (what cannot transfer and why), together with a \textbf{five-category taxonomy of data loss} showing that the dominant remaining loss is structural---work-title strings must be reconciled to or created as Wikidata items before P1574 can be asserted---rather than technical.
@@ -178,7 +178,7 @@ The three deployment modes preserve the same Stage~3--6 logic and the same safet
 The pipeline maps to 37 Wikidata properties following the WikiProject Manuscripts data model. Table~\ref{tab:manuscript-props} shows manuscript properties; Table~\ref{tab:person-props} shows person properties. In the current architecture, these properties constitute the \emph{public projection} of the richer HMO graph: a machine-readable \texttt{wikidata\_projection\_coverage.json} report records, for each HMO class present in \texttt{output.ttl}, whether it is projected as a Wikidata item, summarized through claims or qualifiers, or intentionally retained only in HMO / project Wikibase.
 
 \begin{table}[t]
-\caption{Wikidata properties for manuscript entities.}
+\caption{Wikidata properties for manuscript entities (pinned 68-record subset, 2026-07 build). P50 (author) is intentionally absent: the community constraint on Property:P50 requires the exemplar chain manuscript $\to$ P1574 $\to$ work $\to$ P50, so authorship is asserted on work items, never directly on manuscripts.}
 \label{tab:manuscript-props}
 \centering
 \small
@@ -191,20 +191,20 @@ P195 & collection       & Hardcoded  & 100\% \\
 P17  & country          & Hardcoded  & 100\% \\
 P131 & located in       & Hardcoded  & 100\% \\
 P217 & inventory no.    & MARC 852   & 96\% \\
-P8189& NLI J9U ID      & MARC 001   & 100\% \\
+P3959& NLI system no.   & MARC 001   & 100\% \\
 P1476& title            & MARC 245   & 94\%  \\
 P407 & language         & MARC 008   & 100\% \\
 P282 & writing system   & Rule       & 100\% \\
 P571 & inception        & MARC 008   & 97\%  \\
 P136 & genre            & MARC 655 + ML & 57\%  \\
+P973 & described at URL & NLI catalog & 100\% \\
 P2635& number of parts  & CU count   & 3\%  \\
-P921 & main subject     & MARC 630   & 65\%  \\
-P7153& significant place& KIMA       & 82\%  \\
-P1071& location created & KIMA       & 79\%  \\
-P50  & author           & NER+Auth   & 82\% \\
-P1684& inscription      & Colophon   & 37\%  \\
-P11603&transcribed by   & NER+Auth   & 12\%  \\
-P127 & owned by         & Prov.\ NER & 19\%  \\
+P921 & main subject     & MARC 630   & 76\%  \\
+P7153& significant place& KIMA       & 7\%  \\
+P1071& location created & KIMA       & 7\%  \\
+P1684& inscription      & Colophon   & 6\%  \\
+P11603&transcribed by   & NER+Auth   & 1\%  \\
+P127 & owned by         & Prov.\ NER & 21\%  \\
 P6216& copyright        & Rule       & 91\% \\
 P5008& on focus list    & Hardcoded  & 100\% \\
 \bottomrule
@@ -212,7 +212,7 @@ P5008& on focus list    & Hardcoded  & 100\% \\
 \end{table}
 
 \begin{table}[t]
-\caption{Wikidata properties for person entities (verified on 167 persons in the pinned subset build).}
+\caption{Wikidata properties for person entities (verified on 66 persons in the pinned subset build; the 2026-06 authority-hardening pass---homonym abstention and a fail-closed no-identifier gate---builds fewer but better-grounded person items).}
 \label{tab:person-props}
 \centering
 \small
@@ -220,20 +220,16 @@ P5008& on focus list    & Hardcoded  & 100\% \\
 \toprule
 \textbf{Property} & \textbf{Label} & \textbf{Strategy} & \textbf{Count} \\
 \midrule
-P31   & instance of    & Rule            & 570 \\
-P106  & occupation     & Role mapping    & 314 \\
-P214  & VIAF ID        & VIAF search     & 142 \\
-P21   & sex/gender     & Heuristic       & 332 \\
-P1412 & language       & MARC 008/041    & 332 \\
-P1559 & native name    & Hebrew name     & 332 \\
-P244  & LCCN           & Cluster harvest & 104 \\
-P213  & ISNI           & Cluster harvest & 129 \\
-P227  & GND ID         & Cluster harvest & 68  \\
-P268  & BnF ID         & Cluster harvest & 29  \\
-P569  & date of birth  & Mazal DB        & 12  \\
-P570  & date of death  & Mazal DB        & 12  \\
+P31   & instance of    & Rule            & 66 \\
+P1412 & language       & MARC 008/041    & 78 \\
+P1559 & native name    & Hebrew name     & 64 \\
+P106  & occupation     & Role mapping    & 63 \\
+P214  & VIAF ID        & VIAF search     & 61 \\
+P213  & ISNI           & Cluster harvest & 39 \\
+P244  & LCCN           & Cluster harvest & 37 \\
+P227  & GND ID         & Cluster harvest & 26  \\
 \midrule
-\multicolumn{3}{l}{\textbf{Average statements per person}} & \textbf{7.5} \\
+\multicolumn{3}{l}{\textbf{Average statements per person}} & \textbf{6.6} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -317,7 +313,7 @@ Training on 12,100 samples (28.4\% augmented with multi-entity examples) yielded
 
 \textbf{Encoder comparison.} As a post-hoc architecture check, we retrained the provenance task on the same 12,100-sample dataset with \texttt{dicta-il/neodictabert-bilingual} under the same 5-fold split. This experimental run reached a mean F1 of 94.65\% ($\pm$0.34; best fold: 95.14\%), compared with 95.91\% ($\pm$0.15; best fold: 96.17\%) for the production DictaBERT checkpoint. Because the NeoDictaBERT run used a smaller micro-batch and a shorter training budget for MPS stability, we treat it as an exploratory comparison rather than a definitive rejection of the newer encoder. Nevertheless, the result supports the current engineering choice: for this domain-specific sequence-labelling task, the smaller DictaBERT checkpoint remains both more accurate and more deployable in the desktop pipeline.
 
-\textbf{Why this model is needed and what it adds.} Ownership history is almost never stored as a clean one-field/one-owner structure. Instead, MARC~561 mixes owners, dates, collections, acquisition formulas, and long documentary inscriptions in a single prose field. In record~001~990001253170205171, the segment \texthebrew{ציון בעלים: "מקנת כספי הצעיר יעקב בכ"ר שלמה הכהן"} becomes the $X$ token sequence, while the $Y$ sequence marks the owner phrase beginning at \texthebrew{מקנת} as a contiguous OWNER span. On the pinned subset, 36/68 records contain direct MARC~561 provenance text, which defines the model's core reachable gap. The current Stage~2 rerun emits 13 provenance entities across 15 records (12~OWNER, 4~DATE, 1~COLLECTION); in the cached end-to-end subset run, this ultimately yields P127 claims on 13/68 manuscripts.
+\textbf{Why this model is needed and what it adds.} Ownership history is almost never stored as a clean one-field/one-owner structure. Instead, MARC~561 mixes owners, dates, collections, acquisition formulas, and long documentary inscriptions in a single prose field. In record~001~990001253170205171, the segment \texthebrew{ציון בעלים: "מקנת כספי הצעיר יעקב בכ"ר שלמה הכהן"} becomes the $X$ token sequence, while the $Y$ sequence marks the owner phrase beginning at \texthebrew{מקנת} as a contiguous OWNER span. On the pinned subset, 36/68 records contain direct MARC~561 provenance text, which defines the model's core reachable gap. The current Stage~2 rerun emits 13 provenance entities across 15 records (12~OWNER, 4~DATE, 1~COLLECTION); in the cached end-to-end subset run, this ultimately yields P127 claims on 14/68 manuscripts.
 
 \begin{figure}[t]
 \centering
@@ -409,10 +405,10 @@ Each match record carries a \texttt{source} field --- one of \texttt{mazal}, \te
 When a person matches a VIAF cluster, we fetch the full cluster JSON from \texttt{https://viaf.org/viaf/\{id\}} (with \texttt{Accept: application/json} header) and extract cross-referenced authority identifiers. The VIAF cluster aggregates records from 40+ national libraries; a single match thus yields up to four additional external identifiers. In the browser port, \texttt{payload.cluster\_ids} on each \texttt{AuthorityMatch} row stores the harvested GND/LCCN/ISNI/BnF/J9U map from the VIAF metadata response (an early web-port regression had left this field empty despite successful VIAF hits; the fix ensures the Sources tab and Wikidata item builder see the same cluster the desktop pipeline emits):
 
 \begin{itemize}[leftmargin=*]
-\item \textbf{P227} (GND): Deutsche Nationalbibliothek --- 68 persons (12\%)
-\item \textbf{P244} (LCCN): Library of Congress --- 104 persons (18\%)
-\item \textbf{P213} (ISNI): International Standard Name Identifier --- 129 persons (23\%)
-\item \textbf{P268} (BnF): Biblioth\`{e}que nationale de France --- 29 persons (5\%)
+\item \textbf{P213} (ISNI): International Standard Name Identifier --- 39 persons (59\%)
+\item \textbf{P244} (LCCN): Library of Congress --- 37 persons (56\%)
+\item \textbf{P227} (GND): Deutsche Nationalbibliothek --- 26 persons (39\%)
+\item \textbf{P268} (BnF): Biblioth\`{e}que nationale de France --- none in the current subset build
 \end{itemize}
 
 This technique transforms a single VIAF URI into a web of cross-referenced international authority links, significantly increasing each person entity's LOD connectivity at minimal additional API cost (one HTTP request per person).
@@ -539,9 +535,9 @@ Genre classifier & 990001273190205171 & \texthebrew{סדור מנהג אפגני
 \toprule
 \textbf{Model} & \textbf{Why needed} & \textbf{Potentially fillable gap on pinned subset} & \textbf{Observed Stage~2 output on pinned subset} & \textbf{Observed downstream effect in cached end-to-end subset run} \\
 \midrule
-Person NER & Finds people mentioned only in free-text notes, especially embedded authors, scribes, translators, and commentators absent from structured headings. & 68/68 records contain note text. & 59 spans across 36 records: 45~AUTHOR, 8~TRANSCRIBER, 4~TRANSLATOR, 1~COMMENTATOR, 1~OWNER. & Feeds the person claim paths; the cached subset run yields P50 on 56/68 manuscripts and P11603 on 8/68. \\
+Person NER & Finds people mentioned only in free-text notes, especially embedded authors, scribes, translators, and commentators absent from structured headings. & 68/68 records contain note text. & 59 spans across 36 records: 45~AUTHOR, 8~TRANSCRIBER, 4~TRANSLATOR, 1~COMMENTATOR, 1~OWNER. & Feeds the person claim paths; in the cached subset run authorship is asserted as P50 on the 114 created work items (never directly on manuscripts, per the Property:P50 constraint), with P11603 on 1/68. \\
 \addlinespace
-Provenance NER & Turns prose ownership history into owner/date/collection spans usable for P127 and related claims. & 36/68 records contain direct MARC~561 provenance text. & 13 entities across 15 records: 12~OWNER, 4~DATE, 1~COLLECTION. & The cached subset run yields P127 on 13/68 manuscripts. \\
+Provenance NER & Turns prose ownership history into owner/date/collection spans usable for P127 and related claims. & 36/68 records contain direct MARC~561 provenance text. & 13 entities across 15 records: 12~OWNER, 4~DATE, 1~COLLECTION. & The cached subset run yields P127 on 14/68 manuscripts. \\
 \addlinespace
 Contents NER & Splits one contents string into folios, work titles, and work authors so the pipeline can create work items and exemplar-of links. & 2/68 records contain MARC~505 contents notes. & 93 entities on those two records: 56~FOLIO, 35~WORK, 2~WORK\_AUTHOR. & Supplies structured work evidence behind 126~P1574 claims in the cached subset run. \\
 \addlinespace
@@ -627,7 +623,7 @@ A critical contribution of this work is the systematic quantification of data lo
 
 \textbf{The dominant loss remains Category~1}: P1574 (exemplar~of) requires item QIDs, so extracted work-title strings cannot be transferred to Wikidata as literal text. In the pinned subset run, the contents pipeline supplies structured work evidence behind 126~P1574 claims, and the item builder creates 114~work items typed as Q47461344 with title, language, and author when available from NER. This resolves the largest automatically recoverable portion of the loss, while unreconciled or ambiguous work titles remain a structural limitation rather than a parsing failure.
 
-We reduced data loss from 26.4\% to approximately 17\% by identifying Wikidata properties for previously unmapped fields: P2635 (number of codicological units, 99~records), P1684 (colophon text as inscription with Q372474 qualifier, 41~records), P7153 (significant places via KIMA resolution, 82~claims), P3132 (explicit/last line, 2~records), and P478 (volume info, 1~record). Scribal interventions are mapped to P1684 with role qualifiers (Q860740 gloss, Q3299332 correction, Q1136474 marginalia).
+We reduced data loss from 26.4\% to approximately 17\% by identifying Wikidata properties for previously unmapped fields: P2635 (number of codicological units), P1684 (colophon text as inscription with Q372474 qualifier), P7153 (significant places via KIMA resolution), P3132 (explicit/last line), and P478 (volume info); on the pinned 68-record subset these contribute 2, 4, 6, and 2 claims respectively (P478 has no qualifying record in the subset). The counts are small individually, but each mapping removes an entire category of previously untransferable data. Scribal interventions are mapped to P1684 with role qualifiers (Q860740 gloss, Q3299332 correction, Q1136474 marginalia).
 
 Categories~2 and~3 represent \emph{irreducible structural loss}: general catalog notes have no structured Wikidata target, and multi-scribe detection lacks a standard property. Category~4 contains 16~remaining LCSH subject terms (mostly person names misclassified as subjects) awaiting QID mapping.
 
@@ -752,26 +748,26 @@ P1476 (title)    & 100\% & 100\%        & Rule \\
 P17 (country)    & 0\%   & 100\%        & Hardcoded \\
 P131 (located)   & 0\%   & 100\%        & Hardcoded \\
 P571 (date)      & 22\%  & \textbf{97\%}& Hebrew parsing \\
-P50 (author)     & 1/MS  & \textbf{82\%}& NER + Authority \\
+P1574 (exemplar of, carries P50 via work) & 0\% & \textbf{21\%}& Contents NER + work items \\
 P136 (genre)     & 0\%   & \textbf{57\%}& QID mapping + ML \\
 P2635 (parts)    & 0\%   & \textbf{3\%}& CU count \\
-P921 (subject)   & 0\%   & \textbf{65\%}& Canonical+LCSH \\
-P7153 (place)    & 0\%   & \textbf{82\%}& KIMA \\
-P1071 (location) & 0\%   & \textbf{79\%}& KIMA \\
-P1684 (colophon) & 0\%   & \textbf{37\%}& Text extraction \\
-P127 (owner)     & 0\%   & \textbf{19\%}& Provenance NER \\
-P11603 (scribe)  & 0\%   & \textbf{12\%}& Person NER \\
+P921 (subject)   & 0\%   & \textbf{76\%}& Canonical+LCSH \\
+P7153 (place)    & 0\%   & \textbf{7\%}& KIMA \\
+P1071 (location) & 0\%   & \textbf{7\%}& KIMA \\
+P1684 (colophon) & 0\%   & \textbf{6\%}& Text extraction \\
+P127 (owner)     & 0\%   & \textbf{21\%}& Provenance NER \\
+P11603 (scribe)  & 0\%   & \textbf{1\%}& Person NER \\
 \midrule
-\textbf{Avg stmts/MS} & \textbf{$\sim$8} & \textbf{28.1} & Combined \\
+\textbf{Avg stmts/MS} & \textbf{$\sim$8} & \textbf{30.7} & Combined \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The multi-strategy approach yields a 3.5$\times$ improvement over rule-only conversion (28.1 vs.\ 8.0 stmts/MS). The dominant share of this gain comes from \emph{authority linking}, which converts every matched person, organisation and place into an internationally-identified entity (Mazal, VIAF, Wikidata, KIMA) and---via VIAF cluster harvesting---multiplies the identifier count $2.3\times$ per matched person, while Wikidata date back-fill (P569/P570) enables the date guardian to vet SPARQL-only candidates. Rule-based parsing handles the Hebrew-specific date formats that authority sources cannot reconstruct (P571: 22\%$\to$97\%). The NER models contribute primarily on the long tail of records whose entities live only in free-text notes: on the structured majority their marginal contribution \emph{beyond} authority + rules is near zero on the pinned evaluation subset, which is why we present them as a safety net rather than as the primary engine.
+The multi-strategy approach yields a 3.8$\times$ improvement over rule-only conversion (30.7 vs.\ 8.0 stmts/MS). The dominant share of this gain comes from \emph{authority linking}, which converts every matched person, organisation and place into an internationally-identified entity (Mazal, VIAF, Wikidata, KIMA) and---via VIAF cluster harvesting---multiplies the identifier count $1.7\times$ per matched person, while Wikidata date back-fill (P569/P570) enables the date guardian to vet SPARQL-only candidates. Rule-based parsing handles the Hebrew-specific date formats that authority sources cannot reconstruct (P571: 22\%$\to$97\%). The NER models contribute primarily on the long tail of records whose entities live only in free-text notes: on the structured majority their marginal contribution \emph{beyond} authority + rules is near zero on the pinned evaluation subset, which is why we present them as a safety net rather than as the primary engine.
 
 \subsection{Upload Results}
 
-A pilot build of 349~Wikidata-ready items (Table~\ref{tab:upload}) validates the pipeline's production readiness.
+A build of 248~Wikidata-ready items (Table~\ref{tab:upload}) supports the pipeline's operational feasibility. The count is lower than earlier drafts reported (349) because the 2026-06 authority-hardening pass---homonym abstention and a fail-closed no-identifier validator gate---deliberately declines to build person items that cannot be grounded in at least one external identifier, trading person-item quantity for precision.
 
 \begin{table}[t]
 \caption{Wikidata-ready item build on the pinned 68-record evaluation subset.}
@@ -782,18 +778,18 @@ A pilot build of 349~Wikidata-ready items (Table~\ref{tab:upload}) validates the
 \toprule
 \textbf{Metric} & \textbf{Value} \\
 \midrule
-Total items built      & 349 \\
+Total items built      & 248 \\
 \quad Works            & 114 \\
-\quad Persons          & 167 \\
+\quad Persons          & 66 \\
 \quad Manuscripts      & 68 \\
-Avg stmts/MS           & 28.1 \\
-Data loss              & $\sim$0\% \\
+Avg stmts/MS           & 30.7 \\
+Upload failures        & 0 \\
 Duplicate claims       & 0   \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The zero-failure rate is achieved through property-level type validation (Strategy~E) and claim-level diffing using WikibaseIntegrator's \texttt{MERGE\_REFS\_OR\_APPEND} mode, which adds new claims without duplicating or deleting existing ones. Re-running the upload on previously processed records correctly identifies 199~unchanged items, demonstrating idempotency.
+The zero-failure rate is achieved through property-level type validation (Strategy~E) and claim-level diffing using WikibaseIntegrator's \texttt{MERGE\_REFS\_OR\_APPEND} mode, which adds new claims without duplicating or deleting existing ones. Re-running the upload on previously processed records correctly identifies all 248~items as unchanged, demonstrating idempotency.
 
 \subsection{Ablation Study}
 
@@ -809,9 +805,9 @@ Table~\ref{tab:ablation} shows the contribution of each pipeline component.
 \textbf{Component} & \textbf{Measured contribution} \\
 \midrule
 Rule-only baseline & Produces approximately 8.0 statements per manuscript, retaining only information already explicit in structured MARC fields. \\
-Full pipeline & Produces 28.1 statements per manuscript after combining rules, NER, authority resolution, classifier outputs, and work-item construction. \\
+Full pipeline & Produces 30.7 statements per manuscript after combining rules, NER, authority resolution, classifier outputs, and work-item construction. \\
 Hebrew date parsing & Raises P571 coverage from the direct structured baseline to 97\% by interpreting MARC~008 plus Hebrew-century and partial-date forms. \\
-Person NER & Emits 59 person-role spans across 36/68 records and feeds P50 on 56/68 manuscripts plus P11603 on 8/68. \\
+Person NER & Emits 59 person-role spans across 36/68 records and feeds P50 on the created work items (via the P1574 exemplar chain) plus P11603 on 1/68. \\
 Genre classifier & Expands genre coverage from 28/68 records with native MARC~655 data to 39/68 records with final P136 claims. \\
 Contents NER + work items & Supplies structured evidence behind 126~P1574 exemplar-of claims and 114 automatically created work items. \\
 VIAF cluster harvesting & Adds cross-library identifiers to already matched persons, increasing person-entity richness without changing manuscript count. \\
@@ -865,7 +861,7 @@ The methodology's effectiveness varies with cataloging quality: NLI's records, c
 
 \subsection{VIAF Cluster Harvesting as LOD Amplification}
 
-The cluster harvesting technique demonstrates that LOD enrichment is multiplicative: a single successful authority match (VIAF) cascades into 2--4 additional cross-references (GND, LCCN, ISNI, BnF), each connecting the entity to a different national library's knowledge graph. For the 142~persons with VIAF matches in our test set, cluster harvesting added 330~additional authority identifiers---an amplification factor of 2.3$\times$.
+The cluster harvesting technique demonstrates that LOD enrichment is multiplicative: a single successful authority match (VIAF) cascades into 2--4 additional cross-references (GND, LCCN, ISNI, BnF), each connecting the entity to a different national library's knowledge graph. For the 61~persons with VIAF matches in the pinned subset build (92\% of all built persons), cluster harvesting added 102~additional authority identifiers---an amplification factor of 1.7$\times$.
 
 This technique is generalizable to any domain where VIAF covers the entities of interest. The rate-limiting constraint (2~requests/second for search + 1 additional for cluster fetch) means processing 123K~records requires approximately 17~hours for the authority resolution stage, which is acceptable for batch processing.
 
@@ -928,11 +924,11 @@ Every interactive validation surface (status-detail popup, claim editor, credent
 \label{sec:conclusion}
 %% ====================================================================
 
-We presented the MHM Pipeline as three contributions that share a single processing pipeline. \emph{First}, authority enrichment across thirteen MARC tags (100/110/111, 600/610, 651, 700/710/711, 752, 800/810/811) against four complementary sources (Mazal/NLI, VIAF, Wikidata, KIMA), amplified by VIAF cluster harvesting and Wikidata date back-fill, is the primary engine of new information per manuscript---it turns every matched entity from a string into a linked, internationally-identified item and multiplies the international identifier count $2.3\times$ per matched person. \emph{Second}, the same pipeline publishes its output in three coordinated Linked-Open-Data layers: the full HMO research graph as RDF, a project Wikibase at \texttt{mhm-hmo.wikibase.cloud} for browsing and curator editing, and a public Wikidata projection that reaches 87\% of HMO classes and averages 28.1~statements per manuscript on the pinned 68-record verification subset. \emph{Third}, Wikidata Studio puts a researcher-facing workbench around the whole flow: a Source~$\times$~Type~$\times$~Role review filter, a side-by-side biographic-comparison dialog, a confidence tooltip that surfaces every guardian and cluster identifier behind a match, 14 pre-upload guards, and resumable JSON review state---so every statement that reaches Wikidata is one a human approved with the evidence in view.
+We presented the MHM Pipeline as three contributions that share a single processing pipeline. \emph{First}, authority enrichment across thirteen MARC tags (100/110/111, 600/610, 651, 700/710/711, 752, 800/810/811) against four complementary sources (Mazal/NLI, VIAF, Wikidata, KIMA), amplified by VIAF cluster harvesting and Wikidata date back-fill, is the primary engine of new information per manuscript---it turns every matched entity from a string into a linked, internationally-identified item and multiplies the international identifier count $1.7\times$ per matched person. \emph{Second}, the same pipeline publishes its output in three coordinated Linked-Open-Data layers: the full HMO research graph as RDF, a project Wikibase at \texttt{mhm-hmo.wikibase.cloud} for browsing and curator editing, and a public Wikidata projection that reaches 87\% of HMO classes and averages 30.7~statements per manuscript on the pinned 68-record verification subset. \emph{Third}, Wikidata Studio puts a researcher-facing workbench around the whole flow: a Source~$\times$~Type~$\times$~Role review filter, a side-by-side biographic-comparison dialog, a confidence tooltip that surfaces every guardian and cluster identifier behind a match, 14 pre-upload guards, and resumable JSON review state---so every statement that reaches Wikidata is one a human approved with the evidence in view.
 
 The distant-supervision methodology that exploits MARC's dual structure---structured fields as automatic labels for the same information in free-text notes---is a separable methodological contribution that yields three NER models. The current role-aware person model reaches 80.4\% strict span+role F1 on a representative held-out benchmark sample (86.8\% name-only F1; 92.6\% role accuracy among matched names), while provenance and contents NER reach 95.9\% and 99.99\% F1 respectively. End-to-end, however, their marginal contribution \emph{beyond} authority enrichment and rules is near zero on the structured majority of records on the pinned evaluation subset, and we retain them in the pipeline as a safety net for the long tail of records whose entities live only in free-text notes. This is a deliberate honesty about where the value actually comes from: authority linking and the workbench are doing the work; the NER models cover the cases authority cannot reach.
 
-Automatic work item creation supplies 114~work items and 126~P1574 exemplar-of claims, addressing the largest automatically recoverable portion of the structural loss identified in our taxonomy. Our data loss taxonomy identifies five categories of information that cannot transfer cleanly to Wikidata, demonstrating that the dominant remaining limitation is structural rather than technical---an argument for the three-layer publication model we adopt rather than for a single Wikidata-only target. A verified pilot build of 349~Wikidata-ready items achieved zero failures and zero duplicate claims, demonstrating the feasibility of the guarded upload workflow.
+Automatic work item creation supplies 114~work items and 126~P1574 exemplar-of claims, addressing the largest automatically recoverable portion of the structural loss identified in our taxonomy. Our data loss taxonomy identifies five categories of information that cannot transfer cleanly to Wikidata, demonstrating that the dominant remaining limitation is structural rather than technical---an argument for the three-layer publication model we adopt rather than for a single Wikidata-only target. A verified build of 248~Wikidata-ready items (68 manuscripts, 66 identifier-grounded persons, 114 works) achieved zero failures and zero duplicate claims, demonstrating the feasibility of the guarded upload workflow.
 
 For the cultural heritage community, the take-away is that a high-coverage MARC-to-LOD pipeline is best framed as an \emph{authority enrichment + multi-layer publication + curator workbench} system, with statistical extraction (NER, classifiers) used to cover the tail rather than as the headline. All code, models, training data generation scripts and the Wikidata Studio application are available under GPL-3.0 at \url{https://github.com/alexandergolbergwix/pipeline}.
 
